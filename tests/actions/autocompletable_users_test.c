@@ -17,14 +17,13 @@
  *   - pagination: per_page 20 (page 1 holds 20 of 26 with a next Link,
  *     page 2 holds the last 6 with no Link, X-Total-Count always the full
  *     count);
- *   - HTML: 200, text/html, the stubbed prompt list with no layout Link
+ *   - HTML: 200, text/html, the real prompt list with no layout Link
  *     header; an unacceptable format is 406;
  *   - unauthenticated GET is redirected to sign-in.
  *
- * The prompt-item template has not landed in the views packet, so this
- * binary stubs cf_view_autocompletable_users_index with a PROMPT:<n> marker;
- * the JSON shaping is the action's own faithful port (verified field by
- * field here).  The route double binds row 75 to the real action, so every
+ * The prompt-item template is wired in (src/views/users.c renders the real
+ * mention items); the JSON shaping is the action's own faithful port
+ * (verified field by field here).  The route double binds row 75 to the real action, so every
  * case runs the real A00 dispatch path (no writer use: read-only).
  *
  * cf.h and src/actions/actions.h are integrator-owned and do not yet declare
@@ -66,27 +65,6 @@ static cf_span SP(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
 }
 
-/* ---- R1 view stub (mirrors the proposed src/views.h shape) -------------- */
-
-typedef struct {
-    int64_t id;
-    cf_str name;
-    cf_str avatar_path;
-    cf_str attachable_sgid;
-} cf_view_mention_user;
-
-cf_err cf_view_autocompletable_users_index(
-    const cf_view_ctx *ctx, const cf_view_mention_user *users,
-    size_t users_len, cf_builder *out) {
-    (void)ctx;
-    (void)users;
-    char marker[64];
-    int n = snprintf(marker, sizeof marker, "PROMPT:%zu", users_len);
-    if (n < 0 || (size_t)n >= sizeof marker) return CF_INTERNAL;
-    return cf_builder_append(out, (cf_span){(const unsigned char *)marker,
-                                            (size_t)n});
-}
-
 /* ---- scratch app ------------------------------------------------------------ */
 
 typedef struct {
@@ -109,6 +87,11 @@ static bool env_open(auto_env *env) {
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
+        return false;
+    }
+    /* Real renders resolve digested assets through the pinned manifest. */
+    if (cf_views_assets_configure("tests/fixtures/assets") != CF_OK) {
+        fprintf(stderr, "  env_open: assets configure failed\n");
         return false;
     }
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
@@ -468,8 +451,9 @@ CF_TEST(autocomplete_html_renders_the_prompt_list) {
     CF_CHECK(resp.status == 200);
     CF_CHECK(head_contains(&resp, &req,
                            "Content-Type: text/html; charset=utf-8\r\n"));
-    /* layout: false — the stubbed list, and no preload Link header. */
-    CF_CHECK(buf_contains(resp.body, "PROMPT:20"));
+    /* layout: false — the real prompt items, and no preload Link header. */
+    CF_CHECK(buf_contains(resp.body, "Alice"));
+    CF_CHECK(buf_contains(resp.body, "lexxy-prompt-item"));
     CF_CHECK(!head_contains(&resp, &req, "Link: "));
     cf_response_dispose(&resp);
     env_close(&env);

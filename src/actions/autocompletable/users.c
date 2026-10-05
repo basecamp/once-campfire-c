@@ -69,11 +69,14 @@
 #include <string.h>
 #include <time.h>
 
-/* ---- INTEGRATOR SHIM R1 proposal (delete when views.h lands it) ---------- */
+/* ---- INTEGRATOR SHIM R1 proposal (delete when views.h lands it) ----------
+ * (Integrator: title field added with the G1 close; keep in sync with
+ * src/views/users_models.h until the dedup lands.) */
 
 typedef struct {
     int64_t id;
     cf_str name; /* borrowed */
+    cf_str title; /* borrowed: User#title, may be empty (falls back to name) */
     cf_str avatar_path; /* borrowed */
     cf_str attachable_sgid; /* borrowed */
 } cf_view_mention_user;
@@ -560,12 +563,14 @@ static cf_err auto_apply_headers(cf_ctx *ctx, int64_t records_count,
 struct auto_mention {
     int64_t id;
     cf_str name; /* owned */
+    cf_str title; /* owned: User#title (name plus bio) */
     cf_str avatar_path; /* owned, absolute fresh_user_avatar_url */
     cf_str attachable_sgid; /* owned */
 };
 
 static void auto_mention_dispose(struct auto_mention *mention) {
     cf_str_dispose(&mention->name);
+    cf_str_dispose(&mention->title);
     cf_str_dispose(&mention->avatar_path);
     cf_str_dispose(&mention->attachable_sgid);
     memset(mention, 0, sizeof *mention);
@@ -616,7 +621,13 @@ static cf_err auto_mention_user(cf_ctx *ctx, const cf_user *user,
     out->name.ptr[user->name.len] = '\0';
     out->name.len = user->name.len;
 
-    cf_err rc = auto_attachable_sgid(ctx, user->id, &out->attachable_sgid);
+    cf_err rc = cf_user_title(user, &out->title);
+    if (rc != CF_OK) {
+        auto_mention_dispose(out);
+        return rc;
+    }
+
+    rc = auto_attachable_sgid(ctx, user->id, &out->attachable_sgid);
     if (rc != CF_OK) {
         auto_mention_dispose(out);
         return rc;
@@ -771,6 +782,8 @@ static cf_err auto_render_html(const cf_view_ctx *view_ctx,
             users[i].id = mentions[i].id;
             users[i].name = (cf_str){mentions[i].name.ptr,
                                     mentions[i].name.len};
+            users[i].title = (cf_str){mentions[i].title.ptr,
+                                      mentions[i].title.len};
             users[i].avatar_path = (cf_str){mentions[i].avatar_path.ptr,
                                             mentions[i].avatar_path.len};
             users[i].attachable_sgid =

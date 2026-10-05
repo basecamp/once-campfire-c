@@ -42,6 +42,7 @@ MODEL_SRCS := \
 	src/models/search.c \
 	src/models/session.c \
 	src/models/sound.c \
+	src/models/touch.c \
 	src/models/user.c \
 	src/models/webhook.c
 
@@ -77,7 +78,8 @@ JOBS_SRCS := src/jobs/queue.c src/jobs/handlers.c
 STORAGE_SRCS := src/storage/files.c src/storage/process.c \
 	src/storage/active_storage.c src/storage/media.c
 INTEGRATIONS_SRCS := src/integrations/http.c src/integrations/unfurl.c \
-	src/integrations/webhook.c src/integrations/push.c
+	src/integrations/webhook.c src/integrations/push.c \
+	src/integrations/host_resolve.c
 
 APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/config.c \
@@ -114,12 +116,20 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/views/searches.c \
 	src/views/users_avatars.c \
 	src/views/qr_svg.c \
+	src/views/users.c \
+	src/views/bots.c \
+	src/views/accounts.c \
+	src/views/users_profiles.c \
+	src/views/users_push.c \
+	src/views/rooms_forms.c \
+	src/views/messages_json.c \
 	src/presenters/accounts.c \
 	src/presenters/layout.c \
 	src/presenters/messages.c \
 	src/presenters/rooms.c \
 	src/presenters/sidebars.c \
 	src/presenters/searches.c \
+	src/presenters/bots.c \
 	src/actions/first_runs.c \
 	src/actions/messages.c \
 	src/actions/messages/boosts.c \
@@ -152,6 +162,10 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/actions/users/bans.c \
 	src/actions/users/sidebars.c \
 	src/actions/searches.c \
+	src/actions/active_storage/blobs.c \
+	src/actions/active_storage/representations.c \
+	src/actions/active_storage/disk.c \
+	src/actions/active_storage/direct_uploads.c \
 	src/cache_key.c \
 	src/actions/users/avatars.c \
 	src/actions/welcome.c \
@@ -310,6 +324,7 @@ UNIT_TEST_SRCS := \
 	tests/http/test_gzip.c \
 	tests/http/test_encoding.c \
 	tests/views/test_escape.c \
+	tests/views/test_messages_json.c \
 	tests/views/test_presenters.c \
 	tests/views/test_presenters_messages.c \
 	tests/routes/test_routes_table.c \
@@ -344,6 +359,8 @@ UNIT_TEST_SRCS := \
 	tests/integrations/test_unfurl.c \
 	tests/integrations/test_webhook.c \
 	tests/integrations/test_push.c \
+	tests/integrations/test_host_resolve.c \
+	tests/models/test_touch.c \
 	tests/models/account_test.c \
 	tests/models/active_storage_test.c \
 	tests/models/ban_test.c \
@@ -422,7 +439,12 @@ VIEWS_BUCKET_SRCS := \
 	tests/views/test_messages.c \
 	tests/views/test_users_avatars.c \
 	tests/views/test_users_sidebars.c \
-	tests/views/test_searches.c
+	tests/views/test_searches.c \
+	tests/views/test_users.c \
+	tests/views/test_bots.c \
+	tests/views/test_accounts.c \
+	tests/views/test_users_profiles.c \
+	tests/views/test_rooms_forms.c
 VIEWS_TEST_BIN := $(TESTS_DIR)/views/test_views
 VIEWS_MAIN_OBJ := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_MAIN_SRC))
 VIEWS_SUPPORT_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_SUPPORT_SRCS))
@@ -471,6 +493,10 @@ ACTIONS_TEST_SRCS := \
 	tests/actions/messages_boosts_by_bots_test.c \
 	tests/actions/messages_by_bots_test.c \
 	tests/actions/unfurl_links_test.c \
+	tests/actions/active_storage_blobs_test.c \
+	tests/actions/active_storage_representations_test.c \
+	tests/actions/active_storage_disk_test.c \
+	tests/actions/active_storage_direct_uploads_test.c \
 	tests/actions/welcome_test.c \
 	tests/actions/sessions_test.c
 ACTIONS_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(ACTIONS_TEST_SRCS))

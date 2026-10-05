@@ -1237,9 +1237,12 @@ static cf_err users_mention(const cf_view_ctx *ctx,
     CF_VIEW_TRY(cf_view_str(out, "<span class=\"mention\" sgid=\""));
     CF_VIEW_TRY(cf_view_html_attr(out, cf_str_span(user->attachable_sgid)));
     CF_VIEW_TRY(cf_view_str(out, "\">"));
-    /* GAP G1: the reference titles this link with `User#title`
-     * (name + bio); the model carries the name only. */
-    CF_VIEW_TRY(users_avatar_tag(ctx, user->id, cf_str_span(user->name),
+    /* `User#title`, falling back to the bare name when the caller leaves
+     * the title empty (closed G1: the action fills it from the row). */
+    cf_span mention_title = user->title.len != 0
+                                ? cf_str_span(user->title)
+                                : cf_str_span(user->name);
+    CF_VIEW_TRY(users_avatar_tag(ctx, user->id, mention_title,
                                  cf_str_span(user->avatar_path), out));
     CF_VIEW_TRY(cf_view_str(out, " "));
     CF_VIEW_TRY(cf_view_text(out, cf_str_span(user->name)));
@@ -1267,8 +1270,10 @@ static cf_err users_prompt_item(const cf_view_ctx *ctx,
         out, "\">\n  <template type=\"menu\">\n    <span "
              "class=\"autocomplete__item flex align-center gap unpad\">\n"
              "      "));
-    /* GAP G1: title renders the bare name (see users_mention). */
-    CF_VIEW_TRY(users_avatar_tag(ctx, user->id, cf_str_span(user->name),
+    /* `User#title`, falling back to the bare name (see users_mention). */
+    cf_span item_title = user->title.len != 0 ? cf_str_span(user->title)
+                                              : cf_str_span(user->name);
+    CF_VIEW_TRY(users_avatar_tag(ctx, user->id, item_title,
                                  cf_str_span(user->avatar_path), out));
     CF_VIEW_TRY(cf_view_str(
         out, "\n      <span class=\"autocompletable__name\">"));

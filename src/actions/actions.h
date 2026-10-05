@@ -167,4 +167,14 @@ cf_err cf_action_messages_by_bots_destroy(cf_ctx *ctx);
 /* A-unfurl_links (route 148). */
 cf_err cf_action_unfurl_links_create(cf_ctx *ctx);
 
+/* S02 Active Storage routes (169-177): blobs/representations redirect and
+ * proxy, disk show/update, direct uploads create. */
+cf_err cf_action_active_storage_blobs_redirect_show(cf_ctx *ctx);
+cf_err cf_action_active_storage_blobs_proxy_show(cf_ctx *ctx);
+cf_err cf_action_active_storage_representations_redirect_show(cf_ctx *ctx);
+cf_err cf_action_active_storage_representations_proxy_show(cf_ctx *ctx);
+cf_err cf_action_active_storage_disk_show(cf_ctx *ctx);
+cf_err cf_action_active_storage_disk_update(cf_ctx *ctx);
+cf_err cf_action_active_storage_direct_uploads_create(cf_ctx *ctx);
+
 #endif /* CF_ACTIONS_H */

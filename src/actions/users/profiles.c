@@ -81,6 +81,7 @@
 #include "models/active_storage.h"
 #include "models/membership.h"
 #include "models/user.h"
+#include "models/touch.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -405,42 +406,8 @@ static profiles_avatar profiles_avatar_assignment(const cf_param *permitted) {
     }
 }
 
-enum { PROFILES_STMT_TOUCH_USER };
-
-static const cf_stmt_def profiles_stmt_defs[] = {
-    [PROFILES_STMT_TOUCH_USER] = {
-        "UPDATE \"users\" SET \"updated_at\" = ? WHERE \"users\".\"id\" = ?"},
-};
-
-static const cf_stmt_set profiles_stmt_set = {
-    profiles_stmt_defs,
-    sizeof profiles_stmt_defs / sizeof profiles_stmt_defs[0]};
-
-/* `belongs_to :record, touch: true` for the avatar's user (R2 until a
- * shared helper lands). */
-static cf_err profiles_touch_user(cf_db *db, int64_t user_id) {
-    if (db == NULL) return CF_INVALID;
-    char timebuf[CF_DB_TIME_TEXT_CAP];
-    cf_err rc = cf_db_time_to_text(cf_now_us(NULL), timebuf);
-    sqlite3_stmt *stmt = NULL;
-    if (rc == CF_OK) {
-        rc = cf_db_stmt(db, &profiles_stmt_set, PROFILES_STMT_TOUCH_USER,
-                        &stmt);
-    }
-    if (rc == CF_OK) {
-        rc = cf_stmt_bind_text(
-            stmt, 1,
-            (cf_span){(const unsigned char *)timebuf, strlen(timebuf)});
-    }
-    if (rc == CF_OK) rc = cf_stmt_bind_i64(stmt, 2, user_id);
-    if (rc == CF_OK) {
-        int step = sqlite3_step(stmt);
-        if (step != SQLITE_DONE) rc = cf_db_err(step);
-    }
-    cf_db_stmt_done(stmt);
-    return rc;
-}
-
+/* `belongs_to :record, touch: true` for the avatar's user (shared
+ * cf_touch_user in src/models/touch.h). */
 typedef struct {
     cf_user user; /* in/out: the reference updates the loaded record */
     cf_user_changes changes;
@@ -473,7 +440,7 @@ static cf_err profiles_write_cb(cf_tx *tx, void *arg) {
             rc = cf_attachment_delete(tx, &attachment);
         }
         cf_attachment_dispose(&attachment);
-        if (rc == CF_OK && found) rc = profiles_touch_user(db, write->user.id);
+        if (rc == CF_OK && found) rc = cf_touch_user(tx, &write->user);
         if (rc == CF_OK && found) {
             rc = cf_tx_event(tx, (cf_event){
                                       .kind = CF_EVENT_PURGE_BLOB,

@@ -410,135 +410,9 @@ static cf_err bb_broadcast_remove(cf_ctx *ctx, const cf_room *room,
 
 /* UTC civil date from days since 1970-01-01 (Howard Hinnant's algorithm;
  * the same conversion A-messages uses for its cache versions). */
-static void bb_civil_from_days(int64_t days, int64_t *year, unsigned *month,
-                               unsigned *day) {
-    int64_t z = days + 719468;
-    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    unsigned doe = (unsigned)(z - era * 146097);
-    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int64_t y = (int64_t)yoe + era * 400;
-    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    unsigned mp = (5 * doy + 2) / 153;
-    unsigned d = doy - (153 * mp + 2) / 5 + 1;
-    unsigned m = mp < 10 ? mp + 3 : mp - 9;
-    *year = y + (m <= 2);
-    *month = m;
-    *day = d;
-}
-
-/* `messages/support.rs json_time`: `time.as_json`, Active Support default
- * precision (`2026-09-26T12:26:46.848Z`). */
-static cf_err bb_json_time(int64_t time_us, cf_builder *out) {
-    int64_t secs = time_us / 1000000;
-    int64_t rem = time_us % 1000000;
-    if (rem < 0) {
-        secs -= 1;
-        rem += 1000000;
-    }
-    int64_t days = secs / 86400;
-    int64_t sod = secs % 86400;
-    if (sod < 0) {
-        days -= 1;
-        sod += 86400;
-    }
-    int64_t year = 0;
-    unsigned month = 0, day = 0;
-    bb_civil_from_days(days, &year, &month, &day);
-    char text[32];
-    int n = snprintf(text, sizeof text,
-                     "%04" PRId64 "-%02u-%02uT%02" PRId64 ":%02" PRId64
-                     ":%02" PRId64 ".%03" PRId64 "Z",
-                     year, month, day, sod / 3600, (sod % 3600) / 60,
-                     sod % 60, rem / 1000);
-    if (n < 0 || (size_t)n >= sizeof text) return CF_INTERNAL;
-    return cf_builder_append(out, (cf_span){(const unsigned char *)text,
-                                            (size_t)n});
-}
-
-static cf_err bb_json_i64(cf_builder *out, int64_t value) {
-    char text[24];
-    int n = snprintf(text, sizeof text, "%" PRId64, value);
-    if (n < 0 || (size_t)n >= sizeof text) return CF_INTERNAL;
-    return cf_builder_append(out, (cf_span){(const unsigned char *)text,
-                                            (size_t)n});
-}
-
-/* Absolute URL for a JSON payload (shim B2): PUBLIC_ORIGIN + path. */
-static cf_err bb_absolute_url(cf_ctx *ctx, cf_span path, cf_builder *out) {
-    const cf_config *config = cf_app_config(ctx->app);
-    if (config == NULL || config->public_origin == NULL) return CF_INTERNAL;
-    cf_err rc = cf_builder_append(out, bb_span(config->public_origin));
-    if (rc == CF_OK) rc = cf_builder_append(out, path);
-    return rc;
-}
-
-/* `users/_user.json.jbuilder`: `json.(user, :id, :name, :role)` and the
- * absolute avatar_url. */
-static cf_err bb_user_json(cf_ctx *ctx, const cf_user *user, cf_builder *out) {
-    cf_view_user view = {0};
-    cf_err rc = cf_presenter_user_view(ctx, user, &view);
-    if (rc != CF_OK) {
-        cf_view_user_dispose(&view);
-        return rc;
-    }
-    rc = cf_builder_append(out, bb_span("{\"id\":"));
-    if (rc == CF_OK) rc = bb_json_i64(out, user->id);
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(",\"name\":"));
-    if (rc == CF_OK) {
-        rc = cf_json_string(out, (cf_span){(const unsigned char *)view.name.ptr,
-                                           view.name.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(",\"role\":\""));
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(cf_role_name(user->role)));
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span("\",\"avatar_url\":\""));
-    if (rc == CF_OK) {
-        rc = bb_absolute_url(ctx,
-                              (cf_span){(const unsigned char *)view.avatar_url.ptr,
-                                        view.avatar_url.len},
-                              out);
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span("\"}"));
-    cf_view_user_dispose(&view);
-    return rc;
-}
-
-/* `messages/boosts/_boost.json.jbuilder` through boosts_by_bots_show. */
-static cf_err bb_boost_json(cf_ctx *ctx, const cf_boost *boost,
-                            const cf_message *message, cf_builder *out) {
-    cf_user booster = {0};
-    cf_err rc = cf_user_find(ctx->reader, boost->booster_id, &booster);
-    if (rc != CF_OK) {
-        cf_user_dispose(&booster);
-        return rc;
-    }
-    rc = cf_builder_append(out, bb_span("{\"id\":"));
-    if (rc == CF_OK) rc = bb_json_i64(out, boost->id);
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(",\"content\":"));
-    if (rc == CF_OK) {
-        rc = cf_json_string(out, (cf_span){(const unsigned char *)boost->content.ptr,
-                                           boost->content.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(",\"created_at\":\""));
-    if (rc == CF_OK) rc = bb_json_time(boost->created_at, out);
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span("\",\"booster\":"));
-    if (rc == CF_OK) rc = bb_user_json(ctx, &booster, out);
-    cf_user_dispose(&booster);
-    if (rc != CF_OK) return rc;
-    rc = cf_builder_append(out, bb_span(",\"message\":{\"id\":"));
-    if (rc == CF_OK) rc = bb_json_i64(out, boost->message_id);
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span(",\"url\":\""));
-    if (rc == CF_OK) {
-        char path[64];
-        int n = snprintf(path, sizeof path, "/rooms/%" PRId64 "/messages/%" PRId64,
-                         message->room_id, message->id);
-        if (n < 0 || (size_t)n >= sizeof path) return CF_INTERNAL;
-        rc = bb_absolute_url(ctx, (cf_span){(const unsigned char *)path,
-                                            (size_t)n},
-                             out);
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, bb_span("\"}}"));
-    return rc;
-}
+/* B1/B2 (integrator): local JSON serializers replaced by the shared
+ * src/views/messages_json.c renderers (cf_views_boost_json,
+ * cf_views_absolute_url); exact shapes verified by tests/views/test_messages_json.c. */
 
 /* `Ctx::render(CREATED, JSON, body)`: `application/json; charset=utf-8`. */
 static cf_err bb_send_json(cf_ctx *ctx, unsigned status, cf_builder *body) {
@@ -635,7 +509,7 @@ cf_err cf_action_messages_boosts_by_bots_create(cf_ctx *ctx) {
         return rc;
     }
     cf_builder body = {0};
-    rc = bb_boost_json(ctx, &write.boost, &message, &body);
+    rc = cf_views_boost_json(ctx, &write.boost, &message, &body);
     cf_boost_dispose(&write.boost);
     cf_message_dispose(&message);
     if (rc != CF_OK) {

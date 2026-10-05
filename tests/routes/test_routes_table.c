@@ -212,17 +212,12 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
                      strcmp(task, "A-messages-boosts") == 0 ||
                      strcmp(task, "A-messages-boosts-by_bots") == 0 ||
                      strcmp(task, "A-messages-by_bots") == 0 ||
-                     strcmp(task, "A-unfurl_links") == 0;
-        /* A-users and A-autocompletable-users are controller-landed but
-         * their views are pending (wiring commit): rows 50, 51, 74 and 75
-         * stay on the development 501 until the views wave lands. The S02
-         * Active Storage routes (169-177) stay 501: S02 delivered helpers
-         * only, and its controller actions were never dispatched. */
-        int row_id = yyjson_get_int(id);
-        if (row_id == 50 || row_id == 51 || row_id == 74 || row_id == 75 ||
-            (row_id >= 169 && row_id <= 177)) {
-            bound = false;
-        }
+                     strcmp(task, "A-unfurl_links") == 0 ||
+                     strcmp(task, "S02") == 0;
+        /* Every implement row is bound: no packet stays on the
+         * development 501 (S02's controller actions landed with the
+         * packet; the former users/autocomplete view holds are bound
+         * now that their renders landed). */
         if (!bound) {
             expected_501[yyjson_get_int(id)] = true;
             expected_count++;
@@ -240,11 +235,11 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
     }
     CF_CHECK(actual_count == expected_count);
     /* The four POST conductor rows are bound (A01's cf_check_csrf); every
-     * landed packet above is rebound to its real symbols. Still on the
-     * development 501: rows 50/51/74/75 (controller-landed, views pending)
-     * and the nine S02 Active Storage routes (helpers only, no dispatched
-     * controller actions). */
-    CF_CHECK(actual_count == 13);
+     * landed packet above is rebound to its real symbols. No implement row
+     * stays on the development 501: the application is complete at the
+     * route table (remaining PARTIAL axes are view/probe refinements
+     * tracked per packet, not unbound rows). */
+    CF_CHECK(actual_count == 0);
 }
 
 CF_TEST_MAIN()

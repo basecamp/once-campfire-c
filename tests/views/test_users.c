@@ -254,6 +254,7 @@ static void mentions_from_facts(const char *case_name,
     yyjson_val *list = yyjson_obj_get(data, "autocompletable");
     CF_REQUIRE(yyjson_arr_size(list) == count);
     for (size_t i = 0; i < count; i++) {
+        memset(&users[i], 0, sizeof users[i]);
         yyjson_val *item = yyjson_arr_get(list, i);
         const char *name = yyjson_get_str(item);
         yyjson_val *u = cf_facts_user(cs, name);

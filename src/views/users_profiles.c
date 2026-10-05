@@ -468,6 +468,9 @@ cf_err cf_view_users_profile_membership(
     cf_view_guard guard;
     cf_builder frame_id = {0}, label_id = {0}, url = {0}, link_body = {0},
                btn_body = {0};
+    /* Function scope: cf_view_attr borrows its value span, so the room href
+     * must outlive the cf_view_content call below (not a block temporary). */
+    char room_href[32];
     rc = cf_view_begin(&guard, out);
     if (rc != CF_OK) return rc;
 
@@ -483,11 +486,12 @@ cf_err cf_view_users_profile_membership(
             &link, "class",
             "overflow-ellipsis fill-shade txt-primary txt-undecorated"));
         {
-            char idbuf[32];
-            int n = snprintf(idbuf, sizeof idbuf, "/rooms/%lld",
+            int n = snprintf(room_href, sizeof room_href, "/rooms/%lld",
                              (long long)membership->room_id);
-            if (n < 0 || (size_t)n >= sizeof idbuf) CF_VIEW_TRY(CF_INTERNAL);
-            CF_VIEW_TRY(cf_view_attr_cstr(&link, "href", idbuf));
+            if (n < 0 || (size_t)n >= sizeof room_href) {
+                CF_VIEW_TRY(CF_INTERNAL);
+            }
+            CF_VIEW_TRY(cf_view_attr_cstr(&link, "href", room_href));
         }
         CF_VIEW_TRY(cf_view_str(&link_body, "\n    "));
         /* <strong>display</strong> with escaping. */

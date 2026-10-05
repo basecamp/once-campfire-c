@@ -65,17 +65,12 @@ cf_err cf_view_users_show_frame(const cf_view_ctx *ctx,
                                 cf_builder *out);
 
 /* autocompletable/users/index.html.erb: one <lexxy-prompt-item> per user,
- * rendered with no layout.  Borrowed.
- *
- * KNOWN MODEL GAP (integrator request G1): the reference MentionUser derefs
- * to UserSummary, so avatar_tag's title is `User#title` (name plus bio, e.g.
- * "JZ – Designer").  This struct carries no bio/title, so the renderer uses
- * the bare name for the title attribute.  The action layer owns the full
- * row (auto_mention_user shapes from cf_user, which has bio) and could fill
- * a `cf_str title` field if one is added here. */
+ * rendered with no layout.  Borrowed.  `title` is the caller's `User#title`
+ * (name plus bio); when empty the renderer falls back to the bare name. */
 typedef struct {
     int64_t id;
     cf_str name; /* borrowed */
+    cf_str title; /* borrowed: User#title, may be empty (falls back to name) */
     cf_str avatar_path; /* borrowed */
     cf_str attachable_sgid; /* borrowed */
 } cf_view_mention_user;

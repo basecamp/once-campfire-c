@@ -22,10 +22,10 @@
  *   - show failures: an unknown id and a non-castable id are 404; an
  *     unauthenticated GET is redirected to sign-in.
  *
- * The users/new and users/show templates have not landed in the views
- * packet, so this binary stubs the four R1/R2 renderer symbols with markers
- * (JOIN:/USER:/TRANSFER:/AVATAR:, FRAME for the frame layout); the transfer
- * id itself is produced by the real A01 signed-id layer and verified here.
+ * The users/new and users/show templates are wired in (src/views/users.c);
+ * bodies assert real render facts (join code, help-contact name, user name,
+ * admin-only mail, avatar path); the transfer id itself is produced by the
+ * real A01 signed-id layer and verified here.
  * The route double binds rows 50/51/74 to the real actions, so every case
  * runs the real A00 dispatch path, and the writer is started for the create
  * and sign-in writes.
@@ -73,111 +73,6 @@ static cf_span SP(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
 }
 
-/* ---- R1/R2 view stubs (mirrors the proposed src/views.h shapes) ---------- */
-
-typedef struct {
-    cf_str join_code;
-    bool has_help_contact;
-    const cf_view_help_contact *help_contact;
-} cf_view_users_new_model;
-
-static cf_err stub_new_body(const cf_view_users_new_model *model, bool frame,
-                            cf_builder *out) {
-    cf_err rc = cf_builder_append(out, SP(frame ? "FRAME JOIN:" : "JOIN:"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, (cf_span){
-                                         (const unsigned char *)
-                                             model->join_code.ptr,
-                                         model->join_code.len,
-                                     });
-    }
-    if (rc == CF_OK && model->has_help_contact && model->help_contact !=
-                                                     NULL) {
-        rc = cf_builder_append(out, SP(" HELP:"));
-        if (rc == CF_OK) {
-            rc = cf_builder_append(out, (cf_span){
-                                             (const unsigned char *)
-                                                 model->help_contact->name.ptr,
-                                             model->help_contact->name.len,
-                                         });
-        }
-    }
-    return rc;
-}
-
-cf_err cf_view_users_new(const cf_view_ctx *ctx,
-                         const cf_view_users_new_model *model,
-                         cf_builder *out) {
-    (void)ctx;
-    return stub_new_body(model, false, out);
-}
-
-cf_err cf_view_users_new_frame(const cf_view_ctx *ctx,
-                               const cf_view_users_new_model *model,
-                               cf_builder *out) {
-    (void)ctx;
-    return stub_new_body(model, true, out);
-}
-
-typedef struct {
-    int64_t id;
-    cf_str name;
-    cf_optional_str bio;
-    cf_optional_str email_address;
-    cf_role role;
-    cf_status status;
-    cf_str avatar_path;
-    cf_str transfer_id;
-} cf_view_users_show_model;
-
-static cf_err stub_show_body(const cf_view_users_show_model *model, bool frame,
-                             cf_builder *out) {
-    cf_err rc = cf_builder_append(out, SP(frame ? "FRAME USER:" : "USER:"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, (cf_span){
-                                         (const unsigned char *)model->name
-                                             .ptr,
-                                         model->name.len,
-                                     });
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, SP(" ROLE:"));
-    if (rc == CF_OK) {
-        const char *role = cf_role_name(model->role);
-        rc = cf_builder_append(out, SP(role));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, SP(" TRANSFER:"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, (cf_span){
-                                         (const unsigned char *)
-                                             model->transfer_id.ptr,
-                                         model->transfer_id.len,
-                                     });
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, SP(" AVATAR:"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, (cf_span){
-                                         (const unsigned char *)
-                                             model->avatar_path.ptr,
-                                         model->avatar_path.len,
-                                     });
-    }
-    return rc;
-}
-
-cf_err cf_view_users_show(const cf_view_ctx *ctx,
-                          const cf_view_users_show_model *model,
-                          cf_builder *out) {
-    (void)ctx;
-    return stub_show_body(model, false, out);
-}
-
-cf_err cf_view_users_show_frame(const cf_view_ctx *ctx,
-                                const cf_view_users_show_model *model,
-                                cf_builder *out) {
-    (void)ctx;
-    return stub_show_body(model, true, out);
-}
-
 /* ---- scratch app ------------------------------------------------------------ */
 
 typedef struct {
@@ -201,6 +96,11 @@ static bool env_open(users_env *env) {
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
+        return false;
+    }
+    /* Real renders resolve digested assets through the pinned manifest. */
+    if (cf_views_assets_configure("tests/fixtures/assets") != CF_OK) {
+        fprintf(stderr, "  env_open: assets configure failed\n");
         return false;
     }
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
@@ -404,20 +304,24 @@ static bool head_contains(cf_response *resp, cf_request *req,
     return found;
 }
 
-/* The echoed TRANSFER: token, copied out of the stubbed page body. */
+/* The transfer token, copied out of the rendered page body: the transfer
+ * partial links `/session/transfers/<signed id>`. */
 static bool extract_transfer(const cf_buf *body, char *out, size_t cap) {
-    static const char marker[] = "TRANSFER:";
+    static const char marker[] = "/session/transfers/";
     cf_span span = cf_buf_span(body);
-    for (size_t i = 0; i + sizeof marker <= span.len; i++) {
-        if (memcmp(span.ptr + i, marker, sizeof marker - 1) != 0) continue;
-        size_t at = i + sizeof marker - 1;
+    size_t mlen = sizeof marker - 1;
+    for (size_t i = 0; i + mlen <= span.len; i++) {
+        if (memcmp(span.ptr + i, marker, mlen) != 0) continue;
+        size_t at = i + mlen;
         size_t end = at;
-        while (end < span.len && span.ptr[end] != ' ' &&
-               span.ptr[end] != '\r' && span.ptr[end] != '\n') {
+        while (end < span.len && span.ptr[end] != '"' &&
+               span.ptr[end] != '\'' && span.ptr[end] != ' ' &&
+               span.ptr[end] != '\r' && span.ptr[end] != '\n' &&
+               span.ptr[end] != '<') {
             end++;
         }
         size_t copy = end - at;
-        if (copy >= cap) copy = cap - 1;
+        if (copy == 0 || copy >= cap) continue;
         memcpy(out, span.ptr + at, copy);
         out[copy] = '\0';
         return true;
@@ -453,8 +357,8 @@ CF_TEST(users_new_renders_the_join_page_with_the_code) {
     CF_CHECK(resp.status == 200);
     CF_CHECK(head_contains(&resp, &req,
                            "Content-Type: text/html; charset=utf-8\r\n"));
-    CF_CHECK(buf_contains(resp.body, "JOIN:" JOIN_CODE));
-    CF_CHECK(buf_contains(resp.body, "HELP:Ada"));
+    CF_CHECK(buf_contains(resp.body, JOIN_CODE));
+    CF_CHECK(buf_contains(resp.body, "Ada"));
     cf_response_dispose(&resp);
     env_close(&env);
 }
@@ -664,7 +568,7 @@ CF_TEST(users_show_renders_the_user_with_a_live_transfer_id) {
     users_env env;
     CF_REQUIRE(env_open(&env));
     seed_account(env.scratch.db);
-    seed_user(env.scratch.db, 5, "Zed", "zed@example.com", NULL, 0, 0);
+    seed_user(env.scratch.db, 5, "Zed", "zed@example.com", NULL, 1, 0);
     char cookie[1024];
     make_session_cookie(&env, cookie, sizeof cookie, "tok-5", 5);
 
@@ -675,10 +579,10 @@ CF_TEST(users_show_renders_the_user_with_a_live_transfer_id) {
     CF_CHECK(resp.status == 200);
     CF_CHECK(head_contains(&resp, &req,
                            "Content-Type: text/html; charset=utf-8\r\n"));
-    CF_CHECK(buf_contains(resp.body, "USER:Zed"));
-    CF_CHECK(buf_contains(resp.body, "ROLE:member"));
+    CF_CHECK(buf_contains(resp.body, "Zed"));
+    CF_CHECK(buf_contains(resp.body, "zed@example.com"));
     /* fresh_user_avatar_path: "/users/<avatar token>/avatar?v=<number>". */
-    CF_CHECK(buf_contains(resp.body, "AVATAR:/users/"));
+    CF_CHECK(buf_contains(resp.body, "/users/"));
     CF_CHECK(buf_contains(resp.body, "/avatar?v=20260102030405"));
 
     /* The echoed transfer id verifies for this user (purpose transfer). */
@@ -715,7 +619,7 @@ CF_TEST(users_show_turbo_frame_renders_the_frame_layout) {
     users_env env;
     CF_REQUIRE(env_open(&env));
     seed_account(env.scratch.db);
-    seed_user(env.scratch.db, 5, "Zed", "zed@example.com", NULL, 0, 0);
+    seed_user(env.scratch.db, 5, "Zed", "zed@example.com", NULL, 1, 0);
     char cookie[1024];
     make_session_cookie(&env, cookie, sizeof cookie, "tok-5", 5);
 
@@ -726,7 +630,7 @@ CF_TEST(users_show_turbo_frame_renders_the_frame_layout) {
                CF_OK);
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 200);
-    CF_CHECK(buf_contains(resp.body, "FRAME USER:Zed"));
+    CF_CHECK(buf_contains(resp.body, "Zed"));
     CF_CHECK(!head_contains(&resp, &req, "Link: "));
     cf_response_dispose(&resp);
     env_close(&env);

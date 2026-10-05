@@ -759,203 +759,9 @@ static cf_err byb_deliver_webhooks(cf_ctx *ctx, const cf_room *room,
 /* ------------------------------------------------------- JSON (shim B1) ------------------------------------------------------- */
 
 /* UTC civil date from days since 1970-01-01 (Howard Hinnant's algorithm). */
-static void byb_civil_from_days(int64_t days, int64_t *year, unsigned *month,
-                                unsigned *day) {
-    int64_t z = days + 719468;
-    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-    unsigned doe = (unsigned)(z - era * 146097);
-    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    int64_t y = (int64_t)yoe + era * 400;
-    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    unsigned mp = (5 * doy + 2) / 153;
-    unsigned d = doy - (153 * mp + 2) / 5 + 1;
-    unsigned m = mp < 10 ? mp + 3 : mp - 9;
-    *year = y + (m <= 2);
-    *month = m;
-    *day = d;
-}
-
-/* `messages/support.rs json_time`: Active Support default precision
- * (`2026-09-26T12:26:46.848Z`). */
-static cf_err byb_json_time(int64_t time_us, cf_builder *out) {
-    int64_t secs = time_us / 1000000;
-    int64_t rem = time_us % 1000000;
-    if (rem < 0) {
-        secs -= 1;
-        rem += 1000000;
-    }
-    int64_t days = secs / 86400;
-    int64_t sod = secs % 86400;
-    if (sod < 0) {
-        days -= 1;
-        sod += 86400;
-    }
-    int64_t year = 0;
-    unsigned month = 0, day = 0;
-    byb_civil_from_days(days, &year, &month, &day);
-    char text[32];
-    int n = snprintf(text, sizeof text,
-                     "%04" PRId64 "-%02u-%02uT%02" PRId64 ":%02" PRId64
-                     ":%02" PRId64 ".%03" PRId64 "Z",
-                     year, month, day, sod / 3600, (sod % 3600) / 60,
-                     sod % 60, rem / 1000);
-    if (n < 0 || (size_t)n >= sizeof text) return CF_INTERNAL;
-    return cf_builder_append(out, (cf_span){(const unsigned char *)text,
-                                            (size_t)n});
-}
-
-static cf_err byb_json_i64(cf_builder *out, int64_t value) {
-    char text[24];
-    int n = snprintf(text, sizeof text, "%" PRId64, value);
-    if (n < 0 || (size_t)n >= sizeof text) return CF_INTERNAL;
-    return cf_builder_append(out, (cf_span){(const unsigned char *)text,
-                                            (size_t)n});
-}
-
-/* Absolute URL for a JSON payload (shim B2): PUBLIC_ORIGIN + path. */
-static cf_err byb_absolute_url(cf_ctx *ctx, cf_span path, cf_builder *out) {
-    const cf_config *config = cf_app_config(ctx->app);
-    if (config == NULL || config->public_origin == NULL) return CF_INTERNAL;
-    cf_err rc = cf_builder_append(out, byb_span(config->public_origin));
-    if (rc == CF_OK) rc = cf_builder_append(out, path);
-    return rc;
-}
-
-/* `users/_user.json.jbuilder`: `json.(user, :id, :name, :role)` and the
- * absolute avatar_url. */
-static cf_err byb_user_json(cf_ctx *ctx, const cf_user *user,
-                            cf_builder *out) {
-    cf_view_user view = {0};
-    cf_err rc = cf_presenter_user_view(ctx, user, &view);
-    if (rc != CF_OK) {
-        cf_view_user_dispose(&view);
-        return rc;
-    }
-    rc = cf_builder_append(out, byb_span("{\"id\":"));
-    if (rc == CF_OK) rc = byb_json_i64(out, user->id);
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span(",\"name\":"));
-    if (rc == CF_OK) {
-        rc = cf_json_string(out, (cf_span){(const unsigned char *)view.name.ptr,
-                                           view.name.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span(",\"role\":\""));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, byb_span(cf_role_name(user->role)));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, byb_span("\",\"avatar_url\":\""));
-    }
-    if (rc == CF_OK) {
-        rc = byb_absolute_url(ctx,
-                              (cf_span){(const unsigned char *)view.avatar_url.ptr,
-                                        view.avatar_url.len},
-                              out);
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span("\"}"));
-    cf_view_user_dispose(&view);
-    return rc;
-}
-
-/* The stored body rendered with its layout (`message.body.to_s`), with the
- * reference's `unwrap_or_default` rescue (cf_richtext_body_html already
- * clears to empty on render failure). */
-static cf_err byb_body_html(cf_ctx *ctx, const cf_message *message,
-                            cf_str *out) {
-    memset(out, 0, sizeof *out);
-    cf_str stored = {0};
-    bool found = false;
-    cf_err rc = cf_message_body_html(ctx->reader, message, &found, &stored);
-    if (rc != CF_OK) return rc;
-    if (!found || stored.ptr == NULL) {
-        cf_str_dispose(&stored);
-        return CF_OK;
-    }
-    cf_safe_html safe = {0};
-    rc = cf_richtext_body_html(
-        ctx, (cf_span){(const unsigned char *)stored.ptr, stored.len}, &safe);
-    cf_str_dispose(&stored);
-    if (rc != CF_OK) {
-        cf_safe_html_dispose(&safe);
-        return rc;
-    }
-    if (safe.bytes != NULL) {
-        cf_span html = cf_buf_span(safe.bytes);
-        char *copy = malloc(html.len + 1);
-        if (copy == NULL) {
-            cf_safe_html_dispose(&safe);
-            return CF_NOMEM;
-        }
-        if (html.len != 0) memcpy(copy, html.ptr, html.len);
-        copy[html.len] = '\0';
-        out->ptr = copy;
-        out->len = html.len;
-    }
-    cf_safe_html_dispose(&safe);
-    return CF_OK;
-}
-
-/* `messages/_message.json.jbuilder`. */
-static cf_err byb_message_json(cf_ctx *ctx, const cf_message *message,
-                               cf_builder *out) {
-    cf_user creator = {0};
-    cf_err rc = cf_user_find(ctx->reader, message->creator_id, &creator);
-    if (rc != CF_OK) {
-        cf_user_dispose(&creator);
-        return rc;
-    }
-    cf_str plain = {0};
-    rc = cf_message_plain_text_body(ctx->reader, message,
-                                    cf_tx_rich_text(NULL), &plain);
-    if (rc != CF_OK) {
-        cf_user_dispose(&creator);
-        byb_str_dispose(&plain);
-        return rc;
-    }
-    cf_str html = {0};
-    rc = byb_body_html(ctx, message, &html);
-    if (rc != CF_OK) {
-        cf_user_dispose(&creator);
-        byb_str_dispose(&plain);
-        return rc;
-    }
-    rc = cf_builder_append(out, byb_span("{\"id\":"));
-    if (rc == CF_OK) rc = byb_json_i64(out, message->id);
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span(",\"created_at\":\""));
-    if (rc == CF_OK) rc = byb_json_time(message->created_at, out);
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, byb_span("\",\"body\":{\"plain_text\":"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_json_string(out, (cf_span){(const unsigned char *)plain.ptr,
-                                           plain.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span(",\"html\":"));
-    if (rc == CF_OK) {
-        rc = cf_json_string(out, (cf_span){(const unsigned char *)html.ptr,
-                                           html.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span("},\"creator\":"));
-    if (rc == CF_OK) rc = byb_user_json(ctx, &creator, out);
-    cf_user_dispose(&creator);
-    byb_str_dispose(&plain);
-    byb_str_dispose(&html);
-    if (rc != CF_OK) return rc;
-    rc = cf_builder_append(out, byb_span(",\"room\":{\"id\":"));
-    if (rc == CF_OK) rc = byb_json_i64(out, message->room_id);
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span("},\"url\":\""));
-    if (rc == CF_OK) {
-        char path[64];
-        int n = snprintf(path, sizeof path,
-                         "/rooms/%" PRId64 "/messages/%" PRId64,
-                         message->room_id, message->id);
-        if (n < 0 || (size_t)n >= sizeof path) return CF_INTERNAL;
-        rc = byb_absolute_url(ctx, (cf_span){(const unsigned char *)path,
-                                             (size_t)n},
-                              out);
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, byb_span("\"}"));
-    return rc;
-}
+/* B1/B2 (integrator): local JSON serializers replaced by the shared
+ * src/views/messages_json.c renderers (cf_views_message_json,
+ * cf_views_absolute_url); exact shapes verified by tests/views/test_messages_json.c. */
 
 /* `Ctx::render(status, JSON, body)`: `application/json; charset=utf-8`,
  * with `Vary: Accept` when negotiated from the Accept header. */
@@ -981,7 +787,7 @@ static cf_err byb_send_json(cf_ctx *ctx, unsigned status, cf_builder *body) {
 /* `render :show` (messages/by_bots/show.json.jbuilder). */
 static cf_err byb_render_show(cf_ctx *ctx, const cf_message *message) {
     cf_builder body = {0};
-    cf_err rc = byb_message_json(ctx, message, &body);
+    cf_err rc = cf_views_message_json(ctx, message, &body);
     if (rc != CF_OK) {
         cf_builder_dispose(&body);
         return rc;
@@ -1000,7 +806,7 @@ static cf_err byb_created_with_location(cf_ctx *ctx,
                      message->room_id, message->id);
     if (n < 0 || (size_t)n >= sizeof path) return CF_INTERNAL;
     cf_builder location = {0};
-    cf_err rc = byb_absolute_url(ctx,
+    cf_err rc = cf_views_absolute_url(ctx,
                                  (cf_span){(const unsigned char *)path,
                                            (size_t)n},
                                  &location);
@@ -1028,7 +834,7 @@ static cf_err byb_redirect_message(cf_ctx *ctx, const cf_room *room,
                      room->id, message->id);
     if (n < 0 || (size_t)n >= sizeof path) return CF_INTERNAL;
     cf_builder location = {0};
-    cf_err rc = byb_absolute_url(ctx,
+    cf_err rc = cf_views_absolute_url(ctx,
                                  (cf_span){(const unsigned char *)path,
                                            (size_t)n},
                                  &location);
@@ -1088,7 +894,7 @@ static cf_err byb_pagination_headers(cf_ctx *ctx, const cf_room *room,
     }
     cf_builder link = {0};
     rc = cf_builder_append(&link, byb_span("<"));
-    if (rc == CF_OK) rc = byb_absolute_url(ctx, byb_span(""), &link);
+    if (rc == CF_OK) rc = cf_views_absolute_url(ctx, byb_span(""), &link);
     if (rc == CF_OK) {
         char path[256];
         int m = snprintf(path, sizeof path,
@@ -1161,7 +967,7 @@ cf_err cf_action_messages_by_bots_index(cf_ctx *ctx) {
     for (size_t i = 0; rc == CF_OK && i < messages.len; i++) {
         if (i != 0) rc = cf_builder_append(&body, byb_span(","));
         if (rc == CF_OK) {
-            rc = byb_message_json(ctx, &messages.items[i], &body);
+            rc = cf_views_message_json(ctx, &messages.items[i], &body);
         }
     }
     cf_message_vector_dispose(&messages);

@@ -116,6 +116,7 @@
 #include "context.h"
 #include "http/params.h"
 #include "models/active_storage.h"
+#include "models/touch.h"
 #include "models/user.h"
 #include "views/internal.h" /* cf_views_integer_cast (ruby_compat::integer_cast) */
 
@@ -334,9 +335,9 @@ static cf_err bots_reload_bot(cf_tx *tx, int64_t bot_id, cf_user *out) {
 }
 
 /* The Delete arm of `attachments::assign` for Record::user(bot)/"avatar":
- * destroy the attachment row when one exists and purge its blob after
- * commit. A missing attachment is the reference no-op. (The reference also
- * touches the user row; no C helper exists yet, R-BOTS-TOUCH.) */
+ * destroy the attachment row when one exists, touch the user row
+ * (`belongs_to :record, touch: true`) and purge its blob after commit.
+ * A missing attachment is the reference no-op. */
 static cf_err bots_avatar_delete_write(cf_tx *tx, int64_t bot_id) {
     cf_db *db = cf_tx_db(tx);
     if (db == NULL) return CF_INTERNAL;
@@ -350,6 +351,8 @@ static cf_err bots_avatar_delete_write(cf_tx *tx, int64_t bot_id) {
     int64_t blob_id = attachment.blob_id;
     rc = cf_attachment_delete(tx, &attachment);
     cf_attachment_dispose(&attachment);
+    if (rc != CF_OK) return rc;
+    rc = cf_touch_user_id(tx, bot_id);
     if (rc != CF_OK) return rc;
     return cf_tx_event(tx, (cf_event){.kind = CF_EVENT_PURGE_BLOB,
                                       .blob_id = blob_id});

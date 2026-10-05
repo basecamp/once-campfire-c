@@ -669,6 +669,16 @@ cf_err cf_view_new_boost_frame(const cf_view_ctx *ctx,
                                const cf_view_message *message,
                                const cf_view_user *user, cf_builder *out);
 
+/* messages/by_bots + boosts/by_bots JSON (src/views/messages_json.c):
+ * Jbuilder field-order-exact serializers shared by the bot endpoints.
+ * Absolute URLs are PUBLIC_ORIGIN + path (03-application.md A00; D-C07
+ * distrusts Host input, so request-Host URLs are never emitted). */
+cf_err cf_views_message_json(cf_ctx *ctx, const cf_message *message,
+                             cf_builder *out);
+cf_err cf_views_boost_json(cf_ctx *ctx, const cf_boost *boost,
+                           const cf_message *message, cf_builder *out);
+cf_err cf_views_absolute_url(cf_ctx *ctx, cf_span path, cf_builder *out);
+
 /* ------------------------------------------------------- users avatars */
 
 /* `users/avatars/show.svg.erb` (crates/views/src/users.rs `AvatarSvg`): the
