@@ -61,8 +61,12 @@ def run():
 
 - Standard library only; no third-party Python packages. Drive the C server
   with `subprocess`/sockets; do not add another framework.
-- Browser flows use the pinned Playwright parity project, not a new browser
-  framework (`07-verification.md`, "Commands implementation must provide").
+- Browser flows use the installed `agent-browser` CLI driven by subprocess
+  (`tests/integration/_harness.py`), per the project owner's direction
+  (2026-10-05): no Playwright/parity-project runner and no Chromium download.
+  Validated with `agent-browser 0.38.2` at
+  `~/devtools/node/bin/agent-browser`; each user gets its own named session
+  (`--session a` / `--session b`), and cases close their sessions when done.
 - Expected values come from `tests/fixtures/` (pinned reference bytes).
   Never regenerate expected output from the candidate C server.
 - Cases must not read `tmp/` at runtime; fixtures are self-contained.
