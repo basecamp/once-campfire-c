@@ -1,7 +1,7 @@
 /* H02 module helpers for request parameters (01-foundation-http.md "H02").
  *
  * The public parameter API itself is the pre-approved subset declared in
- * src/cf.h (cf_params_parse, accessors). This header adds the two helpers
+ * src/cf.h (cf_params_parse, accessors). This header adds the three helpers
  * H02 contributes at module scope; they stay here until the integrator
  * approves their promotion into the shared contract:
  *
@@ -19,7 +19,18 @@
  *    the body/query tree with it (path wins), because cf_params_parse only
  *    sees body and query spans in cf_request.
  *
- * Both return cf_err; out/err semantics follow 00-contracts.md. */
+ *  - cf_param_to_s: kit `Param::to_s`, the text Rails interpolates for a
+ *    scalar parameter (strings as-is, numbers as serde_json's Number Display,
+ *    true/false, nil as ""); CF_NOT_FOUND is the reference's None for an
+ *    array, object or upload. cf_param_string keeps its H02 contract (a
+ *    string kind only, CF_INVALID otherwise), because the reference
+ *    distinguishes `as_str` from `to_s` (e.g. `params[:bot_key].to_s` reads
+ *    a number, `param_str` does not); a number's text comes from the JSON
+ *    source lexeme, retained and rendered at parse time because serde_json's
+ *    integer/float split and zmij's shortest round-trip rendering cannot be
+ *    recovered from an int64 alone.
+ *
+ * All return cf_err; out/err semantics follow 00-contracts.md. */
 #ifndef CF_HTTP_PARAMS_H
 #define CF_HTTP_PARAMS_H
 
@@ -27,9 +38,10 @@
 
 /* Module-internal tree layout (00-contracts: "other headers contain
  * module-private or feature-specific types"). Consumers must use the cf.h
- * accessors; only params.c and H02's corpus test define
- * CF_HTTP_PARAMS_INTERNALS to read these fields (the corpus test compares the
- * exact stored shape, key order included). */
+ * accessors; only params.c and the H02 tests (the corpus test and
+ * tests/http/test_params.c) define CF_HTTP_PARAMS_INTERNALS to read these
+ * fields (the corpus test compares the exact stored shape, key order
+ * included). */
 #ifdef CF_HTTP_PARAMS_INTERNALS
 
 struct cf_param_entry {
@@ -42,7 +54,16 @@ struct cf_param {
     union {
         cf_span string;                                   /* CF_PARAM_STRING */
         bool boolean;                                     /* CF_PARAM_BOOL */
-        struct { bool integral; int64_t value; } number;  /* CF_PARAM_NUMBER */
+        struct {
+            /* Exact integrality for cf_param_i64 (unchanged H02 behavior). */
+            bool integral;
+            int64_t value;
+            /* JSON numbers only: the exact source lexeme and its
+             * serde_json Number Display text (`Param::to_s`), both copied
+             * into the params arena. */
+            cf_span raw;
+            cf_span text;
+        } number;                                         /* CF_PARAM_NUMBER */
         struct { cf_param **items; size_t len, cap; } array;
         struct { struct cf_param_entry *entries; size_t len, cap; } object;
     } u;
@@ -73,5 +94,12 @@ cf_err cf_effective_method(const cf_request *req, cf_method *out);
 /* Merge every top-level entry of `source` into `target` (deep copies into
  * target's storage; `source` may be destroyed afterwards). */
 cf_err cf_params_merge(cf_params *target, const cf_params *source);
+
+/* kit `Param::to_s`: the Rails interpolation text of a scalar parameter.
+ * strings as-is, numbers as serde_json's Number Display, bools "true"/"false",
+ * nil as ""; CF_NOT_FOUND for a NULL param and for an array/object/upload
+ * (the reference's None). The returned span is borrowed from the params
+ * arena (or a static string for bools). */
+cf_err cf_param_to_s(const cf_param *param, cf_span *out);
 
 #endif /* CF_HTTP_PARAMS_H */

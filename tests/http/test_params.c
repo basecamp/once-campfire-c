@@ -8,6 +8,7 @@
  * Run from the repository root: the corpus test opens
  * tests/fixtures/crates/kit/tests/params_vectors.json. */
 #include "cf.h"
+#define CF_HTTP_PARAMS_INTERNALS 1
 #include "http/params.h"
 
 #include "cf_test.h"
@@ -98,6 +99,23 @@ static int bool_is(const cf_param *p, bool want) {
 static int bool_null(const cf_param *p) {
     bool present = true, value = true;
     return p != NULL && cf_param_bool(p, &present, &value) == CF_OK && !present && !value;
+}
+
+/* kit `Param::to_s` text (cf_param_to_s; cf_param_string answers the same for
+ * numbers). */
+static int to_s_is(const cf_param *p, const char *want) {
+    cf_span s;
+    if (p == NULL || cf_param_to_s(p, &s) != CF_OK) return 0;
+    size_t n = strlen(want);
+    return s.len == n && (n == 0 || memcmp(s.ptr, want, n) == 0);
+}
+
+/* The exact JSON source lexeme kept for a number (internals). */
+static int raw_is(const cf_param *p, const char *want) {
+    if (p == NULL || p->kind != CF_PARAM_NUMBER) return 0;
+    size_t n = strlen(want);
+    return p->u.number.raw.len == n &&
+           (n == 0 || memcmp(p->u.number.raw.ptr, want, n) == 0);
 }
 
 /* ------------------------------------------------------- small utilities */
@@ -202,6 +220,130 @@ CF_TEST(accessor_json_number_matrix) {
     CF_CHECK(bool_is(pget(params, "t"), true));
 
     cf_params_destroy(params);
+}
+
+/* The controller-relevant string path for JSON numbers: cf_param_to_s (kit
+ * `Param::to_s`, what src/actions/first_runs.c interpolates) returns the
+ * pinned serde_json 1.0.151 Number Display text for integers and floats, and
+ * the exact source lexeme is retained. cf_param_string keeps its H02 contract
+ * (a number is still the wrong kind there). Expected texts come from the
+ * pinned oracle (itoa for PosInt/NegInt, zmij 1.0.23 shortest round-trip for
+ * floats; integrality alone cannot reproduce them: 100.0 -> "100.0",
+ * 1e2 -> "100.0", 9007199254740993.0 -> "9007199254740994.0"). */
+CF_TEST(accessor_json_number_to_s_matrix) {
+    struct reqb b;
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "application/json");
+    reqb_body(&b, "{\"i\":3,\"ni\":-3,\"f\":1.5,\"nf\":-1.5,"
+                  "\"hundred\":100.0,\"exp\":1e2,\"negexp\":1e-2,"
+                  "\"sci\":1e16,\"fixed15\":1e15,\"small\":1e-6,\"fixed5\":1e-5,"
+                  "\"u64max\":18446744073709551615,\"over\":18446744073709551616,"
+                  "\"min\":-9223372036854775808,\"under\":-9223372036854775809,"
+                  "\"nzero\":-0,\"zero\":0,\"imprecise\":9007199254740993.0,"
+                  "\"pi\":3.141592653589793,\"z\":null,\"t\":true}");
+    cf_params *params = NULL;
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+
+    /* Integral JSON numbers keep their exact value (u64 range included). */
+    CF_CHECK(to_s_is(pget(params, "i"), "3"));
+    CF_CHECK(to_s_is(pget(params, "ni"), "-3"));
+    CF_CHECK(to_s_is(pget(params, "u64max"), "18446744073709551615"));
+    CF_CHECK(to_s_is(pget(params, "min"), "-9223372036854775808"));
+    CF_CHECK(to_s_is(pget(params, "zero"), "0"));
+    CF_CHECK(to_s_is(pget(params, "nzero"), "-0.0")); /* serde: -0 floats */
+    CF_CHECK(to_s_is(pget(params, "over"), "1.8446744073709552e+19"));
+    CF_CHECK(to_s_is(pget(params, "under"), "-9.223372036854776e+18"));
+
+    /* Floats: the reference formatting, not an int64 round-trip. */
+    CF_CHECK(to_s_is(pget(params, "f"), "1.5"));
+    CF_CHECK(to_s_is(pget(params, "nf"), "-1.5"));
+    CF_CHECK(to_s_is(pget(params, "hundred"), "100.0"));
+    CF_CHECK(to_s_is(pget(params, "exp"), "100.0"));   /* 1e2 is a float */
+    CF_CHECK(to_s_is(pget(params, "negexp"), "0.01"));
+    CF_CHECK(to_s_is(pget(params, "sci"), "1e+16"));    /* zmij bounds -5..=15 */
+    CF_CHECK(to_s_is(pget(params, "fixed15"), "1000000000000000.0"));
+    CF_CHECK(to_s_is(pget(params, "small"), "1e-6"));
+    CF_CHECK(to_s_is(pget(params, "fixed5"), "0.00001"));
+    CF_CHECK(to_s_is(pget(params, "imprecise"), "9007199254740994.0"));
+    CF_CHECK(to_s_is(pget(params, "pi"), "3.141592653589793"));
+
+    /* The exact source lexeme is retained, not just the rendered value. */
+    CF_CHECK(raw_is(pget(params, "i"), "3"));
+    CF_CHECK(raw_is(pget(params, "hundred"), "100.0"));
+    CF_CHECK(raw_is(pget(params, "exp"), "1e2"));
+    CF_CHECK(raw_is(pget(params, "small"), "1e-6"));
+    CF_CHECK(raw_is(pget(params, "nzero"), "-0"));
+    CF_CHECK(raw_is(pget(params, "u64max"), "18446744073709551615"));
+
+    /* cf_param_i64 keeps its exact-integrality rule next to the text path. */
+    CF_CHECK(i64_is(pget(params, "exp"), 100));
+    CF_CHECK(i64_is(pget(params, "hundred"), 100));
+    CF_CHECK(cf_param_i64(pget(params, "f"), &(cf_optional_i64){0}) == CF_INVALID);
+    CF_CHECK(cf_param_i64(pget(params, "u64max"), &(cf_optional_i64){0}) == CF_INVALID);
+
+    /* cf_param_string stays the H02 strings-only accessor; the number text is
+     * cf_param_to_s; non-scalars still reject both. */
+    CF_CHECK(cf_param_string(pget(params, "i"), &(cf_span){0}) == CF_INVALID);
+    CF_CHECK(cf_param_string(pget(params, "f"), &(cf_span){0}) == CF_INVALID);
+    CF_CHECK(cf_param_string(pget(params, "z"), &(cf_span){0}) == CF_INVALID);
+    CF_CHECK(cf_param_string(pget(params, "t"), &(cf_span){0}) == CF_INVALID);
+    CF_CHECK(cf_param_to_s(pget(params, "z"), &(cf_span){0}) == CF_OK);
+    CF_CHECK(cf_param_to_s(pget(params, "t"), &(cf_span){0}) == CF_OK);
+
+    cf_params_destroy(params);
+}
+
+/* kit `Param::to_s` (cf_param_to_s): the reference's Option<String>, with
+ * CF_NOT_FOUND standing in for None. */
+CF_TEST(accessor_param_to_s_matrix) {
+    struct reqb b;
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "application/json");
+    reqb_body(&b, "{\"z\":null,\"t\":true,\"f\":false,\"s\":\"hi\",\"n\":1.5,"
+                  "\"a\":[1],\"o\":{\"x\":1}}");
+    cf_params *params = NULL;
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+
+    CF_CHECK(to_s_is(pget(params, "z"), ""));      /* NilClass#to_s */
+    CF_CHECK(to_s_is(pget(params, "t"), "true"));
+    CF_CHECK(to_s_is(pget(params, "f"), "false"));
+    CF_CHECK(to_s_is(pget(params, "s"), "hi"));
+    CF_CHECK(to_s_is(pget(params, "n"), "1.5"));
+    CF_CHECK(cf_param_to_s(pget(params, "a"), &(cf_span){0}) == CF_NOT_FOUND);
+    CF_CHECK(cf_param_to_s(pget(params, "o"), &(cf_span){0}) == CF_NOT_FOUND);
+    CF_CHECK(cf_param_to_s(NULL, &(cf_span){0}) == CF_NOT_FOUND);
+    CF_CHECK(cf_param_to_s(pget(params, "s"), NULL) == CF_INVALID);
+    cf_span untouched = S("untouched");
+    CF_CHECK(cf_param_to_s(pget(params, "z"), &untouched) == CF_OK);
+    CF_CHECK(untouched.len == 0 && untouched.ptr == NULL);
+
+    cf_params_destroy(params);
+}
+
+/* The number lexeme and text survive cf_params_merge: they are deep-copied
+ * into the target's arena, so destroying the source must not dangle them. */
+CF_TEST(accessor_json_number_text_survives_merge) {
+    struct reqb b1;
+    reqb_init(&b1, CF_POST, CF_POST);
+    reqb_ct(&b1, "application/json");
+    reqb_body(&b1, "{\"n\":1e-5,\"x\":1}");
+    cf_params *src = NULL;
+    CF_REQUIRE(parse(&b1.r, &src) == CF_OK);
+
+    struct reqb b2;
+    reqb_init(&b2, CF_POST, CF_POST);
+    reqb_ct(&b2, "application/json");
+    reqb_body(&b2, "{\"y\":2}");
+    cf_params *dst = NULL;
+    CF_REQUIRE(parse(&b2.r, &dst) == CF_OK);
+
+    CF_REQUIRE(cf_params_merge(dst, src) == CF_OK);
+    cf_params_destroy(src); /* the copied spans must stay valid */
+    CF_CHECK(to_s_is(pget(dst, "n"), "0.00001"));
+    CF_CHECK(raw_is(pget(dst, "n"), "1e-5"));
+    CF_CHECK(i64_is(pget(dst, "x"), 1));
+    CF_CHECK(i64_is(pget(dst, "y"), 2));
+    cf_params_destroy(dst);
 }
 
 CF_TEST(accessor_json_bool_matrix) {

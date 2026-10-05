@@ -221,6 +221,19 @@ static cf_err param_string_copy(cf_params *p, const unsigned char *bytes, size_t
     return CF_OK;
 }
 
+/* Copy `bytes` into the params arena; an empty span stays {NULL, 0}. */
+static cf_err arena_span_copy(cf_params *p, const unsigned char *bytes, size_t len,
+                              cf_span *out) {
+    unsigned char *copy = NULL;
+    if (len > 0) {
+        copy = arena_alloc(p, len);
+        if (copy == NULL) return CF_NOMEM;
+        memcpy(copy, bytes, len);
+    }
+    *out = (cf_span){copy, len};
+    return CF_OK;
+}
+
 /* ------------------------------------------------------- number analysis */
 
 static bool ascii_digit(unsigned char c) { return c >= '0' && c <= '9'; }
@@ -325,16 +338,384 @@ static cf_err number_analyze(const unsigned char *s, size_t n, bool *integral, i
     return CF_OK;
 }
 
+/* ------------------------------------------------- number text (to_s) --- */
+
+/* serde_json 1.0.151's POW10 table (de.rs, `static POW10: [f64; 309]`):
+ * 10^k for k in 0..=308, each the correctly rounded double of the literal
+ * `1eNNN`. A JSON number's reference `Param::to_s` text is serde_json's
+ * `Number` Display: integers via itoa, floats via zmij 1.0.23's shortest
+ * round-trip formatter. serde_json parses floats by multiplying/dividing
+ * this table (its non-float_roundtrip path), which can differ from a
+ * correctly rounded strtod by one ulp (e.g. 9007199254740993.0), so the
+ * C side reproduces that arithmetic exactly instead of calling strtod on
+ * the lexeme. Generated from the pinned source; hex floats are exact. */
+static const double k_json_pow10[309] = {
+    0x1.0000000000000p+0, 0x1.4000000000000p+3, 0x1.9000000000000p+6, 0x1.f400000000000p+9,
+    0x1.3880000000000p+13, 0x1.86a0000000000p+16, 0x1.e848000000000p+19, 0x1.312d000000000p+23,
+    0x1.7d78400000000p+26, 0x1.dcd6500000000p+29, 0x1.2a05f20000000p+33, 0x1.74876e8000000p+36,
+    0x1.d1a94a2000000p+39, 0x1.2309ce5400000p+43, 0x1.6bcc41e900000p+46, 0x1.c6bf526340000p+49,
+    0x1.1c37937e08000p+53, 0x1.6345785d8a000p+56, 0x1.bc16d674ec800p+59, 0x1.158e460913d00p+63,
+    0x1.5af1d78b58c40p+66, 0x1.b1ae4d6e2ef50p+69, 0x1.0f0cf064dd592p+73, 0x1.52d02c7e14af6p+76,
+    0x1.a784379d99db4p+79, 0x1.08b2a2c280291p+83, 0x1.4adf4b7320335p+86, 0x1.9d971e4fe8402p+89,
+    0x1.027e72f1f1281p+93, 0x1.431e0fae6d721p+96, 0x1.93e5939a08ceap+99, 0x1.f8def8808b024p+102,
+    0x1.3b8b5b5056e17p+106, 0x1.8a6e32246c99cp+109, 0x1.ed09bead87c03p+112, 0x1.3426172c74d82p+116,
+    0x1.812f9cf7920e3p+119, 0x1.e17b84357691bp+122, 0x1.2ced32a16a1b1p+126, 0x1.78287f49c4a1dp+129,
+    0x1.d6329f1c35ca5p+132, 0x1.25dfa371a19e7p+136, 0x1.6f578c4e0a061p+139, 0x1.cb2d6f618c879p+142,
+    0x1.1efc659cf7d4cp+146, 0x1.66bb7f0435c9ep+149, 0x1.c06a5ec5433c6p+152, 0x1.18427b3b4a05cp+156,
+    0x1.5e531a0a1c873p+159, 0x1.b5e7e08ca3a8fp+162, 0x1.11b0ec57e649ap+166, 0x1.561d276ddfdc0p+169,
+    0x1.aba4714957d30p+172, 0x1.0b46c6cdd6e3ep+176, 0x1.4e1878814c9cep+179, 0x1.a19e96a19fc41p+182,
+    0x1.05031e2503da9p+186, 0x1.4643e5ae44d13p+189, 0x1.97d4df19d6057p+192, 0x1.fdca16e04b86dp+195,
+    0x1.3e9e4e4c2f344p+199, 0x1.8e45e1df3b015p+202, 0x1.f1d75a5709c1bp+205, 0x1.3726987666191p+209,
+    0x1.84f03e93ff9f5p+212, 0x1.e62c4e38ff872p+215, 0x1.2fdbb0e39fb47p+219, 0x1.7bd29d1c87a19p+222,
+    0x1.dac74463a989fp+225, 0x1.28bc8abe49f64p+229, 0x1.72ebad6ddc73dp+232, 0x1.cfa698c95390cp+235,
+    0x1.21c81f7dd43a7p+239, 0x1.6a3a275d49491p+242, 0x1.c4c8b1349b9b5p+245, 0x1.1afd6ec0e1411p+249,
+    0x1.61bcca7119916p+252, 0x1.ba2bfd0d5ff5bp+255, 0x1.145b7e285bf99p+259, 0x1.59725db272f7fp+262,
+    0x1.afcef51f0fb5fp+265, 0x1.0de1593369d1bp+269, 0x1.5159af8044462p+272, 0x1.a5b01b605557bp+275,
+    0x1.078e111c3556dp+279, 0x1.4971956342ac8p+282, 0x1.9bcdfabc1357ap+285, 0x1.0160bcb58c16cp+289,
+    0x1.41b8ebe2ef1c7p+292, 0x1.922726dbaae39p+295, 0x1.f6b0f092959c7p+298, 0x1.3a2e965b9d81dp+302,
+    0x1.88ba3bf284e24p+305, 0x1.eae8caef261adp+308, 0x1.32d17ed577d0cp+312, 0x1.7f85de8ad5c4fp+315,
+    0x1.df67562d8b363p+318, 0x1.2ba095dc7701ep+322, 0x1.7688bb5394c25p+325, 0x1.d42aea2879f2ep+328,
+    0x1.249ad2594c37dp+332, 0x1.6dc186ef9f45cp+335, 0x1.c931e8ab87173p+338, 0x1.1dbf316b346e8p+342,
+    0x1.652efdc6018a2p+345, 0x1.be7abd3781ecap+348, 0x1.170cb642b133fp+352, 0x1.5ccfe3d35d80ep+355,
+    0x1.b403dcc834e12p+358, 0x1.108269fd210cbp+362, 0x1.54a3047c694fep+365, 0x1.a9cbc59b83a3dp+368,
+    0x1.0a1f5b8132466p+372, 0x1.4ca732617ed80p+375, 0x1.9fd0fef9de8e0p+378, 0x1.03e29f5c2b18cp+382,
+    0x1.44db473335defp+385, 0x1.961219000356bp+388, 0x1.fb969f40042c5p+391, 0x1.3d3e2388029bbp+395,
+    0x1.8c8dac6a0342ap+398, 0x1.efb1178484135p+401, 0x1.35ceaeb2d28c1p+405, 0x1.83425a5f872f1p+408,
+    0x1.e412f0f768fadp+411, 0x1.2e8bd69aa19ccp+415, 0x1.7a2ecc414a03fp+418, 0x1.d8ba7f519c84fp+421,
+    0x1.27748f9301d32p+425, 0x1.7151b377c247ep+428, 0x1.cda62055b2d9ep+431, 0x1.2087d4358fc82p+435,
+    0x1.68a9c942f3ba3p+438, 0x1.c2d43b93b0a8cp+441, 0x1.19c4a53c4e697p+445, 0x1.6035ce8b6203dp+448,
+    0x1.b843422e3a84dp+451, 0x1.132a095ce4930p+455, 0x1.57f48bb41db7cp+458, 0x1.adf1aea12525bp+461,
+    0x1.0cb70d24b7379p+465, 0x1.4fe4d06de5057p+468, 0x1.a3de04895e46dp+471, 0x1.066ac2d5daec4p+475,
+    0x1.4805738b51a75p+478, 0x1.9a06d06e26112p+481, 0x1.00444244d7cabp+485, 0x1.405552d60dbd6p+488,
+    0x1.906aa78b912ccp+491, 0x1.f485516e7577fp+494, 0x1.38d352e5096afp+498, 0x1.8708279e4bc5bp+501,
+    0x1.e8ca3185deb72p+504, 0x1.317e5ef3ab327p+508, 0x1.7dddf6b095ff1p+511, 0x1.dd55745cbb7edp+514,
+    0x1.2a5568b9f52f4p+518, 0x1.74eac2e8727b1p+521, 0x1.d22573a28f19dp+524, 0x1.2357684599702p+528,
+    0x1.6c2d4256ffcc3p+531, 0x1.c73892ecbfbf4p+534, 0x1.1c835bd3f7d78p+538, 0x1.63a432c8f5cd6p+541,
+    0x1.bc8d3f7b3340cp+544, 0x1.15d847ad00087p+548, 0x1.5b4e5998400a9p+551, 0x1.b221effe500d4p+554,
+    0x1.0f5535fef2084p+558, 0x1.532a837eae8a5p+561, 0x1.a7f5245e5a2cfp+564, 0x1.08f936baf85c1p+568,
+    0x1.4b378469b6732p+571, 0x1.9e056584240fep+574, 0x1.02c35f729689fp+578, 0x1.4374374f3c2c6p+581,
+    0x1.945145230b378p+584, 0x1.f965966bce056p+587, 0x1.3bdf7e0360c36p+591, 0x1.8ad75d8438f43p+594,
+    0x1.ed8d34e547314p+597, 0x1.3478410f4c7ecp+601, 0x1.819651531f9e8p+604, 0x1.e1fbe5a7e7861p+607,
+    0x1.2d3d6f88f0b3dp+611, 0x1.788ccb6b2ce0cp+614, 0x1.d6affe45f818fp+617, 0x1.262dfeebbb0f9p+621,
+    0x1.6fb97ea6a9d38p+624, 0x1.cba7de5054486p+627, 0x1.1f48eaf234ad4p+631, 0x1.671b25aec1d89p+634,
+    0x1.c0e1ef1a724ebp+637, 0x1.188d357087713p+641, 0x1.5eb082cca94d7p+644, 0x1.b65ca37fd3a0dp+647,
+    0x1.11f9e62fe4448p+651, 0x1.56785fbbdd55ap+654, 0x1.ac1677aad4ab1p+657, 0x1.0b8e0acac4eafp+661,
+    0x1.4e718d7d7625ap+664, 0x1.a20df0dcd3af1p+667, 0x1.0548b68a044d6p+671, 0x1.469ae42c8560cp+674,
+    0x1.98419d37a6b8fp+677, 0x1.fe52048590673p+680, 0x1.3ef342d37a408p+684, 0x1.8eb0138858d0ap+687,
+    0x1.f25c186a6f04cp+690, 0x1.37798f4285630p+694, 0x1.8557f31326bbbp+697, 0x1.e6adefd7f06aap+700,
+    0x1.302cb5e6f642ap+704, 0x1.7c37e360b3d35p+707, 0x1.db45dc38e0c82p+710, 0x1.290ba9a38c7d1p+714,
+    0x1.734e940c6f9c6p+717, 0x1.d022390f8b837p+720, 0x1.221563a9b7323p+724, 0x1.6a9abc9424febp+727,
+    0x1.c5416bb92e3e6p+730, 0x1.1b48e353bce70p+734, 0x1.621b1c28ac20cp+737, 0x1.baa1e332d728fp+740,
+    0x1.14a52dffc6799p+744, 0x1.59ce797fb817fp+747, 0x1.b04217dfa61dfp+750, 0x1.0e294eebc7d2cp+754,
+    0x1.51b3a2a6b9c76p+757, 0x1.a6208b5068394p+760, 0x1.07d457124123dp+764, 0x1.49c96cd6d16ccp+767,
+    0x1.9c3bc80c85c7fp+770, 0x1.01a55d07d39cfp+774, 0x1.420eb449c8843p+777, 0x1.9292615c3aa54p+780,
+    0x1.f736f9b3494e9p+783, 0x1.3a825c100dd11p+787, 0x1.8922f31411456p+790, 0x1.eb6bafd91596bp+793,
+    0x1.33234de7ad7e3p+797, 0x1.7fec216198ddcp+800, 0x1.dfe729b9ff153p+803, 0x1.2bf07a143f6d4p+807,
+    0x1.76ec98994f489p+810, 0x1.d4a7bebfa31abp+813, 0x1.24e8d737c5f0bp+817, 0x1.6e230d05b76cdp+820,
+    0x1.c9abd04725481p+823, 0x1.1e0b622c774d0p+827, 0x1.658e3ab795204p+830, 0x1.bef1c9657a686p+833,
+    0x1.17571ddf6c814p+837, 0x1.5d2ce55747a18p+840, 0x1.b4781ead1989ep+843, 0x1.10cb132c2ff63p+847,
+    0x1.54fdd7f73bf3cp+850, 0x1.aa3d4df50af0bp+853, 0x1.0a6650b926d67p+857, 0x1.4cffe4e7708c0p+860,
+    0x1.a03fde214caf1p+863, 0x1.0427ead4cfed6p+867, 0x1.4531e58a03e8cp+870, 0x1.967e5eec84e2fp+873,
+    0x1.fc1df6a7a61bbp+876, 0x1.3d92ba28c7d15p+880, 0x1.8cf768b2f9c5ap+883, 0x1.f03542dfb8370p+886,
+    0x1.362149cbd3226p+890, 0x1.83a99c3ec7eb0p+893, 0x1.e494034e79e5cp+896, 0x1.2edc82110c2f9p+900,
+    0x1.7a93a2954f3b8p+903, 0x1.d9388b3aa30a5p+906, 0x1.27c35704a5e67p+910, 0x1.71b42cc5cf601p+913,
+    0x1.ce2137f743382p+916, 0x1.20d4c2fa8a031p+920, 0x1.6909f3b92c83dp+923, 0x1.c34c70a777a4dp+926,
+    0x1.1a0fc668aac70p+930, 0x1.6093b802d578cp+933, 0x1.b8b8a6038ad6fp+936, 0x1.137367c236c65p+940,
+    0x1.585041b2c477fp+943, 0x1.ae64521f7595ep+946, 0x1.0cfeb353a97dbp+950, 0x1.503e602893dd2p+953,
+    0x1.a44df832b8d46p+956, 0x1.06b0bb1fb384cp+960, 0x1.485ce9e7a065fp+963, 0x1.9a742461887f6p+966,
+    0x1.008896bcf54fap+970, 0x1.40aabc6c32a38p+973, 0x1.90d56b873f4c7p+976, 0x1.f50ac6690f1f8p+979,
+    0x1.3926bc01a973bp+983, 0x1.87706b0213d0ap+986, 0x1.e94c85c298c4cp+989, 0x1.31cfd3999f7b0p+993,
+    0x1.7e43c8800759cp+996, 0x1.ddd4baa009303p+999, 0x1.2aa4f4a405be2p+1003, 0x1.754e31cd072dap+1006,
+    0x1.d2a1be4048f90p+1009, 0x1.23a516e82d9bap+1013, 0x1.6c8e5ca239029p+1016, 0x1.c7b1f3cac7433p+1019,
+    0x1.1ccf385ebc8a0p+1023,
+};
+
+enum json_number_kind { JSON_NUMBER_U64, JSON_NUMBER_I64, JSON_NUMBER_F64 };
+
+struct json_number_value {
+    enum json_number_kind kind;
+    uint64_t u; /* JSON_NUMBER_U64 */
+    int64_t i;  /* JSON_NUMBER_I64 */
+    double f;   /* JSON_NUMBER_F64 */
+};
+
+static bool u64_mul10_add_overflows(uint64_t value, unsigned digit) {
+    return value > UINT64_MAX / 10u ||
+           (value == UINT64_MAX / 10u && digit > UINT64_MAX % 10u);
+}
+
+/* serde_json 1.0.151 de.rs parse_integer/parse_decimal/parse_exponent and
+ * f64_from_parts (the not(float_roundtrip) path the workspace builds), for a
+ * number lexeme yyjson already validated. CF_INVALID is serde_json's
+ * NumberOutOfRange parse error, which fails the whole JSON body there too. */
+static cf_err json_number_parse(const unsigned char *s, size_t n,
+                                struct json_number_value *out) {
+    size_t at = 0;
+    bool positive = true;
+    if (s[at] == '-') {
+        positive = false;
+        at++;
+    }
+    uint64_t sig = 0;
+    int64_t exp_before = 0; /* long-integer digit count / fraction exponent */
+    bool is_float = false;
+
+    if (s[at] == '0') {
+        at++; /* the single leading zero */
+    } else {
+        sig = (uint64_t)(s[at] - '0');
+        at++;
+        bool overflowed = false;
+        while (at < n && ascii_digit(s[at])) {
+            unsigned d = (unsigned)(s[at] - '0');
+            if (u64_mul10_add_overflows(sig, d)) {
+                overflowed = true;
+                break;
+            }
+            sig = sig * 10u + (uint64_t)d;
+            at++;
+        }
+        if (overflowed) {
+            /* parse_long_integer: further integer digits only move the
+             * exponent; the value becomes a float. */
+            while (at < n && ascii_digit(s[at])) {
+                exp_before++;
+                at++;
+            }
+            is_float = true;
+        }
+    }
+    if (at < n && s[at] == '.') {
+        is_float = true;
+        at++;
+        int64_t after = 0;
+        while (at < n && ascii_digit(s[at])) {
+            unsigned d = (unsigned)(s[at] - '0');
+            if (u64_mul10_add_overflows(sig, d)) {
+                /* parse_decimal_overflow: the rest of the fraction cannot
+                 * change the u64 significand or the exponent. */
+                while (at < n && ascii_digit(s[at])) at++;
+                break;
+            }
+            sig = sig * 10u + (uint64_t)d;
+            after--;
+            at++;
+        }
+        exp_before += after;
+    }
+    bool has_exp = false;
+    bool positive_exp = true;
+    int64_t exp = 0;
+    if (at < n && (s[at] == 'e' || s[at] == 'E')) {
+        has_exp = true;
+        is_float = true;
+        at++;
+        if (s[at] == '+') {
+            at++;
+        } else if (s[at] == '-') {
+            positive_exp = false;
+            at++;
+        }
+        exp = (int64_t)(s[at] - '0');
+        at++;
+        while (at < n && ascii_digit(s[at])) {
+            unsigned d = (unsigned)(s[at] - '0');
+            if (exp > (INT32_MAX - (int64_t)d) / 10) {
+                /* parse_exponent_overflow: the exponent alone is out of
+                 * range. A nonzero significand with a positive exponent is a
+                 * parse error; everything else is +/-0.0. */
+                if (sig != 0 && positive_exp) return CF_INVALID;
+                out->kind = JSON_NUMBER_F64;
+                out->f = positive ? 0.0 : -0.0;
+                return CF_OK;
+            }
+            exp = exp * 10 + (int64_t)d;
+            at++;
+        }
+    }
+
+    if (!is_float) {
+        if (positive) {
+            out->kind = JSON_NUMBER_U64;
+            out->u = sig;
+            return CF_OK;
+        }
+        /* de.rs parse_number: neg = (significand as i64).wrapping_neg();
+         * a non-negative result (a zero significand, or one past 2^63)
+         * becomes a float. */
+        uint64_t wrapped = 0u - sig;
+        int64_t neg;
+        memcpy(&neg, &wrapped, sizeof neg);
+        if (neg >= 0) {
+            out->kind = JSON_NUMBER_F64;
+            out->f = -(double)sig;
+            return CF_OK;
+        }
+        out->kind = JSON_NUMBER_I64;
+        out->i = neg;
+        return CF_OK;
+    }
+
+    int64_t final_exp = exp_before;
+    if (has_exp) {
+        final_exp = positive_exp ? final_exp + exp : final_exp - exp;
+    }
+    double value = (double)sig;
+    int64_t e = final_exp;
+    for (;;) {
+        if (e >= -308 && e <= 308) {
+            if (e >= 0) {
+                value *= k_json_pow10[e];
+                if (isinf(value)) return CF_INVALID;
+            } else {
+                value /= k_json_pow10[-e];
+            }
+            break;
+        }
+        if (value == 0.0) break;
+        if (e >= 0) return CF_INVALID;
+        value /= 1e308;
+        e += 308;
+    }
+    if (!positive) value = -value;
+    out->kind = JSON_NUMBER_F64;
+    out->f = value;
+    return CF_OK;
+}
+
+/* zmij 1.0.23's shortest round-trip float rendering (Buffer::format_finite),
+ * the formatter serde_json 1.0.151's Number Display uses: decimal notation
+ * when the decimal exponent of the leading digit is in -5..=15, otherwise
+ * scientific with an explicit sign and no zero padding. The shortest
+ * significand is found by printing at increasing precision until the decimal
+ * reads back exactly (the nearest p+1-digit decimal round-trips whenever any
+ * does), then laid out with zmij's fixed/scientific rules. */
+static bool number_format_f64(double value, char *out, size_t *out_len) {
+    if (value == 0.0) {
+        size_t w = 0;
+        if (signbit(value)) out[w++] = '-';
+        out[w++] = '0';
+        out[w++] = '.';
+        out[w++] = '0';
+        *out_len = w;
+        return true;
+    }
+    char printed[64];
+    int precision = -1;
+    for (int p = 0; p <= 17; p++) {
+        snprintf(printed, sizeof printed, "%.*e", p, value);
+        if (strtod(printed, NULL) == value) {
+            precision = p;
+            break;
+        }
+    }
+    if (precision < 0) return false;
+
+    char digits[32];
+    size_t nd = 0;
+    size_t at = 0;
+    bool negative = printed[0] == '-';
+    if (negative) at++;
+    digits[nd++] = printed[at++];
+    if (printed[at] == '.') {
+        at++;
+        while (printed[at] != 'e' && printed[at] != 'E') {
+            digits[nd++] = printed[at++];
+        }
+    }
+    int dec_exp = atoi(printed + at + 1);
+
+    size_t w = 0;
+    if (negative) out[w++] = '-';
+    if (dec_exp >= -5 && dec_exp <= 15) {
+        if ((int)nd - 1 <= dec_exp) { /* 1234e7 -> 12340000000.0 */
+            memcpy(out + w, digits, nd);
+            w += nd;
+            for (int k = 0; k < dec_exp + 1 - (int)nd; k++) out[w++] = '0';
+            out[w++] = '.';
+            out[w++] = '0';
+        } else if (dec_exp >= 0) { /* 1234e-2 -> 12.34 */
+            size_t head = (size_t)dec_exp + 1;
+            memcpy(out + w, digits, head);
+            w += head;
+            out[w++] = '.';
+            memcpy(out + w, digits + head, nd - head);
+            w += nd - head;
+        } else { /* 1234e-6 -> 0.001234 */
+            out[w++] = '0';
+            out[w++] = '.';
+            for (int k = 0; k < -dec_exp - 1; k++) out[w++] = '0';
+            memcpy(out + w, digits, nd);
+            w += nd;
+        }
+    } else { /* 1234e30 -> 1.234e+33 */
+        out[w++] = digits[0];
+        if (nd > 1) {
+            out[w++] = '.';
+            memcpy(out + w, digits + 1, nd - 1);
+            w += nd - 1;
+        }
+        out[w++] = 'e';
+        if (dec_exp >= 0) {
+            out[w++] = '+';
+        } else {
+            out[w++] = '-';
+            dec_exp = -dec_exp;
+        }
+        char expbuf[8];
+        int en = snprintf(expbuf, sizeof expbuf, "%d", dec_exp);
+        memcpy(out + w, expbuf, (size_t)en);
+        w += (size_t)en;
+    }
+    *out_len = w;
+    return true;
+}
+
+/* `Param::to_s` number text: itoa for PosInt/NegInt, zmij for Float. */
+static cf_err json_number_text(const struct json_number_value *value, char *buf,
+                               size_t cap, size_t *len) {
+    switch (value->kind) {
+    case JSON_NUMBER_U64: {
+        int n = snprintf(buf, cap, "%llu", (unsigned long long)value->u);
+        if (n < 0 || (size_t)n >= cap) return CF_INTERNAL;
+        *len = (size_t)n;
+        return CF_OK;
+    }
+    case JSON_NUMBER_I64: {
+        int n = snprintf(buf, cap, "%lld", (long long)value->i);
+        if (n < 0 || (size_t)n >= cap) return CF_INTERNAL;
+        *len = (size_t)n;
+        return CF_OK;
+    }
+    case JSON_NUMBER_F64:
+        if (!number_format_f64(value->f, buf, len)) return CF_INTERNAL;
+        return CF_OK;
+    }
+    return CF_INTERNAL;
+}
+
 static cf_err param_number_copy(cf_params *p, const unsigned char *raw, size_t len, cf_param **out) {
     bool integral;
     int64_t value;
     cf_err err = number_analyze(raw, len, &integral, &value);
+    if (err != CF_OK) return err;
+    struct json_number_value parsed;
+    err = json_number_parse(raw, len, &parsed);
+    if (err != CF_OK) return err;
+    char text[64];
+    size_t text_len = 0;
+    err = json_number_text(&parsed, text, sizeof text, &text_len);
     if (err != CF_OK) return err;
     cf_param *n;
     err = params_new_node(p, CF_PARAM_NUMBER, &n);
     if (err != CF_OK) return err;
     n->u.number.integral = integral;
     n->u.number.value = value;
+    err = arena_span_copy(p, raw, len, &n->u.number.raw);
+    if (err != CF_OK) return err;
+    err = arena_span_copy(p, (const unsigned char *)text, text_len,
+                          &n->u.number.text);
+    if (err != CF_OK) return err;
     *out = n;
     return CF_OK;
 }
@@ -1167,8 +1548,13 @@ static cf_err param_copy(cf_params *dst, const cf_param *src, size_t depth, cf_p
     case CF_PARAM_NUMBER: {
         err = params_new_node(dst, CF_PARAM_NUMBER, out);
         if (err != CF_OK) return err;
-        (*out)->u.number = src->u.number;
-        return CF_OK;
+        (*out)->u.number.integral = src->u.number.integral;
+        (*out)->u.number.value = src->u.number.value;
+        err = arena_span_copy(dst, src->u.number.raw.ptr, src->u.number.raw.len,
+                              &(*out)->u.number.raw);
+        if (err != CF_OK) return err;
+        return arena_span_copy(dst, src->u.number.text.ptr,
+                               src->u.number.text.len, &(*out)->u.number.text);
     }
     case CF_PARAM_ARRAY: {
         cf_param *arr;
@@ -1241,6 +1627,29 @@ cf_err cf_param_string(const cf_param *param, cf_span *out) {
     if (param->kind != CF_PARAM_STRING) return CF_INVALID;
     *out = param->u.string;
     return CF_OK;
+}
+
+cf_err cf_param_to_s(const cf_param *param, cf_span *out) {
+    if (out == NULL) return CF_INVALID;
+    *out = (cf_span){NULL, 0};
+    if (param == NULL) return CF_NOT_FOUND;
+    static const unsigned char k_true[] = "true";
+    static const unsigned char k_false[] = "false";
+    switch (param->kind) {
+    case CF_PARAM_NULL:
+        return CF_OK; /* NilClass#to_s is "" */
+    case CF_PARAM_BOOL:
+        *out = param->u.boolean ? (cf_span){k_true, 4} : (cf_span){k_false, 5};
+        return CF_OK;
+    case CF_PARAM_NUMBER:
+        *out = param->u.number.text;
+        return CF_OK;
+    case CF_PARAM_STRING:
+        *out = param->u.string;
+        return CF_OK;
+    default:
+        return CF_NOT_FOUND; /* Array/Hash/Upload: the reference's None */
+    }
 }
 
 size_t cf_param_count(const cf_param *param) {
