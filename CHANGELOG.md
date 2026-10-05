@@ -5,6 +5,68 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 2b: views, Cable channels/revocation, first controllers (A02, C02, C03, A-welcome, A-first_runs, A-sessions)
+
+### Verification (independent verifiers; every finding repaired and re-verified)
+- **A02**: rooms/messages verified CONFIRMED; the foundation verifier found cap
+  arithmetic and error-path disposal defects (escaped-expansion bypass, over-cap
+  underflow, a first_run leak) — fixed with falsifiable regressions and
+  independently re-verified (1,081-check adversarial cap probe, 0 failures;
+  pre-fix falsification produced up to 75 MB overshoot; 24/24 golden dumps
+  byte-identical; leak sweeps clean on 74/66 injected failure ordinals).
+- **C02/C03**: verification found a socket data race (30 TSan reports), a
+  socket-lifetime use-after-free window, action-name trimming and channel-name
+  mapping divergences, and C03's production control wiring unapplied. All
+  repaired: TSan 0 reports, the UAF has a proven regression (ASan UAF with the
+  fix disabled, ~1.15M barrier calls clean with it), naming follows `naming.rs`,
+  and the revocation barrier is wired through the loop/socket/channel paths
+  with the writer registration (68/70 cases in four modes).
+- **Controllers**: A-sessions verified CONFIRMED (16/16 through the action path
+  incl. goldens, logout disconnect barrier, rate-limit boundary). A-welcome's
+  last-room integer cast was not the pinned `ruby_compat::integer_cast` — replaced
+  with a faithful shared port (174-record differential, 0 mismatches) and the
+  layout presenter's duplicate deduped. A-first_runs' JSON numeric fidelity gap
+  was closed in the params layer: exact lexemes retained, `cf_param_to_s`
+  independently verified against serde_json 1.0.151 + zmij 1.0.23 (14,871
+  lexemes and 101,841 exact-bit doubles, 0 mismatches) and the controller arm
+  switched.
+- **R02 outcomes**: the unrenderable-vs-page-fail distinction was re-derived from
+  the pinned source, ratified, and applied (`cf_richtext_to_plain_text_outcome`);
+  the three-outcome classifier matches Rust on all 658 corpus bodies and the
+  oracle diff stays 3948/3948.
+- **Live smoke**: `/` → `/session/new` → `/first_run` matches the reference's
+  auth-first chain; the 26 KB setup page renders through A02 views with R02
+  content; assets serve; SIGTERM drains cleanly.
+
+### Added
+- **A02**: view-model conventions, presenters (rows loaded in one read
+  transaction; renders do no SQL), and the layout/session/first-run/welcome/
+  rooms/messages families with golden verification under the Rust runner's named
+  masks only; 8 MiB output cap with exact escaped-expansion accounting.
+- **C02**: the eight reference channels, per-loop subscription maps, bounded
+  cross-loop fan-out with drop counters, broadcast payloads rendered through the
+  A02 presenters (now 8 MiB-capped), production `/cable` mount wiring.
+- **C03**: the revocation barrier wired end-to-end — loop control slots,
+  owner-thread service, install gates with bounded resubmission, fresh-auth
+  reconnect, and the writer's mandatory-consumer registration.
+- **Controllers**: A-welcome (route 1), A-first_runs (routes 4, 8), A-sessions
+  (routes 12, 17, 18) with `src/actions/actions.h` and rebinding from the
+  development 501 (now exactly the 112 unlanded rows).
+- **Build**: views/presenters/actions/Cable sources wired; a parity-version
+  `layout.o` for golden-bucket binaries; `APP_VERSION` baked at build time;
+  `cf_views_assets_configure` at boot; new actions/views/cable test buckets.
+
+### Integration state
+- Suite: **717 cf_test cases across 70 binaries** green in dev, bench, Fil-C,
+  ASan/UBSan and TSan, plus the standalone core programs and CLI checks.
+
+### Known gaps
+- S02-dependent arms (avatar/attachment assignment; signed blob paths in
+  presenters) stay disclosed-unimplemented until S02 lands; view platform facts
+  await A01's UA parser; `cf_richtext_editable` keeps a ruled 400-vs-500
+  difference on edit-page render failure; asset byte-ranges deferred to V02;
+  the channel subscription-id cast is queued for the channels fidelity pass.
+
 ## 2026-10-05 — Phase 2a: rich text, Cable transport, jobs, storage (R02, C01, J01, S01)
 
 ### Verification (independent verifiers; every finding repaired and re-verified)
