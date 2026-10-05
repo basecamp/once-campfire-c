@@ -1,2 +1,6 @@
 docs/devel
 tmp/
+/build/
+/vendor/src/
+/vendor/build/
+/storage/
