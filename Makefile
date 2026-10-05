@@ -42,6 +42,7 @@ MODEL_SRCS := \
 	src/models/search.c \
 	src/models/session.c \
 	src/models/sound.c \
+	src/models/touch.c \
 	src/models/user.c \
 	src/models/webhook.c
 
@@ -73,8 +74,12 @@ RICHTEXT_SRCS := \
 CABLE_SRCS := src/cable/socket.c src/cable/protocol.c \
 	src/cable/pubsub.c src/cable/channels.c src/cable/broadcasts.c \
 	src/cable/revocation.c
-JOBS_SRCS := src/jobs/queue.c
-STORAGE_SRCS := src/storage/files.c src/storage/process.c
+JOBS_SRCS := src/jobs/queue.c src/jobs/handlers.c
+STORAGE_SRCS := src/storage/files.c src/storage/process.c \
+	src/storage/active_storage.c src/storage/media.c
+INTEGRATIONS_SRCS := src/integrations/http.c src/integrations/unfurl.c \
+	src/integrations/webhook.c src/integrations/push.c \
+	src/integrations/host_resolve.c
 
 APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/config.c \
@@ -110,19 +115,57 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/views/users_sidebars.c \
 	src/views/searches.c \
 	src/views/users_avatars.c \
+	src/views/qr_svg.c \
+	src/views/users.c \
+	src/views/bots.c \
+	src/views/accounts.c \
+	src/views/users_profiles.c \
+	src/views/users_push.c \
+	src/views/rooms_forms.c \
+	src/views/messages_json.c \
 	src/presenters/accounts.c \
 	src/presenters/layout.c \
 	src/presenters/messages.c \
 	src/presenters/rooms.c \
 	src/presenters/sidebars.c \
 	src/presenters/searches.c \
+	src/presenters/bots.c \
 	src/actions/first_runs.c \
 	src/actions/messages.c \
+	src/actions/messages/boosts.c \
+	src/actions/messages/boosts/by_bots.c \
+	src/actions/messages/by_bots.c \
+	src/actions/unfurl_links.c \
+	src/actions/pwa.c \
+	src/actions/qr_code.c \
+	src/actions/autocompletable/users.c \
+	src/actions/sessions/transfers.c \
+	src/actions/accounts.c \
+	src/actions/accounts/users.c \
+	src/actions/accounts/bots.c \
+	src/actions/accounts/bots/keys.c \
+	src/actions/accounts/join_codes.c \
+	src/actions/accounts/logos.c \
+	src/actions/accounts/custom_styles.c \
+	src/actions/users.c \
+	src/actions/users/avatars_destroy.c \
+	src/actions/users/profiles.c \
+	src/actions/users/push_subscriptions.c \
+	src/actions/users/push_subscriptions/test_notifications.c \
 	src/actions/rooms.c \
+	src/actions/rooms/refreshes.c \
+	src/actions/rooms/involvements.c \
+	src/actions/rooms/opens.c \
+	src/actions/rooms/closeds.c \
+	src/actions/rooms/directs.c \
 	src/actions/sessions.c \
 	src/actions/users/bans.c \
 	src/actions/users/sidebars.c \
 	src/actions/searches.c \
+	src/actions/active_storage/blobs.c \
+	src/actions/active_storage/representations.c \
+	src/actions/active_storage/disk.c \
+	src/actions/active_storage/direct_uploads.c \
 	src/cache_key.c \
 	src/actions/users/avatars.c \
 	src/actions/welcome.c \
@@ -131,7 +174,8 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	$(RICHTEXT_SRCS) \
 	$(CABLE_SRCS) \
 	$(JOBS_SRCS) \
-	$(STORAGE_SRCS)
+	$(STORAGE_SRCS) \
+	$(INTEGRATIONS_SRCS)
 
 APP_SRCS := $(APP_LIB_SRCS) \
 	src/main.c
@@ -162,13 +206,28 @@ ZLIB_CLANG_LIB := vendor/build/zlib-ng-clang/libz.a
 ZLIB_FILC_LIB := vendor/build/zlib-ng-filc/libz.a
 ZLIB_CLANG_INCLUDE := -Ivendor/build/zlib-ng-clang
 ZLIB_FILC_INCLUDE := -Ivendor/build/zlib-ng-filc
+# libcurl: I01 outbound HTTP/unfurl/webhook (static archives, built against
+# the vendored OpenSSL above; needs libssl.a alongside libcrypto.a).
+CURL_CLANG_LIB := vendor/build/curl-clang/install/lib/libcurl.a
+CURL_FILC_LIB := vendor/build/curl-filc/install/lib/libcurl.a
+CURL_CLANG_INCLUDE := -Ivendor/build/curl-clang/install/include
+CURL_FILC_INCLUDE := -Ivendor/build/curl-filc/install/include
+LIBSSL_CLANG_LIB := vendor/build/openssl-clang/install/lib/libssl.a
+LIBSSL_FILC_LIB := vendor/build/openssl-filc/install/lib/libssl.a
+# qrcodegen: single-file upstream QR encoder for A-qr_code's cf_qr_code_svg
+# (src/views/qr_svg.c). Compiled per mode with upstream-only flags, like
+# picohttpparser below.
+QRCODEGEN_SRC := vendor/src/qrcodegen/c/qrcodegen.c
+QRCODEGEN_INCLUDE := -Ivendor/src/qrcodegen/c
+# recursive: MODE_OBJ is defined further down (build-variant section)
+QRCODEGEN_OBJ = $(MODE_OBJ)/vendor/qrcodegen.o
 # picohttpparser: single-file upstream parser (no upstream build system). It
 # is compiled per mode but with upstream-appropriate flags only — never the
 # application's -Werror (01-foundation-http.md F00 build restriction).
 PICOHTTP_SRC := vendor/src/picohttpparser/picohttpparser.c
 # recursive: MODE_OBJ is defined further down (build-variant section)
 PICOHTTP_OBJ = $(MODE_OBJ)/vendor/picohttpparser.o
-DEP_INCLUDES := -I$(SQLITE_INCLUDE) -I$(YYJSON_INCLUDE) -Ivendor/src/picohttpparser
+DEP_INCLUDES := -I$(SQLITE_INCLUDE) -I$(YYJSON_INCLUDE) -Ivendor/src/picohttpparser $(QRCODEGEN_INCLUDE)
 
 # ---------- toolchain -------------------------------------------------------
 CLANG ?= clang
@@ -199,32 +258,32 @@ ifeq ($(MODE),dev)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),bench)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O3 -flto
 	MODE_LDFLAGS := -flto
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),filc)
 	MODE_CC := $(FILC)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-filc $(OPENSSL_FILC_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_FILC_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB) $(LIBCRYPT_FILC_LIB) $(OPENSSL_FILC_LIB) $(GUMBO_FILC_LIB) $(ZLIB_FILC_LIB) $(PICOHTTP_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-filc $(OPENSSL_FILC_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_FILC_INCLUDE) $(CURL_FILC_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB) $(LIBCRYPT_FILC_LIB) $(CURL_FILC_LIB) $(LIBSSL_FILC_LIB) $(OPENSSL_FILC_LIB) $(GUMBO_FILC_LIB) $(ZLIB_FILC_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),sanitize)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=address,undefined
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),tsan)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=thread -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=thread
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else
 $(error unknown MODE '$(MODE)': use dev, bench, filc, sanitize or tsan)
 endif
@@ -265,6 +324,7 @@ UNIT_TEST_SRCS := \
 	tests/http/test_gzip.c \
 	tests/http/test_encoding.c \
 	tests/views/test_escape.c \
+	tests/views/test_messages_json.c \
 	tests/views/test_presenters.c \
 	tests/views/test_presenters_messages.c \
 	tests/routes/test_routes_table.c \
@@ -291,8 +351,16 @@ UNIT_TEST_SRCS := \
 	tests/cable/test_cable_live.c \
 	tests/jobs/test_jobs.c \
 	tests/jobs/test_jobs_writer.c \
+	tests/jobs/test_handlers.c \
 	tests/storage/test_files.c \
 	tests/storage/test_process.c \
+	tests/storage/test_active_storage.c \
+	tests/storage/test_media.c \
+	tests/integrations/test_unfurl.c \
+	tests/integrations/test_webhook.c \
+	tests/integrations/test_push.c \
+	tests/integrations/test_host_resolve.c \
+	tests/models/test_touch.c \
 	tests/models/account_test.c \
 	tests/models/active_storage_test.c \
 	tests/models/ban_test.c \
@@ -371,7 +439,12 @@ VIEWS_BUCKET_SRCS := \
 	tests/views/test_messages.c \
 	tests/views/test_users_avatars.c \
 	tests/views/test_users_sidebars.c \
-	tests/views/test_searches.c
+	tests/views/test_searches.c \
+	tests/views/test_users.c \
+	tests/views/test_bots.c \
+	tests/views/test_accounts.c \
+	tests/views/test_users_profiles.c \
+	tests/views/test_rooms_forms.c
 VIEWS_TEST_BIN := $(TESTS_DIR)/views/test_views
 VIEWS_MAIN_OBJ := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_MAIN_SRC))
 VIEWS_SUPPORT_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_SUPPORT_SRCS))
@@ -382,7 +455,8 @@ APP_NOROUTE_ASSETS_OBJS := $(filter-out $(MODE_OBJ)/src/routes.o \
 # "parity" build version, so they link a parity-compiled presenters/layout.c
 # (the same pattern as static_root_double.c).
 PARITY_LAYOUT_OBJ := $(MODE_OBJ)/tests/support/presenters_layout_parity.o
-APP_GOLDEN_BUCKET_OBJS := $(filter-out $(MODE_OBJ)/src/presenters/layout.o,\
+APP_GOLDEN_BUCKET_OBJS := $(filter-out $(MODE_OBJ)/src/presenters/layout.o \
+	$(MODE_OBJ)/src/views/qr_svg.o,\
 	$(APP_NOROUTE_ASSETS_OBJS)) $(PARITY_LAYOUT_OBJ)
 
 # Controller action tests: route-double + views support + no-routes library.
@@ -394,6 +468,35 @@ ACTIONS_TEST_SRCS := \
 	tests/actions/users_avatars_test.c \
 	tests/actions/users_sidebars_test.c \
 	tests/actions/searches_test.c \
+	tests/actions/pwa_test.c \
+	tests/actions/qr_code_test.c \
+	tests/actions/sessions_transfers_test.c \
+	tests/actions/users_test.c \
+	tests/actions/autocompletable_users_test.c \
+	tests/actions/accounts_test.c \
+	tests/actions/accounts_users_test.c \
+	tests/actions/accounts_join_codes_test.c \
+	tests/actions/accounts_logos_test.c \
+	tests/actions/accounts_custom_styles_test.c \
+	tests/actions/accounts_bots_test.c \
+	tests/actions/accounts_bots_keys_test.c \
+	tests/actions/users_profiles_test.c \
+	tests/actions/users_push_subscriptions_test.c \
+	tests/actions/users_push_subscriptions_test_notifications_test.c \
+	tests/actions/users_avatars_destroy_test.c \
+	tests/actions/rooms_refreshes_test.c \
+	tests/actions/rooms_involvements_test.c \
+	tests/actions/rooms_opens_test.c \
+	tests/actions/rooms_closeds_test.c \
+	tests/actions/rooms_directs_test.c \
+	tests/actions/messages_boosts_test.c \
+	tests/actions/messages_boosts_by_bots_test.c \
+	tests/actions/messages_by_bots_test.c \
+	tests/actions/unfurl_links_test.c \
+	tests/actions/active_storage_blobs_test.c \
+	tests/actions/active_storage_representations_test.c \
+	tests/actions/active_storage_disk_test.c \
+	tests/actions/active_storage_direct_uploads_test.c \
 	tests/actions/welcome_test.c \
 	tests/actions/sessions_test.c
 ACTIONS_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(ACTIONS_TEST_SRCS))
@@ -504,7 +607,8 @@ build-app: $(BIN)
 # silently skipping (07-verification.md: missing prerequisites fail).
 $(SQLITE_CLANG_LIB) $(SQLITE_FILC_LIB) $(YYJSON_CLANG_LIB) $(YYJSON_FILC_LIB) \
 $(LIBCRYPT_CLANG_LIB) $(LIBCRYPT_FILC_LIB) $(OPENSSL_CLANG_LIB) $(OPENSSL_FILC_LIB) \
-$(GUMBO_CLANG_LIB) $(GUMBO_FILC_LIB) $(ZLIB_CLANG_LIB) $(ZLIB_FILC_LIB):
+$(GUMBO_CLANG_LIB) $(GUMBO_FILC_LIB) $(ZLIB_CLANG_LIB) $(ZLIB_FILC_LIB) \
+$(CURL_CLANG_LIB) $(CURL_FILC_LIB) $(LIBSSL_CLANG_LIB) $(LIBSSL_FILC_LIB):
 	@echo "error: missing dependency artifact '$@'" >&2
 	@echo "       build it with the recorded F00 recipe in vendor/DEPS.json" >&2
 	@echo "       (see vendor/README.md); ordinary builds never fetch." >&2
@@ -545,6 +649,12 @@ $(MODE_OBJ)/tests/%.o: tests/%.c
 
 # Upstream single-file dependency: upstream flags only, no -Werror.
 $(PICOHTTP_OBJ): $(PICOHTTP_SRC)
+	@mkdir -p $(dir $@)
+	$(MODE_CC) -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -pthread \
+		$(MODE_CFLAGS) -MMD -MP -c $< -o $@
+
+# Upstream single-file QR encoder (same no--Werror treatment).
+$(QRCODEGEN_OBJ): $(QRCODEGEN_SRC)
 	@mkdir -p $(dir $@)
 	$(MODE_CC) -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -pthread \
 		$(MODE_CFLAGS) -MMD -MP -c $< -o $@

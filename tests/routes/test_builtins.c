@@ -312,25 +312,33 @@ CF_TEST(mailbox_ingress_is_404_and_conductor_get_is_403) {
     cf_app_destroy(app);
 }
 
-CF_TEST(dev_501_is_test_visible_and_named) {
+CF_TEST(dev_501_is_retired_all_implement_rows_are_bound) {
     cf_app *app = h03_make_app();
     CF_REQUIRE(app != NULL);
     cf_response resp;
 
-    /* A still-unlanded packet row (accounts/users#index). */
-    run_get(app, "/account/users", NULL, &resp);
-    CF_CHECK(resp.status == 501);
-    expect_body(&resp, "501 Not Implemented: route 19 cf_action_accounts_users_index (/account/users(.:format))\n");
-    {
-        cf_request req;
-        h03_req_init(&req);
-        expect_content_type(&resp, &req, "text/plain; charset=utf-8");
+    /* No implement row still points at the development 501: the table
+     * scan in test_routes_table pins this per row; here the two most
+     * recent bindings answer through their real actions instead. */
+    size_t count = 0;
+    const cf_route *table = cf_routes(&count);
+    CF_REQUIRE(table != NULL && count == 177);
+    for (size_t i = 0; i < count; i++) {
+        if (table[i].disposition != CF_ROUTE_IMPLEMENT) continue;
+        CF_CHECK(table[i].action != NULL);
+        CF_CHECK(table[i].action != cf_action_not_landed_501);
     }
+
+    /* Formerly-501 rows now dispatch: users#new runs its action (500 with
+     * no account seeded here, never 501)... */
+    run_get(app, "/join/abc", NULL, &resp);
+    CF_CHECK(resp.status != 501);
     cf_response_dispose(&resp);
 
-    /* A known not-yet-landed packet action. */
-    run_get(app, "/qr_code/aGVsbG8", NULL, &resp);
-    CF_CHECK(resp.status == 501);
+    /* ...and the auth-gated autocomplete index redirects to sign-in
+     * instead of answering 501. */
+    run_get(app, "/autocompletable/users", NULL, &resp);
+    CF_CHECK(resp.status == 302);
     cf_response_dispose(&resp);
 
     /* Unmatched routes answer the reference public 404, not 501. */

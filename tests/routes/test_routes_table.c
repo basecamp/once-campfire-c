@@ -188,10 +188,36 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
                      strcmp(task, "A-users-bans") == 0 ||
                      strcmp(task, "A-users-sidebars") == 0 ||
                      strcmp(task, "A-searches") == 0 ||
-                     strcmp(task, "A-users-avatars") == 0;
-        /* A-users-avatars is partially landed: show (53) is bound, destroy
-         * (54) stays on the development 501 until S02. */
-        if (yyjson_get_int(id) == 54) bound = false;
+                     strcmp(task, "A-users-avatars") == 0 ||
+                     strcmp(task, "A-pwa") == 0 ||
+                     strcmp(task, "A-qr_code") == 0 ||
+                     strcmp(task, "A-sessions-transfers") == 0 ||
+                     strcmp(task, "A-users") == 0 ||
+                     strcmp(task, "A-autocompletable-users") == 0 ||
+                     strcmp(task, "A-accounts") == 0 ||
+                     strcmp(task, "A-accounts-users") == 0 ||
+                     strcmp(task, "A-accounts-bots") == 0 ||
+                     strcmp(task, "A-accounts-bots-keys") == 0 ||
+                     strcmp(task, "A-accounts-join_codes") == 0 ||
+                     strcmp(task, "A-accounts-logos") == 0 ||
+                     strcmp(task, "A-accounts-custom_styles") == 0 ||
+                     strcmp(task, "A-users-profiles") == 0 ||
+                     strcmp(task, "A-users-push_subscriptions") == 0 ||
+                     strcmp(task, "A-users-push_subscriptions-test_notifications") == 0 ||
+                     strcmp(task, "A-rooms-refreshes") == 0 ||
+                     strcmp(task, "A-rooms-involvements") == 0 ||
+                     strcmp(task, "A-rooms-opens") == 0 ||
+                     strcmp(task, "A-rooms-closeds") == 0 ||
+                     strcmp(task, "A-rooms-directs") == 0 ||
+                     strcmp(task, "A-messages-boosts") == 0 ||
+                     strcmp(task, "A-messages-boosts-by_bots") == 0 ||
+                     strcmp(task, "A-messages-by_bots") == 0 ||
+                     strcmp(task, "A-unfurl_links") == 0 ||
+                     strcmp(task, "S02") == 0;
+        /* Every implement row is bound: no packet stays on the
+         * development 501 (S02's controller actions landed with the
+         * packet; the former users/autocomplete view holds are bound
+         * now that their renders landed). */
         if (!bound) {
             expected_501[yyjson_get_int(id)] = true;
             expected_count++;
@@ -208,12 +234,12 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
         if (is_501) actual_count++;
     }
     CF_CHECK(actual_count == expected_count);
-    /* The four POST conductor rows are bound (A01's cf_check_csrf) and the
-     * A-welcome / A-first_runs / A-sessions / A-rooms / A-messages /
-     * A-users-bans / A-users-sidebars / A-searches rows are rebound to their
-     * real symbols (A-users-avatars row 54 excepted, pending S02); everything
-     * else unbound is a packet that has not landed. */
-    CF_CHECK(actual_count == 87);
+    /* The four POST conductor rows are bound (A01's cf_check_csrf); every
+     * landed packet above is rebound to its real symbols. No implement row
+     * stays on the development 501: the application is complete at the
+     * route table (remaining PARTIAL axes are view/probe refinements
+     * tracked per packet, not unbound rows). */
+    CF_CHECK(actual_count == 0);
 }
 
 CF_TEST_MAIN()

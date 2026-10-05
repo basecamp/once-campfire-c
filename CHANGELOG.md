@@ -5,6 +5,168 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 4 wiring: merge phase 3, bind all landed packets
+
+- Merged `master` (phase 3 K01/B01.initial + pulled-forward searches,
+  sidebars, avatars-show) into `phase4`: no file overlap with wave
+  packets; CHANGELOG keeps both sections.
+- Integrator wiring (`build:` commit): Makefile sources/test lists plus
+  curl/libssl/qrcodegen linkage in all five modes; `actions.h`
+  declarations; 78 route rows rebound from dev-501; `main.c` job-queue
+  start, default-handler + writer-consumer registration, libcurl global
+  init, and ordered shutdown; new `cf_qr_code_svg` via vendored qrcodegen
+  (gem-envelope SVG at level H; module-matrix bytes may differ from the
+  gem-faithful algorithm — documented gap, byte-exact `rqrcode.rs` port
+  remains a defined follow-up).
+- Held back deliberately: rows 50/51/74/75 (users new/create/show,
+  autocomplete — controller done, page/prompt views pending in the views
+  wave) and S02 routes 169-177 (helpers only, controller actions never
+  dispatched). 13 dev-501s remain; route-table/builtins expectations
+  updated to the landed set.
+- `test_media` live case: reports BLOCKED and passes inside `make test`
+  (pinned tools absent by design); stays strict-red under
+  CF_MEDIA_LIVE=1, with env save/restore so full-suite strict runs work.
+- Full dev suite green on the wired tree.
+
+## 2026-10-05 — Phase 4 wiring 2: views wave, storage controllers
+
+- Makefile/test wiring for all eight views-wave packets; `actions.h`
+  S02 declarations; routes 50/51/74/75 + 169-177 rebound — **zero
+  dev-501 rows remain** (both route expectation tests pin the completed
+  set; profiles/push routes stay bound to loud-500 gates until their
+  presenter mapping lands).
+- V-A closed at the action level: test stubs deleted, assertions
+  retargeted to real renders, `User#title` fills the mention model
+  (G1 golden gap closed, empty-title fallback keeps Anna byte-exact).
+- V-F: bot/bot-boost JSON shims replaced by the shared serializers
+  (PUBLIC_ORIGIN confirmed). Touch helper at three call sites.
+- Wiring repairs: profiles membership href use-after-scope (borrowed
+  block temporary), uninitialized sweep title field.
+- Deferred with owner: bots/accounts/profiles/push shim→real swaps
+  (need presenter constructors), room form/partial swaps + cable slots
+  + broadcast-expectation updates, translation/host-resolve call-site
+  switches, transfer-partial + model-header dedups, byte-exact
+  `rqrcode.rs` port. Full dev suite green.
+
+## 2026-10-05 — Phase 4 wave 1: jobs, storage, integrations, first controllers
+
+Six packets implemented and unit-verified at dispatch level in the `phase4`
+worktree. New sources and tests are committed; shared wiring (`Makefile`
+`SRCS`/`UNIT_TEST_SRCS` entries, `src/actions/actions.h` declarations,
+`src/routes.c` rebinding, `main.c` startup/consumer registration) is held for
+a serial integrator pass, so the affected routes still answer dev-501 and the
+new objects are not yet linked into the app build.
+
+### Wave 2: remaining controller packets (dispatch level, unwired)
+- **W2-A transfers/users/autocomplete/qr** (9,10,11 / 50,51,74 / 75 / 52):
+  one-use signed transfer tokens, join-code signup, membership-scoped
+  autocomplete JSON, pinned QR format. Tests 10+18+9+6=43 pass.
+- **W2-B accounts family** (44,46,47 / 19,24,25,26 / 37 / 38,39 / 40,41,42):
+  admin-before-lookup gating, permit/require/respond_to matrix, join-code
+  rotation, conditional-GET 304. Tests 62/62 incl. ASan/UBSan. Logo uploads
+  fail loudly pending S02/S03.
+- **W2-C bots/keys** (29-32,34-36 / 27,28): key rotation invalidation,
+  destroy-to-deactivate with DISCONNECT, P12-01 revalidation. Tests 27+5
+  incl. ASan/UBSan.
+- **W2-D profiles/push/avatars-destroy** (60-62 / 66,67,73 / 65 / 54):
+  ownership gates, unconditional redirects, loud-500 render gates where
+  A02 views are missing. Tests 15+19+7+5=46 incl. ASan/UBSan.
+- **W2-E room subclasses** (105-112 / 113-120 / 121-125,128): per-subclass
+  grants/participants, closed two-write update+revise with mandatory
+  DISCONNECT(reconnect=true). Tests 29+24+23; rooms 27/27 unbroken.
+- **W2-F boosts/by_bots/unfurl** (129-131,136 / 84,85 / 86-90 / 148):
+  room-scoped auth then privilege checks, bot-key auth, unfurl
+  400/204/200/500 arms. Tests 8+6+10+3; messages 35/35 unbroken.
+- Known integrator queue: route rebinding for all rows above,
+  `actions.h` declarations, Makefile `SRCS`/test lists, `main.c`/J02
+  consumer wiring, I01 link objects, missing A02 view/presenter symbols
+  (bots, accounts edit/users-stream/custom-styles, ProfileShow,
+  PushSubscriptionsIndex, room new/edit forms, sidebar shared/direct
+  partials, message/boost JSON), record-touch + private-host helpers,
+  qrcodegen-backed `cf_qr_code_svg`, closed-revise control handler in
+  production.
+
+### J02 model-event job handlers
+- New: `src/jobs/handlers.{c,h}`, `tests/jobs/test_handlers.c` (14/14 x3;
+  existing `test_jobs` 9/9 and `test_jobs_writer` 4/4 unaffected).
+- One handler per queueable kind with own-reader discipline (reader opened
+  per invocation, closed before integration calls/`cf_write`);
+  deleted/revoked targets are recorded no-ops; failures return non-`CF_OK`
+  with no retry. RemoveBannedContent scans in fixed SQL bounded by
+  `LIMIT 101`, destroys at most 100 messages per `cf_write`, and requeues
+  the remainder (205-message convergence: 100+100+5, 2 requeues).
+  I01/I02/S02 calls are weak-hook seams (NULL today, TODO-marked).
+- Acceptance: JOB-02/03, DB-02 re-read/revalidation half. Gaps: sanitizer
+  runs not done; non-NULL cable broadcast path untested (NULL by design, no
+  sockets in tests).
+
+### S02 Active Storage signed helpers
+- New: `src/storage/active_storage.{c,h}`, `tests/storage/test_active_storage.c`
+  (24/24 dev and ASan/UBSan; race case 8x stable on pthread barriers).
+- Signed blob IDs, variation keys/digests (all 12 pinned digests), disk
+  download/upload tokens with exact purpose separation; 5-state attachment
+  machine; proxy 200/206/416 + multipart framing; disk OPTIONS/HEAD/304 and
+  direct-upload 422/413 matrix; purge referenced-refuse/unreferenced-delete/
+  missing-success. Token/variation/range/disposition vectors byte-exact
+  against the pinned fixtures. Representation processing returns
+  fail-loudly `CF_INTERNAL` (S03); variant-record SQL stays with actions.
+- Acceptance: STORE-02/03 + DB-02 file halves. Live media-bytes parity
+  BLOCKED (S03/pinned tools absent here) — not claimed.
+
+### S03 media argv builders
+- New: `src/storage/media.{c,h}`, `tests/storage/test_media.c` (21/21
+  deterministic vectors dev and ASan/UBSan; live gate reports BLOCKED, never
+  skip/pass).
+- Fixed argv builders for vips/ffmpeg/ffprobe per the five pinned Rust
+  modules; scalar-only user arguments; 4-slot bound; task-owned temp
+  intermediates with kill/reap/cleanup; 16-byte stdout-cap and checksum
+  vectors. Installed tools observed: vips absent, ffmpeg/ffprobe 9.0.2 vs
+  pinned 7.1.5 — live byte parity BLOCKED by design.
+- Acceptance: STORE-04 vectors pass; live bytes BLOCKED. Open adapter items:
+  sharpen `conv` mask spelling vs pinned vips 8.16.1; Openslide has no CLI
+  equivalent.
+
+### I01 outbound HTTP, unfurl, webhooks
+- New: `src/integrations/{http,unfurl,webhook}.{c,h}`,
+  `tests/integrations/test_{unfurl,webhook}.c` (17/17 + 9/9, ASan/UBSan/LSan
+  clean; 3 leak/over-read defects found and fixed via sanitizers).
+- libcurl exchange with TLS verification never disabled; test-CA + RESOLVE
+  origin for loopback servers; http/https-only enforcement. Unfurl honors
+  the 16-slot/5s/10s/256-attr/5MiB/10-redirect contract; webhook honors
+  7s/60s/100MB-decoded with exact JSON/signatures and no POST retry.
+  Bodies byte-compared against `opengraph_expected.json`. Decoding is
+  implemented over zlib (magic-based multi-member gzip) because the Fil-C
+  libcurl is `--without-zlib`; integrator links vendored zlib-ng.
+- Acceptance: INT-01/02 on the executed matrix; JOB-01/02 webhook side
+  (no-retry verified, consumer registration left to integrator). Gaps: full
+  90-case opengraph replay not executed; IPv6 pinning falls back to system
+  resolution after guard approval.
+
+### I02 Web Push
+- New: `src/integrations/push.{c,h}`, `tests/integrations/test_push.c`
+  (23/23 dev, ASan/UBSan/LSan, and Fil-C 0.685).
+- OpenSSL EVP port of encryption/VAPID/pool: RFC 8291 vectors, JWT segments
+  and `authorization_k` byte-exact vs `web_push_expected.json`; loopback
+  wire case; deletion matrix (404/410/invalid-key destroy; 4xx/5xx/TLS
+  preserve); 3KiB/256B valid-UTF-8 truncation; sanitized logs proven free
+  of endpoint/key text; missing VAPID is an explicit error.
+- Acceptance: INT-03 unit evidence. Real TLS delivery/timeout enforcement
+  lives in I01's exchange helper (signature proposed); push-side queue
+  wiring stays with D02/J02.
+
+### First controller slice: A-pwa, A-rooms-refreshes, A-rooms-involvements
+- New: `src/actions/pwa.c`, `src/actions/rooms/{refreshes,involvements}.c`,
+  `tests/actions/{pwa,rooms_refreshes,rooms_involvements}_test.c`
+  (8+13+18 = 39/39; neighbors `rooms_test` 27/27, `messages_test` 35/35
+  unbroken).
+- Manifest field order/escaping and verbatim service-worker bytes;
+  refreshes `since` to_i/saturating-clamp with bare TURBO_STREAM bytes
+  verified against Askama 0.14; involvements blank-to-nil incl. `[]`,
+  writer update, change broadcast with previous, room-URL redirect.
+- Acceptance: VIEW-04, AUTH-06. Gaps: update-from-`invisible` prepend path
+  needs the sidebar `_shared` partial (404 after commit until A02 provides
+  it); view/presenter symbols requested from the integrator as listed in
+  the packet handoff; routes 91/93/94/95/149/150 binding pending.
 ## 2026-10-05 — B01b repair: memoized PBKDF2 derived keys (perf-profile finding 1)
 
 - `auth_pbkdf2_sha256` now memoizes derived keys per full secret + salt +
@@ -87,14 +249,11 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
 | post_message | 3,223 | 3,763 | 43,735 | 950 |
 | /up | 71,907 | 174,128 | 105,760 | 3,896 |
 
-- **Post-profile fix (commit `604f037`)**: the follow-up diagnosis traced the
-  C/Rust gap to `auth_pbkdf2_sha256` being re-derived on every key use (~486 us
-  each; 1 per authenticated cache hit, 2 per avatar, 44 per room render — 42
-  of them for avatar URLs), where the pin caches derived keys. Memoized
-  (bounded, keyed by full secret+salt+length, independently verified), the
-  C-only A/B at loops=4 gives: cached dynamic routes 7.3k -> 130-149k rps
-  (room 17.9x, messages 19.6x, sidebar 20.4x, search 20.4x; avatar 42x, post
-  28x), uncached 163-3.4k -> 2.0k-24.9k, static/`/up` unchanged as controls;
+- **Post-profile fix (commit `604f037`)**: the PBKDF2 finding above was fixed
+  and re-measured — see "B01b repair" for the fix details; the C-only A/B at
+  loops=4 gives cached dynamic routes 7.3k -> 130-149k rps (room 17.9x,
+  messages 19.6x, sidebar 20.4x, search 20.4x; avatar 42x, post 28x),
+  uncached 163-3.4k -> 2.0k-24.9k, static/`/up` unchanged as controls;
   CPU/success room hit 535 -> 24 us, render 24.4 -> 1.9 ms. Cross-app
   (load-caveated, different runs): C's cached rows now lead the dynamic
   routes (room 130.6k vs Rust 28.3k, Rails 232), and uncached C is
