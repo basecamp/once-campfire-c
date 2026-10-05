@@ -181,9 +181,17 @@ tsan:
 deps:
 	@set -e; for script in $(DEPS_SCRIPTS); do \
 		echo "== $$script"; \
-		sh "$$script"; \
+		if [ -x "$$script" ]; then \
+			"$$script"; \
+		else \
+			bash "$$script"; \
+		fi; \
 	done; \
 	echo "make deps: all pinned fetch/install scripts verified (idempotent)"
+
+# The vendor scripts declare Bash (some use ${BASH_SOURCE[0]}), so they are
+# never run through `sh`: executable scripts are executed directly so their
+# shebang decides the interpreter, and non-executable ones go through bash.
 
 # Removes only the outputs this Makefile owns: other tasks' build trees
 # (build/f01, ...) are left untouched in this shared checkout.
