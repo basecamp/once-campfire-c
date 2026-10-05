@@ -5,6 +5,76 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 1b: HTTP transport, writer, model families (H01, D02, D01)
+
+Phase status: **H01 DONE**, **D02 PARTIAL** (A00 start wiring + C03/J01 consumers land
+in Phase 1c), **D01 model bodies implemented** (PARTIAL only on the A01/R02
+production boundaries), reference asset fixtures pinned and verified ahead of H03.
+
+### Verification (independent verifiers; every defect found was repaired and re-verified)
+- **H01**: 37 cases covering HTTP-01..05/08/09 + CORE-03/04 under
+  plain/ASan/TSan/Fil-C. The verifier found bracketed IPv6 Hosts with an
+  explicit port were always rejected 400; the fix was independently confirmed
+  (93/93 adversarial matrix over 11 origin configurations, 43/43 suite in three
+  modes, pre-fix bytes reproduce the failure).
+- **D02**: writer independently CONFIRMED — rollback discards rows and queued
+  events, version advance is post-commit and serialized, queue-full returns
+  CF_BUSY before execution, best-effort drops are counted, and a mandatory
+  DISCONNECT_USER without a registered consumer returns non-CF_OK and
+  non-retryable after the commit (never a pretend rollback).
+- **Models**: grouped verification found `cf_user_create`'s open-room grants
+  binding the process clock instead of the reference's `STRFTIME(...,'NOW')`,
+  plus push_subscription guard/output-clearing gaps. Repaired (reference SQL,
+  canonical `src/models/types.c` replacing weak fallbacks, exact
+  `Couldn't find <Model>` texts) and independently CONFIRMED — 226/226 under
+  clang, ASan/UBSan and Fil-C, with a reverted-SQL run proving the test has
+  teeth. A follow-up NULL-guard completion verified at 71/71 own probe cases
+  (227/227 suite); the crash it uncovered for a malformed by-value endpoint
+  shape ({ptr=NULL, len>0}) was reproduced (SIGSEGV / ASan / Fil-C) and fixed
+  with the sibling-convention guard (228/228).
+- **Assets**: a from-scratch reimplementation of the reference's Propshaft
+  digesting reproduced all 315 digested names and all 134 compiled bodies
+  byte-for-byte from a fresh clone of the pinned Rails commit.
+
+### Added
+- **HTTP/1.1 transport (H01)**: connection state machine with slot generations;
+  framing validation (TE+CL, repeated/overflowed Content-Length, obs-fold, NUL,
+  chunked with bounded trailers, Expect/417); limits (32 KiB headers, 100
+  headers, 8 KiB target, 16 MiB body, 8 MiB pending output, 30 s deadlines);
+  pipelining with ordered responses; short-write/EAGAIN/EINTR resume with
+  immutable queued headers; 64 KiB worker-chunked file streaming; completion
+  queue with generation+sequence stale checks; 5 s drain shutdown; counters.
+- **Single writer (D02)**: `cf_write` with BEGIN IMMEDIATE, callback, commit or
+  rollback; tx events (five kinds) with post-commit handoff; bounded queue;
+  data-version advance through the app; registration points for C03/J01/I02.
+- **15 model families (D01)**: account, active_storage, ban, boost, first_run,
+  membership, message (page-of-40 algorithms, FTS rowid = message id),
+  push_subscription, rich_text_record, room (Open/Closed/Direct), search,
+  session (base58 token, hourly refresh), sound (static table), user (roles,
+  statuses, email normalization, bot keys, bans), webhook — all against the
+  frozen headers and the pinned source.
+- **Asset fixtures for H03**: 331 files / 16.6 MB under `tests/fixtures/assets/`
+  with a provenance manifest, digest mapping, importmaps and the embedded
+  public files.
+- **Build**: Makefile wiring for H01, D02, the model families and their test
+  doubles; pinned per-mode libxcrypt headers (fixed a real `struct crypt_data`
+  layout mismatch that Fil-C caught as a memory-safety violation); bundled
+  picohttpparser compiled with upstream flags (never `-Werror` on upstream).
+- **Test doubles**: BasicRichText-shaped pipeline and bcrypt verification under
+  `tests/models/support/` (test-only, mirroring the Rust reference test
+  support) so model tests link from committed files alone.
+
+### Integration state
+- Full suite: **358 cf_test cases across 30 binaries** plus four standalone core
+  programs and the app config/lifecycle checks — green under dev, bench,
+  Fil-C, ASan/UBSan and TSan.
+
+### Known gaps
+- D02 needs A00 to call `cf_writer_start` and C03/J01 to register consumers
+  before it is DONE; the model rich-text bridge (`cf_tx_rich_text` + R02
+  pipeline) lands with R02; the `/cable` upgrade seam is C01's prerequisite;
+  F00 media probes remain BLOCKED for S03.
+
 ## 2026-10-04 — Independent review repairs (Phase 0 reopenings + Phase 1a findings)
 
 All findings in `docs/devel/INDEPENDENT-REVIEW.md` are resolved and
