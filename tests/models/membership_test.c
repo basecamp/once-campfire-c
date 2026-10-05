@@ -36,10 +36,9 @@
  *         vendor/build/sqlite-clang/libsqlite3.a
  *         vendor/build/yyjson-clang/libyyjson.a -lm
  *         -o build/d01-model-membership/plain/test_membership
- * Until A01 (cf_password_verify), R02 (cf_richtext_*) and the shared
- * types.h disposers land, the link also needs the temporary stand-ins
- * described in docs/devel/evidence/D01-model-membership.md; the membership
- * tests never execute those paths.
+ * A01 (cf_password_verify), R02 (cf_richtext_*) and the shared types.h
+ * disposers are production sources in the full test link now; the membership
+ * tests never execute the password/rich-text paths.
  */
 #include "models/membership.h"
 

@@ -46,8 +46,8 @@
 #include <string.h>
 
 /* The shared release helpers come from src/models/types.c; the R02 rich-text
- * pipeline and A01 verifier boundaries come from tests/models/support/.  No
- * room path calls them (room tests seed messages with raw SQL and only
+ * pipeline and the A01 verifier are production sources in the full test link.
+ * No room path calls them (room tests seed messages with raw SQL and only
  * destroy them).  The landed R01 cf_json_string comes from
  * src/views/escape.c in the full test link. */
 

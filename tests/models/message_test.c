@@ -6,16 +6,17 @@
  * and mutation cases go through the public writer contract cf_write (D02).
  *
  * Rich text: the reference tests run against testing.rs BasicRichText, the
- * test-support stand-in for the RichText trait.  Its committed C translation
- * lives in tests/models/support/richtext.c (a test-only double; R02's real
- * pipeline replaces it at link time in a later phase).  The stand-in ignores
- * its pipeline argument, so test_rich_text() returns an opaque instance.
+ * test-support stand-in for the RichText trait.  The C tests use R02's
+ * production pipeline instead: test_rich_text() returns the singleton
+ * cf_tx_rich_text(NULL) the models thread through, so plain text and
+ * mentionees come from the same ActionText conversion production uses.  The
+ * bodies here carry no signed attachments, so the pipeline needs no
+ * SECRET_KEY_BASE configured (mentions stay empty, matching
+ * BasicRichText::mentioned_user_ids).
  *
  * Mutation cases run through D02 (cf_writer_start/cf_write/cf_writer_stop) and
  * the sibling model .c files; all 21 cases pass plain, ASan/UBSan and Fil-C in
- * the group link (see docs/devel/evidence/D01-model-message.md).  The group
- * link still needs the proposed D02/R02 rich-text accessor and A01's password
- * verifier; until those land a scratch shim can supply them (evidence).
+ * the group link (see docs/devel/evidence/D01-model-message.md).
  */
 #include "cf_test.h"
 
@@ -26,6 +27,7 @@
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h"
+#include "richtext.h"
 #include "models/active_storage.h"
 #include "models/boost.h"
 #include "models/message.h"
@@ -46,21 +48,16 @@
 #define T0 INT64_C(1769000000000000)
 #define SEC (INT64_C(1000000))
 
-static const unsigned char cf_test_richtext_standin;
-
+/* The R02 production pipeline singleton the models expect (Tx::rich_text);
+ * cf_tx_rich_text ignores its transaction argument. */
 static const cf_richtext *test_rich_text(void) {
-    return (const cf_richtext *)&cf_test_richtext_standin;
+    return cf_tx_rich_text(NULL);
 }
 
 static cf_str lit(const char *text) {
     cf_str value = {(char *)text, strlen(text)};
     return value;
 }
-
-/* The BasicRichText-shaped pipeline double lives in
- * tests/models/support/richtext.c (test support, not production code);
- * the linked double defines cf_richtext_to_plain_text and
- * cf_richtext_mentioned_user_ids. */
 
 /* --- deterministic seeding ------------------------------------------------ */
 
@@ -838,9 +835,10 @@ CF_TEST(mentionees_from_message_body) {
     cf_user_vector users;
     CF_REQUIRE(cf_message_mentionees(db, &message, test_rich_text(), &users) ==
                CF_OK);
-    /* The pipeline reports no mentions for this body in both the stand-in
-     * and the reference test-support; the room join itself is covered
-     * directly by mentionees_in_room_joins_memberships. */
+    /* The body carries no signed attachment, so the production pipeline
+     * reports no mentions, exactly as the reference test-support
+     * BasicRichText does; the room join itself is covered directly by
+     * mentionees_in_room_joins_memberships. */
     CF_CHECK(users.len == 0);
     cf_user_vector_dispose(&users);
     cf_message_dispose(&message);

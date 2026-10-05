@@ -22,19 +22,24 @@
  * stand-in writer transaction; the real models override them in the full test
  * link. The cf_message_* fallbacks are gone: the full link uses the real
  * message model, so the mentionees of pushes_for come from the message body
- * through the rich-text pipeline, and the test states them with
- * cf_test_richtext_set_mentions (tests/models/support/richtext.c), mirroring
- * push_test.rs's Mentions test support.
+ * through the production R02 rich-text pipeline. The mention case therefore
+ * stores real rich-text content: a verified Kevin mention attachment whose
+ * signed SGID is built through A01's cf_auth_sgid_generate_attachable and
+ * resolved by the pipeline configured with the test SECRET_KEY_BASE, exactly
+ * as tests/richtext/test_richtext.c does. push_test.rs's Mentions test
+ * support faked the mentionee list because the reference's BasicRichText
+ * reports none; here the body carries the mention instead.
  */
 #include "cf_test.h"
 
+#include "auth.h"
 #include "db/db_testutil.h"
 #include "models/membership.h"
 #include "models/message.h"
 #include "models/push_subscription.h"
 #include "models/room.h"
 #include "models/user.h"
-#include "support/support.h"
+#include "richtext.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -335,6 +340,36 @@ static void ps_message_set(cf_message *message, int64_t id, int64_t room_id,
     message->id = id;
     message->room_id = room_id;
     message->creator_id = creator_id;
+}
+
+/* ============ production rich-text mention fixtures (R02 + A01) =========== */
+
+/* The SECRET_KEY_BASE the pipeline singleton verifies SGIDs with; the same
+ * span configures the singleton and signs the fixture, mirroring the app's
+ * startup cf_richtext_configure. */
+#define PS_TEST_SECRET \
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+static cf_span ps_span(const char *text) {
+    cf_span span = {(const unsigned char *)text, strlen(text)};
+    return span;
+}
+
+/* Body with the text "Hi" plus a verified mention attachment for Kevin; the
+ * production PlainTextConversion renders it as "Hi @Kevin" and reports user 4
+ * as a mentionee (mirrors push_test.rs's `notifies_subscribed_users` body
+ * "Hey @Kevin" + [kevin], which the reference test support had to state
+ * separately). Caller frees. */
+static char *ps_mention_body(const char *sgid) {
+    size_t need = strlen(sgid) + 160;
+    char *body = malloc(need);
+    if (body == NULL) return NULL;
+    snprintf(body, need,
+             "<p>Hi <action-text-attachment sgid=\"%s\" "
+             "content-type=\"application/vnd.campfire.mention\">"
+             "</action-text-attachment></p>",
+             sgid);
+    return body;
 }
 
 static int ps_resolver_calls;
@@ -1191,13 +1226,23 @@ CF_TEST(for_mentioned_users_only_mentions_involvement) {
 CF_TEST(pushes_for_returns_payload_everything_and_mentions) {
     cf_db_scratch scratch;
     CF_REQUIRE(ps_scratch_with_fixture(&scratch));
-    CF_REQUIRE(ps_insert_message(&scratch, 500, 100, 1, "Hi"));
+    /* Kevin is mentioned through the stored body, not a test-stated list:
+     * sign the A01 attachable SGID with the pipeline's key, then store it as
+     * a real mention attachment. */
+    cf_richtext_configure(ps_span(PS_TEST_SECRET));
+    cf_str sgid = {0};
+    CF_REQUIRE(cf_auth_sgid_generate_attachable(
+                   ps_span(PS_TEST_SECRET), ps_span("gid://campfire/User/4"),
+                   &sgid) == CF_OK);
+    char *body = ps_mention_body(sgid.ptr);
+    cf_str_dispose(&sgid);
+    CF_REQUIRE(body != NULL);
+    CF_REQUIRE(ps_insert_message(&scratch, 500, 100, 1, body));
+    free(body);
     int64_t now_us = 1700000000000000LL;
 
     cf_message message;
     ps_message_set(&message, 500, 100, 1);
-    int64_t listed[] = {4}; /* Kevin is mentioned in the message. */
-    cf_test_richtext_set_mentions(listed, 1);
 
     cf_push_payload payload;
     memset(&payload, 0, sizeof payload);
@@ -1206,10 +1251,12 @@ CF_TEST(pushes_for_returns_payload_everything_and_mentions) {
     cf_push_subscription_vector mentions;
     memset(&mentions, 0, sizeof mentions);
     CF_REQUIRE(cf_push_subscription_pushes_for(
-                   scratch.db, NULL, &message, now_us, &payload, &everything,
-                   &mentions) == CF_OK);
+                   scratch.db, cf_tx_rich_text(NULL), &message, now_us,
+                   &payload, &everything, &mentions) == CF_OK);
     CF_CHECK(ps_eq_str(payload.title, "Designers"));
-    CF_CHECK(ps_eq_str(payload.body, "David: Hi"));
+    /* PlainTextConversion renders the verified mention attachment as "@Kevin"
+     * (rt_attach.c rt_attachment_plain_text; plain_text.rs). */
+    CF_CHECK(ps_eq_str(payload.body, "David: Hi @Kevin"));
     CF_CHECK(ps_eq_str(payload.path, "/rooms/100"));
     CF_CHECK(everything.len == 2);
     int64_t ids[4] = {0};
@@ -1224,13 +1271,12 @@ CF_TEST(pushes_for_returns_payload_everything_and_mentions) {
     /* Direct room, no mentionees: only everything, sender as title. */
     CF_REQUIRE(ps_insert_message(&scratch, 501, 102, 1, "Hi"));
     ps_message_set(&message, 501, 102, 1);
-    cf_test_richtext_set_mentions(NULL, 0);
     memset(&payload, 0, sizeof payload);
     memset(&everything, 0, sizeof everything);
     memset(&mentions, 0, sizeof mentions);
     CF_REQUIRE(cf_push_subscription_pushes_for(
-                   scratch.db, NULL, &message, now_us, &payload, &everything,
-                   &mentions) == CF_OK);
+                   scratch.db, cf_tx_rich_text(NULL), &message, now_us,
+                   &payload, &everything, &mentions) == CF_OK);
     CF_CHECK(ps_eq_str(payload.title, "David"));
     CF_CHECK(ps_eq_str(payload.body, "Hi"));
     CF_CHECK(everything.len == 1 && everything.items[0].id == 301);
@@ -1245,8 +1291,8 @@ CF_TEST(pushes_for_returns_payload_everything_and_mentions) {
     memset(&everything, 0, sizeof everything);
     memset(&mentions, 0, sizeof mentions);
     CF_CHECK(cf_push_subscription_pushes_for(
-                 scratch.db, NULL, &message, now_us, &payload, &everything,
-                 &mentions) == CF_NOT_FOUND);
+                 scratch.db, cf_tx_rich_text(NULL), &message, now_us, &payload,
+                 &everything, &mentions) == CF_NOT_FOUND);
     CF_CHECK(payload.title.ptr == NULL && everything.len == 0 &&
              mentions.len == 0);
     cf_push_payload_dispose(&payload);

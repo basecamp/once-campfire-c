@@ -18,23 +18,12 @@
  * separate read-only cf_db. PasswordDigest belongs to A01: as in the C model
  * boundary, the digest arrives already hashed and is stored verbatim.
  *
- * Build (plain; add -fsanitize=address,undefined -fno-sanitize-recover=all
- * -fno-omit-frame-pointer -g for the sanitize run). --gc-sections is required
- * until A01/R02 land: message.c and user.c contain not-yet-implemented
- * boundaries (cf_tx_rich_text / cf_richtext_* for R02, cf_password_verify for
- * A01) in functions the first_run path never calls; the weak stand-ins above
- * cover the unowned types.h helpers. Exact command used (all 15 model units,
- * D02 writer, core, config/app, escape for cf_json_string):
- *   clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra
- *         -Werror -pthread -ffunction-sections -fdata-sections -Isrc -Itests
- *         -Ivendor/src/sqlite/sqlite-amalgamation-3530400
- *         -Ivendor/src/yyjson/src
- *         tests/models/first_run_test.c plus every src/models model unit
- *         src/core/{alloc,buffer,clock,error,random}.c src/db/{schema,reader,
- *         statements,writer}.c src/config.c src/app.c src/views/escape.c
- *         vendor/build/sqlite-clang/libsqlite3.a
- *         vendor/build/yyjson-clang/libyyjson.a
- *         -Wl,--gc-sections -lm -o build/d01-first-run/test_first_run
+ * Build: the model binaries link every application source (models, R02
+ * richtext, A01 auth, D02 writer, core/config/app, escape) through the
+ * Makefile's unit-test rule; `make test MODE=dev|bench|filc` adds the pinned
+ * vendor archives (sqlite, yyjson, libxcrypt, openssl, gumbo, zlib-ng,
+ * picohttpparser) and -lm. The earlier hand-rolled command this comment used
+ * to carry predated the full link.
  */
 #include "cf_test.h"
 
@@ -56,8 +45,8 @@
 #include <unistd.h>
 
 /* The shared release helpers come from src/models/types.c; the A01
- * cf_password_verify boundary comes from tests/models/support/password.c
- * (first_run never authenticates, so the verifier is not exercised here). */
+ * cf_password_verify production symbol (src/auth/password.c) is linked, but
+ * first_run never authenticates, so the verifier is not exercised here. */
 
 #define FR_SECRET_HEX \
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

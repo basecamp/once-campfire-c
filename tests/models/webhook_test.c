@@ -14,13 +14,14 @@
  *   users jason=149087659, bender=394959859, david=127326141;
  *   rooms designers=654632876; messages first=309456473.
  *
- * Payload coverage note: the ordinary stored-body oracle case needs R02's
- * concrete cf_richtext constructor (src/richtext.h, R02 is not started), so
- * this file covers payload's Option::None html branch, the null room name
- * branch and the attachment-filename plain-text branch (message.rs
- * plain_text_body never consults rich text when body_html is None). The
- * stored-body case is tracked as deferred in
- * docs/devel/evidence/D01-model-webhook.md.
+ * Payload coverage note: every payload case here is body-less, covering
+ * payload's Option::None html branch, the null room name branch and the
+ * attachment-filename plain-text branch (message.rs plain_text_body never
+ * consults rich text when body_html is None). R02's pipeline now exists
+ * (src/richtext.h), so wh_rich_text() threads the production singleton
+ * cf_tx_rich_text(NULL) — the same value the app wires — even though these
+ * body-less cases never reach it. The stored-body oracle case remains
+ * deferred in docs/devel/evidence/D01-model-webhook.md.
  *
  * Build (plain; intended full link once the sibling model files land):
  *   clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra
@@ -48,6 +49,7 @@
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h" /* cf_writer_start/stop: the D02 writer bootstrap */
+#include "richtext.h"
 #include "cf_test.h"
 
 #include <sqlite3.h>
@@ -208,12 +210,9 @@ static void wh_insert_webhook(cf_db *db, int64_t id, const char *url_sql,
 }
 
 /* message.rs plain_text_body consults rich text only when a body row exists;
- * every payload case below is body-less (the stored-body oracle case awaits
- * R02). The placeholder is therefore never dereferenced. */
-static const cf_richtext *wh_placeholder_rich_text(void) {
-    static _Alignas(16) unsigned char placeholder[64];
-    return (const cf_richtext *)placeholder;
-}
+ * every payload case below is body-less, so the pipeline is never reached.
+ * The production R02 singleton stands in for Tx::rich_text. */
+static const cf_richtext *wh_rich_text(void) { return cf_tx_rich_text(NULL); }
 
 /* --- find_by_user (read path, cf_db) ------------------------------------- */
 
@@ -736,7 +735,7 @@ CF_TEST(payload_no_body_builds_reference_json) {
     CF_CHECK(cf_message_find(reader, WH_ID_FIRST, &message) == CF_OK);
 
     cf_str out = {0};
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(),
                                 &message, lit("/rooms/1/bot/key/messages"),
                                 lit("/rooms/1/@2"), &out) == CF_OK);
     CF_CHECK(str_is(out,
@@ -775,7 +774,7 @@ CF_TEST(payload_null_room_name_serializes_null) {
     CF_CHECK(cf_message_find(reader, WH_ID_FIRST, &message) == CF_OK);
 
     cf_str out = {0};
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(),
                                 &message, lit("/rooms/1/bot/key/messages"),
                                 lit("/rooms/1/@2"), &out) == CF_OK);
     CF_CHECK(str_is(out,
@@ -825,7 +824,7 @@ CF_TEST(payload_plain_from_attachment_removes_mention_trims_and_escapes) {
     CF_CHECK(cf_message_find(reader, WH_ID_FIRST, &message) == CF_OK);
 
     cf_str out = {0};
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(),
                                 &message, lit("/rooms/1/bot/key/messages"),
                                 lit("/rooms/1/@2"), &out) == CF_OK);
     CF_CHECK(str_is(out,
@@ -867,7 +866,7 @@ CF_TEST(payload_missing_room_or_recipient_is_not_found) {
     message.room_id = 424242;
     message.creator_id = WH_ID_JASON;
     cf_str out = {0};
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(),
                                 &message, lit("/rooms/1/bot/key/messages"),
                                 lit("/rooms/1/@2"), &out) == CF_NOT_FOUND);
     CF_CHECK(out.ptr == NULL && out.len == 0);
@@ -881,7 +880,7 @@ CF_TEST(payload_missing_room_or_recipient_is_not_found) {
     ghost.id = 1;
     ghost.user_id = 424242;
     out = (cf_str){0};
-    CF_CHECK(cf_webhook_payload(reader, &ghost, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &ghost, wh_rich_text(),
                                 &real, lit("/rooms/1/bot/key/messages"),
                                 lit("/rooms/1/@2"), &out) == CF_NOT_FOUND);
     CF_CHECK(out.ptr == NULL && out.len == 0);
@@ -911,18 +910,18 @@ CF_TEST(payload_rejects_missing_arguments) {
     message.creator_id = WH_ID_JASON;
 
     cf_str out = (cf_str){NULL, 0};
-    CF_CHECK(cf_webhook_payload(NULL, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(NULL, &hook, wh_rich_text(),
                                 &message, lit("/r"), lit("/m"), &out) ==
              CF_INVALID);
     CF_CHECK(out.ptr == NULL && out.len == 0);
-    CF_CHECK(cf_webhook_payload(reader, NULL, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, NULL, wh_rich_text(),
                                 &message, lit("/r"), lit("/m"), &out) ==
              CF_INVALID);
     CF_CHECK(cf_webhook_payload(reader, &hook, NULL, &message, lit("/r"),
                                 lit("/m"), &out) == CF_INVALID);
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(), NULL,
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(), NULL,
                                 lit("/r"), lit("/m"), &out) == CF_INVALID);
-    CF_CHECK(cf_webhook_payload(reader, &hook, wh_placeholder_rich_text(),
+    CF_CHECK(cf_webhook_payload(reader, &hook, wh_rich_text(),
                                 &message, lit("/r"), lit("/m"), NULL) ==
              CF_INVALID);
 
