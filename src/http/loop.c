@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -580,6 +581,16 @@ static void loop_accept(struct cf_http_loop *loop) {
             if (errno == EINTR) continue;
             break; /* EAGAIN or a transient accept failure */
         }
+        /* The reference front server disables Nagle on every accepted
+         * connection (tmp/rust-ref/crates/kit/src/front/conn.rs accept_loop:
+         * `let _ = stream.set_nodelay(true)`), matching Go's net/http. Without
+         * it a response split across two sends (serialized head, then body)
+         * leaves the small second send held by Nagle until the client's
+         * delayed ACK, stalling keep-alive responses for ~40 ms
+         * (docs/devel/evidence/keepalive-stall.md). Best-effort, exactly as
+         * the reference ignores the result. */
+        int one = 1;
+        (void)setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
         if (loop->active_conns >= loop->conn_cap ||
             loop->free_count == 0) {
             loop->counters.rejected++;

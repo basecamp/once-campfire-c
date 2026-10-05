@@ -35,6 +35,22 @@ void cf_app_advance_data_version(cf_app *app);
  * until cf_app_destroy. */
 pthread_mutex_t *cf_app_version_mutex(cf_app *app);
 
+/* K01c complete-body cache (06 "K01: complete-body cache"): the enabled
+ * process-wide cache created by cf_app_start from the configured
+ * CF_CACHE_BYTES, or NULL while caching is disabled (budget 0, a nonzero
+ * budget too small for the bucket array, or a creation failure). Borrowed;
+ * cf_app_destroy destroys it after every worker has joined. A non-NULL
+ * return is always an enabled cache. */
+cf_cache *cf_app_cache(cf_app *app);
+
+/* Test seam (tests/cache/test_cache_admission.c): create and attach the cache
+ * the way cf_app_start does, for suites that drive cf_app_create +
+ * cf_writer_start directly and never call cf_app_start. Budget 0 and the
+ * module's disabled-budget rule behave exactly as in cf_app_start; CF_BUSY
+ * when a cache is already attached or the app is serving. No request worker
+ * may be running. */
+cf_err cf_app_cache_enable_for_test(cf_app *app, size_t budget_bytes);
+
 /* A00 observability for tests and counters: tasks admitted and not yet
  * submitted/abandoned (running + queued). */
 size_t cf_app_admitted_count(const cf_app *app);

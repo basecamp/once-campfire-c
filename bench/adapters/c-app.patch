@@ -1,0 +1,144 @@
+diff -ruN c-orig/bench/report c-work/bench/report
+--- c-orig/bench/report	2026-10-04 09:49:26.000000000 -0400
++++ c-work/bench/report	2026-10-05 15:05:55.993038075 -0400
+@@ -24,7 +24,7 @@
+             assert c["ready"] == c["clients"] and c["failed"] == 0 and c["latency"]["complete"] == c["latency"]["messages"] and c["throughput"]["complete"] == c["throughput"]["posted"], f
+         runs.setdefault(r["app"], []).append(r)
+ identity = runs.pop("rust-identity", None)
+-apps = [a for a in ("reference", "elixir", "go", "rust") if a in runs]
++apps = [a for a in ("reference", "elixir", "go", "rust", "c") if a in runs]
+ 
+ 
+ def cell(vals):
+@@ -76,7 +76,10 @@
+         print(note + "\n")
+     more = " Rust, no gzip | vs Rust gzip |" if with_identity else ""
+     advantage = "Rust advantage over Elixir" if "elixir" in apps else "Rust advantage over Rails"
+-    print("| Metric | " + " | ".join({"reference":"Rails", "elixir":"Elixir", "go":"Go", "rust":"Rust"}[a] for a in apps) + " | " + advantage + " |" + more)
++    if "c" in apps and "rust" not in apps:
++        other = "Elixir" if "elixir" in apps else "Rails" if "reference" in apps else None
++        advantage = f"C advantage over {other}" if other else "C (single app)"
++    print("| Metric | " + " | ".join({"reference":"Rails", "elixir":"Elixir", "go":"Go", "rust":"Rust", "c":"C"}[a] for a in apps) + " | " + advantage + " |" + more)
+     print("|---|" + "---|" * len(apps) + "---|" + ("---|---|" if with_identity else ""))
+ 
+ 
+@@ -150,11 +153,11 @@
+         p = c["process_memory"][phase]
+         roles = p["roles"]
+         if what == "app":
+-            return roles[{"rust":"campfire","go":"campfire","elixir":"beam","reference":"puma"}[r["app"]]]["peak_pss_mb"]
++            return roles[{"rust":"campfire","go":"campfire","c":"campfire","elixir":"beam","reference":"puma"}[r["app"]]]["peak_pss_mb"]
+         if what == "app_anon":
+-            return roles[{"rust":"campfire","go":"campfire","elixir":"beam","reference":"puma"}[r["app"]]]["peak_anon_mb"]
++            return roles[{"rust":"campfire","go":"campfire","c":"campfire","elixir":"beam","reference":"puma"}[r["app"]]]["peak_anon_mb"]
+         if what == "serving":  # everything that takes part in a cable delivery
+-            keys = ["campfire"] if r["app"] in ["rust", "go"] else ["beam", "redis", "helpers", "thrust"] if r["app"] == "elixir" else ["puma", "redis", "thrust"]
++            keys = ["campfire"] if r["app"] in ["rust", "go", "c"] else ["beam", "redis", "helpers", "thrust"] if r["app"] == "elixir" else ["puma", "redis", "thrust"]
+             return sum(roles[k]["peak_pss_mb"] for k in keys if k in roles)
+         return p["peak_total_pss_mb"]
+     return get
+@@ -163,7 +166,7 @@
+ if all("process_memory" in c for a in apps for r in runs[a] for c in r["cable"]):
+     header("Memory during cable fan-out, by process (MiB, peak within the phase)", note=(
+         "App process: Elixir BEAM; Rails Puma master/workers when included;\n"
+-        "Go/Rust's integrated campfire processes. Serving totals include native helpers, Redis and Thruster.\n"
++        "Go/Rust/C's integrated campfire processes. Serving totals include native helpers, Redis and Thruster.\n"
+         "PSS apportions shared pages; RssAnon counts them in each process."))
+     for c in first["cable"]:
+         n = c["clients"]
+diff -ruN c-orig/bench/run c-work/bench/run
+--- c-orig/bench/run	2026-10-04 09:49:26.000000000 -0400
++++ c-work/bench/run	2026-10-05 15:05:56.006490240 -0400
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env bash
+-# Benchmark the Elixir and Rust ports on the same Rails seed and CPUs.
++# Benchmark the Elixir, Go, Rust and C ports on the same Rails seed and CPUs.
+ #
+-#   bench/run [--apps elixir,rust[,reference]] [--reps 4] [--out DIR] [--user-agent UA]
++#   bench/run [--apps elixir,rust,go,c[,reference]] [--reps 4] [--out DIR] [--user-agent UA]
+ #   bench/report DIR            # median + spread table from a results dir
+ #
+ # Each rep, for each app in turn (never two at once; the order alternates between reps): a fresh
+@@ -35,7 +35,7 @@
+ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ BENCH=$ROOT/bench
+ RUST_ROOT=${RUST_ROOT:-/home/dhh/Work/basecamp/once-campfire-rust}
+-SEED=$RUST_ROOT/parity/.seed/default
++SEED=${SEED:-$RUST_ROOT/parity/.seed/default}
+ LABELS=$SEED/labels.json
+ ENV_FILE=$ROOT/parity/reference.env
+ 
+@@ -43,6 +43,12 @@
+ RUST_IMAGE=${RUST_IMAGE:-campfire-rust:app}
+ ELIXIR_IMAGE=${ELIXIR_IMAGE:-campfire-elixir:release}
+ GO_IMAGE=${GO_IMAGE:-once-campfire-go:optimized}
++C_IMAGE=${C_IMAGE:-campfire-c:app}
++C_REVISION=${C_REVISION:-unknown}
++C_BINARY_SHA256=${C_BINARY_SHA256:-unknown}
++# C-only: complete-body cache budget (bytes). 0 is the deliberate off switch
++# (uncached arm); 67108864 (64 MiB) is the cache-enabled arm of the ablation.
++CF_CACHE_BYTES=${CF_CACHE_BYTES:-0}
+ GO_ROOT=${GO_ROOT:-$(dirname "$ROOT")/once-campfire-go}
+ SERVER_CPUS=${SERVER_CPUS:-8-11}
+ LOADGEN_CPUS=${LOADGEN_CPUS:-12-15}
+@@ -92,7 +98,7 @@
+ }
+ trap teardown EXIT INT TERM
+ 
+-python3 "$BENCH/validate.py" ledger
++if [[ ",$APPS," = *,elixir,* ]]; then python3 "$BENCH/validate.py" ledger; fi
+ python3 - "$PORT" "$NETWORK" <<'PYPORT'
+ import socket,sys
+ ports=[int(sys.argv[1])]
+@@ -112,7 +118,7 @@
+ EMAIL=$(label emails.david)
+ PASSWORD=$(label passwords.all)
+ 
+-image_for() { case "$1" in reference) echo "$REFERENCE_IMAGE" ;; elixir) echo "$ELIXIR_IMAGE" ;; go) echo "$GO_IMAGE" ;; rust|rust-identity) echo "$RUST_IMAGE" ;; esac; }
++image_for() { case "$1" in reference) echo "$REFERENCE_IMAGE" ;; elixir) echo "$ELIXIR_IMAGE" ;; go) echo "$GO_IMAGE" ;; c) echo "$C_IMAGE" ;; rust|rust-identity) echo "$RUST_IMAGE" ;; esac; }
+ 
+ # Environment: parity/.env.reference, but with the reference's *default* process model for
+ # SERVER_CPUS (config/puma.rb: workers = ceil(nproc * 0.666), JOB_CONCURRENCY the same, 5 threads;
+@@ -120,6 +126,7 @@
+ # (reader pool) and JOB_CONCURRENCY (job workers) the same way; it is always one process.
+ env_args() {
+   if [ "${1:-}" = elixir ]; then printf '%s\n' -e "PORT=$PORT"; fi
++  if [ "${1:-}" = c ]; then printf '%s\n' -e "CF_CACHE_BYTES=$CF_CACHE_BYTES"; fi
+   local ncpu; ncpu=$(taskset -c "$SERVER_CPUS" nproc)
+   local workers=$(( (ncpu * 666 + 999) / 1000 ))
+   grep -Ev '^(#|$|WEB_CONCURRENCY|JOB_CONCURRENCY|RAILS_MAX_THREADS|RAILS_LOG_LEVEL)' "$ENV_FILE" | sed 's/^/-e\n/'
+@@ -290,14 +297,15 @@
+   echo "server cpus: $SERVER_CPUS (nproc $(taskset -c "$SERVER_CPUS" nproc)); loadgen cpus: $LOADGEN_CPUS; network: $NETWORK"
+   echo "env: $(env_args | grep -E 'WEB_CONC|JOB_CONC|MAX_THREADS' | tr '\n' ' ')"
+   echo "seed sha256: $(sha256sum "$SEED/db/production.sqlite3")"
+-  echo "elixir source digest: $(python3 "$BENCH/validate.py" digest)"
++  if [[ ",$APPS," = *,elixir,* ]]; then echo "elixir source digest: $(python3 "$BENCH/validate.py" digest)"; fi
++  if [[ ",$APPS," = *,c,* ]]; then echo "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES image: $(image_for c)"; fi
+   echo "rust extra env: $RUST_EXTRA_ENV"
+   echo "workload: suites=$SUITES HTTP_SECS=$HTTP_SECS HTTP_CONCS=$HTTP_CONCS CABLE_CLIENTS=$CABLE_CLIENTS CABLE_TPUT_SECS=$CABLE_TPUT_SECS CABLE_POSTERS=$CABLE_POSTERS UPLOAD_REPS=$UPLOAD_REPS REPS=$REPS"
+   echo "quiet wait: LOAD_MAX=$LOAD_MAX LOAD_WAIT_SECS=$LOAD_WAIT_SECS"
+   echo "user agent: ${USER_AGENT_ARGS[1]:-(none)}"
+   for app in ${APPS//,/ }; do echo "$app image: $(image_for "$app") $(docker image inspect -f '{{.Id}} {{.Created}} unpacked_bytes={{.Size}}' "$(image_for "$app")")"; done
+   if [[ ",$APPS," = *,go,* ]]; then echo "go HEAD: $(git -C "$GO_ROOT" rev-parse HEAD) (dirty: $(git -C "$GO_ROOT" status --porcelain -- cmd internal assets go.mod go.sum third_party Dockerfile | wc -l) files)"; fi
+-  echo "rust HEAD: $(git -C "$RUST_ROOT" rev-parse --short HEAD) (dirty: $(git -C "$RUST_ROOT" status --porcelain -- crates Cargo.toml Cargo.lock | wc -l) files)"
++  if [[ ",$APPS," = *,rust,* ]]; then echo "rust HEAD: $(git -C "$RUST_ROOT" rev-parse --short HEAD) (dirty: $(git -C "$RUST_ROOT" status --porcelain -- crates Cargo.toml Cargo.lock | wc -l) files)"; fi
+ } > "$OUT/env.txt"
+ cat "$OUT/env.txt" >&2
+ 
+diff -ruN c-orig/bench/validate.py c-work/bench/validate.py
+--- c-orig/bench/validate.py	2026-10-04 09:49:26.000000000 -0400
++++ c-work/bench/validate.py	2026-10-05 15:05:55.993117355 -0400
+@@ -2,9 +2,11 @@
+ """Reject incomplete application measurements and preserve preflight response evidence."""
+ import gzip,hashlib,http.client,importlib.machinery,json,pathlib,re,sqlite3,sys,urllib.parse
+ ROOT=pathlib.Path(__file__).resolve().parents[1]
+-module=importlib.machinery.SourceFileLoader('verification',str(ROOT/'bin/verify-parity')).load_module()
+-if sys.argv[1]=='digest':print(module.identity());raise SystemExit
++def verification():
++ return importlib.machinery.SourceFileLoader('verification',str(ROOT/'bin/verify-parity')).load_module()
++if sys.argv[1]=='digest':print(verification().identity());raise SystemExit
+ if sys.argv[1]=='ledger':
++ module=verification()
+  ledger=json.loads((ROOT/'plans/contracts.json').read_text());v=json.loads((ROOT/'parity/results/verification.json').read_text())
+  assert ledger['complete'] and all(x['status']=='verified' for x in ledger['contracts']), 'Application parity ledger incomplete'
+  assert v['passed'] and v['complete_run'] and v['source_unchanged'] and v['source_digest']==module.identity(),'Final complete verification required for current application'

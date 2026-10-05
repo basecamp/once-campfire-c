@@ -683,7 +683,11 @@ static cf_err msg_send(cf_ctx *ctx, unsigned status, const char *content_type,
     ctx->response->status = status;
     rc = cf_response_header(ctx->response, msg_span("Content-Type"),
                             msg_span(content_type));
-    if (rc == CF_OK && cf_ctx_vary_accept(ctx)) {
+    /* K01c: on the body-cache path the round owns one combined Vary
+     * (Accept-Encoding plus Accept when negotiated); the action's own header
+     * would be a duplicate. Off the cache path this is the pinned behavior. */
+    if (rc == CF_OK && cf_ctx_vary_accept(ctx) &&
+        !cf_cache_representation_active(ctx)) {
         rc = cf_response_header(ctx->response, msg_span("Vary"),
                                 msg_span("Accept"));
     }
@@ -1236,14 +1240,23 @@ static cf_err msg_deliver_webhooks(cf_ctx *ctx, const cf_room *room,
 cf_err cf_action_messages_index(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
 
+    /* K01c: capture the version before authentication (06 step 1); the round
+     * serves a hit after authorization, before the paged gather below. */
+    cf_cache_round round;
+    cf_cache_round_init(ctx, &round);
+
     cf_err rc =
         cf_before_actions(ctx, (cf_before){CF_AUTH_REQUIRED, true, true});
-    if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
+    if (rc != CF_OK || cf_auth_halted(ctx)) {
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
 
     cf_user user = {0};
     rc = msg_current_user(ctx, &user);
     if (rc != CF_OK) {
         cf_user_dispose(&user);
+        cf_cache_round_dispose(&round);
         return rc;
     }
     cf_room room = {0};
@@ -1251,63 +1264,92 @@ cf_err cf_action_messages_index(cf_ctx *ctx) {
     cf_user_dispose(&user);
     if (rc != CF_OK) {
         cf_room_dispose(&room);
+        cf_cache_round_dispose(&round);
         return rc;
     }
+
+    /* Cache lookup after authorization (set_room) and before the gather. */
+    cf_cached_body cached = {0};
+    bool hit = round.cache != NULL &&
+               cf_cache_round_lookup(ctx, &round, msg_span(MSG_CONTENT_HTML),
+                                     &cached) == CF_OK;
+    if (hit) {
+        rc = cf_cache_serve_hit(ctx, &round, &cached);
+        cf_cached_body_dispose(&cached);
+        cf_room_dispose(&room);
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
+    cf_cached_body_dispose(&cached);
 
     cf_message_vector messages = {0};
     rc = msg_find_paged(ctx, &room, &messages);
     if (rc != CF_OK) {
         cf_message_vector_dispose(&messages);
         cf_room_dispose(&room);
+        cf_cache_round_dispose(&round);
         return rc;
     }
     if (messages.len == 0) {
         cf_message_vector_dispose(&messages);
         cf_room_dispose(&room);
         ctx->response->status = 204; /* `head :no_content` */
+        cf_cache_round_dispose(&round);
         return CF_OK;
     }
 
     /* fresh_when: the records' cache keys, their latest updated_at and the
-     * template digest. */
-    cf_str etag = {0};
-    int64_t last_modified_us = messages.items[0].updated_at;
-    for (size_t i = 1; i < messages.len; i++) {
-        if (messages.items[i].updated_at > last_modified_us) {
-            last_modified_us = messages.items[i].updated_at;
+     * template digest. K01c: when the body cache owns this response
+     * (round.cache != NULL), the action's own validator is skipped -- the
+     * round's weak ETag over the identity bytes (and its If-None-Match
+     * handling) replaces it, so a response never carries two ETags. Without
+     * the body cache this is the pinned behavior: the pin's rack_etag skips a
+     * response that already carries a validator (ctx.rs:681-695), and the
+     * cache-path body-hash validator is K01c's cached representation. */
+    if (round.cache == NULL) {
+        cf_str etag = {0};
+        int64_t last_modified_us = messages.items[0].updated_at;
+        for (size_t i = 1; i < messages.len; i++) {
+            if (messages.items[i].updated_at > last_modified_us) {
+                last_modified_us = messages.items[i].updated_at;
+            }
         }
-    }
-    rc = msg_index_etag(ctx, messages.items, messages.len, &etag);
-    if (rc == CF_OK) {
-        rc = cf_response_header(ctx->response, msg_span("ETag"),
-                                (cf_span){(const unsigned char *)etag.ptr,
-                                          etag.len});
-    }
-    char httpdate[32];
-    if (rc == CF_OK) {
-        msg_httpdate(last_modified_us, httpdate);
-        rc = cf_response_header(
-            ctx->response, msg_span("Last-Modified"),
-            (cf_span){(const unsigned char *)httpdate, strlen(httpdate)});
-    }
-    bool fresh = rc == CF_OK &&
-                 msg_request_fresh(ctx->request,
-                                   (cf_span){
-                                       (const unsigned char *)etag.ptr,
-                                       etag.len},
-                                   true, last_modified_us);
-    msg_str_dispose(&etag);
-    if (rc != CF_OK || fresh) {
-        cf_message_vector_dispose(&messages);
-        cf_room_dispose(&room);
-        if (rc == CF_OK) ctx->response->status = 304; /* `head :not_modified */
-        return rc;
+        rc = msg_index_etag(ctx, messages.items, messages.len, &etag);
+        if (rc == CF_OK) {
+            rc = cf_response_header(ctx->response, msg_span("ETag"),
+                                    (cf_span){(const unsigned char *)etag.ptr,
+                                              etag.len});
+        }
+        char httpdate[32];
+        if (rc == CF_OK) {
+            msg_httpdate(last_modified_us, httpdate);
+            rc = cf_response_header(
+                ctx->response, msg_span("Last-Modified"),
+                (cf_span){(const unsigned char *)httpdate, strlen(httpdate)});
+        }
+        bool fresh = rc == CF_OK &&
+                     msg_request_fresh(ctx->request,
+                                       (cf_span){
+                                           (const unsigned char *)etag.ptr,
+                                           etag.len},
+                                       true, last_modified_us);
+        msg_str_dispose(&etag);
+        if (rc != CF_OK || fresh) {
+            cf_message_vector_dispose(&messages);
+            cf_room_dispose(&room);
+            if (rc == CF_OK) {
+                ctx->response->status = 304; /* `head :not_modified` */
+            }
+            cf_cache_round_dispose(&round);
+            return rc;
+        }
     }
 
     rc = msg_respond_html(ctx);
     if (rc != CF_OK) {
         cf_message_vector_dispose(&messages);
         cf_room_dispose(&room);
+        cf_cache_round_dispose(&round);
         return rc;
     }
 
@@ -1336,6 +1378,10 @@ cf_err cf_action_messages_index(cf_ctx *ctx) {
     }
     cf_view_message_item_vector_dispose(&items);
     cf_room_dispose(&room);
+    /* K01c: representation + admission after the render; the presenter's read
+     * transaction is closed and no cache lock is held here. */
+    cf_cache_round_finish(ctx, &round);
+    cf_cache_round_dispose(&round);
     return rc;
 }
 

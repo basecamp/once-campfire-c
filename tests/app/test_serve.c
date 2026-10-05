@@ -1,6 +1,8 @@
 /* A00 integration tests: full app + writer + request workers behind a real H01
  * loop. Covers CORE-03/CORE-04 through the dispatch path, admission-slot
- * boundaries, shutdown drain, and Set-Cookie output on the wire. */
+ * boundaries, shutdown drain, Set-Cookie output on the wire, and the K01c
+ * always-on representation at CF_CACHE_BYTES=0 (fresh-connection gzip/
+ * identity/406 + Vary probe). */
 #include "cf_test.h"
 
 #include "app.h"
@@ -16,9 +18,11 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 /* ------------------------------------------------------------- actions */
 
@@ -43,6 +47,29 @@ static cf_err respond_ok(cf_ctx *ctx) {
 }
 
 static cf_err action_ok(cf_ctx *ctx) { return respond_ok(ctx); }
+
+/* A test double for one of the four admitted handlers: the five-call K01c
+ * recipe with no auth/gather (the body is fixed). Bound to route ID 101 so
+ * the representation pipeline is eligible; the harness config has
+ * CF_CACHE_BYTES=0, which is the point of the probe. */
+static cf_err action_representation(cf_ctx *ctx) {
+    cf_cache_round round;
+    cf_cache_round_init(ctx, &round);
+    cf_buf *body = NULL;
+    cf_err rc = cf_buf_copy(CF_TEST_SPAN("representation probe body"), &body);
+    if (rc != CF_OK) {
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
+    ctx->response->status = 200;
+    rc = cf_response_header(ctx->response, CF_TEST_SPAN("Content-Type"),
+                            CF_TEST_SPAN("text/plain"));
+    if (rc == CF_OK) rc = cf_response_body(ctx->response, body);
+    cf_buf_release(body);
+    cf_cache_round_finish(ctx, &round);
+    cf_cache_round_dispose(&round);
+    return rc;
+}
 
 static cf_err action_blocking(cf_ctx *ctx) {
     pthread_mutex_lock(&gate_mu);
@@ -190,6 +217,105 @@ CF_TEST(serve_ok_and_404) {
 
     CF_REQUIRE(do_request(&s, "/missing", NULL, resp, sizeof resp) == 0);
     CF_CHECK(strstr(resp, "HTTP/1.1 404") != NULL);
+
+    srv_stop(&s);
+}
+
+/* Gunzip `gzip` and compare with the identity text. */
+static bool wire_gunzip_equals(cf_span gzip, const char *identity) {
+    z_stream zs;
+    memset(&zs, 0, sizeof zs);
+    if (inflateInit2(&zs, 15 + 16) != Z_OK) return false;
+    unsigned char out[4096];
+    zs.next_in = (Bytef *)gzip.ptr;
+    zs.avail_in = (uInt)gzip.len;
+    size_t at = 0;
+    size_t identity_len = strlen(identity);
+    bool ok = true;
+    int rc;
+    do {
+        zs.next_out = out;
+        zs.avail_out = sizeof out;
+        rc = inflate(&zs, Z_NO_FLUSH);
+        if (rc != Z_OK && rc != Z_STREAM_END) {
+            ok = false;
+            break;
+        }
+        size_t got = sizeof out - zs.avail_out;
+        if (at + got > identity_len ||
+            memcmp(out, identity + at, got) != 0) {
+            ok = false;
+            break;
+        }
+        at += got;
+    } while (rc != Z_STREAM_END);
+    inflateEnd(&zs);
+    return ok && at == identity_len;
+}
+
+/* One request on a fresh connection; *body points at the Content-Length
+ * bytes after the header block when it is non-NULL (a gzip body contains
+ * NULs, so its length comes from the header, never from strlen). */
+static bool wire_request(struct srv *s, const char *headers, char *resp,
+                         size_t cap, cf_span *body) {
+    if (do_request(s, "/repr", headers, resp, cap) != 0) return false;
+    char *sep = strstr(resp, "\r\n\r\n");
+    if (sep == NULL) return false;
+    if (body != NULL) {
+        size_t len = 0;
+        char *cl = strstr(resp, "Content-Length: ");
+        if (cl != NULL) {
+            len = (size_t)strtoul(cl + strlen("Content-Length: "), NULL, 10);
+        }
+        body->ptr = (const unsigned char *)(sep + 4);
+        body->len = len;
+    }
+    return true;
+}
+
+/* Fresh-connection probe, CF_CACHE_BYTES=0 (the harness config): an eligible
+ * body must still honor Accept-Encoding and carry Vary: Accept-Encoding. */
+CF_TEST(serve_representation_is_uncached_always_on) {
+    static const char payload[] = "representation probe body";
+    cf_test_routes_reset();
+    CF_REQUIRE(cf_test_routes_add("GET", "/repr", 101,
+                                  action_representation) == CF_OK);
+    struct srv s;
+    CF_REQUIRE(srv_start(&s, 1, 4, 1) == CF_OK);
+
+    char resp[8192];
+    /* Identity: Vary present, no encoding. */
+    CF_REQUIRE(wire_request(&s, NULL, resp, sizeof resp, NULL));
+    CF_CHECK(strstr(resp, "HTTP/1.1 200") != NULL);
+    CF_CHECK(strstr(resp, "Content-Encoding:") == NULL);
+    CF_CHECK(strstr(resp, "Vary: Accept-Encoding") != NULL);
+    CF_CHECK(strstr(resp, "\r\n\r\n") != NULL &&
+             strstr(strstr(resp, "\r\n\r\n") + 4, payload) != NULL);
+
+    /* gzip on a fresh connection: gzip body + Content-Encoding + Vary. */
+    cf_span gz_body = {NULL, 0};
+    CF_REQUIRE(wire_request(&s,
+                            "Accept-Encoding: gzip\r\n"
+                            "Connection: close\r\n",
+                            resp, sizeof resp, &gz_body));
+    CF_CHECK(strstr(resp, "HTTP/1.1 200") != NULL);
+    CF_CHECK(strstr(resp, "Content-Encoding: gzip") != NULL);
+    CF_CHECK(strstr(resp, "Vary: Accept-Encoding") != NULL);
+    CF_CHECK(wire_gunzip_equals(gz_body, payload));
+
+    /* gzip;q=0 selects identity. */
+    CF_REQUIRE(wire_request(&s, "Accept-Encoding: gzip;q=0\r\n", resp,
+                            sizeof resp, NULL));
+    CF_CHECK(strstr(resp, "HTTP/1.1 200") != NULL);
+    CF_CHECK(strstr(resp, "Content-Encoding:") == NULL);
+
+    /* Both forbidden: the pin's 406 with a text/plain body. */
+    CF_REQUIRE(wire_request(&s,
+                            "Accept-Encoding: identity;q=0, gzip;q=0\r\n",
+                            resp, sizeof resp, NULL));
+    CF_CHECK(strstr(resp, "HTTP/1.1 406") != NULL);
+    CF_CHECK(strstr(resp, "Content-Type: text/plain") != NULL);
+    CF_CHECK(strstr(resp, "An acceptable encoding") != NULL);
 
     srv_stop(&s);
 }

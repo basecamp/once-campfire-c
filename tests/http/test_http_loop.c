@@ -7,7 +7,10 @@
 #include "cf_test.h"
 #include "config.h"
 #include "http/http.h"
+#include "http/http_internal.h" /* conn slots: accepted-socket option check */
 
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -334,6 +337,47 @@ CF_TEST(loop04_keepalive_and_http10) {
     CF_CHECK(n > 0 && strstr(resp, "HTTP/1.1 200 OK") != NULL);
     close(fdka);
 
+    htest_stop(t);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+/* The reference front server sets TCP_NODELAY on every accepted connection
+ * (tmp/rust-ref/crates/kit/src/front/conn.rs accept_loop). Without it a
+ * response split into header and body sends meets Nagle's hold against the
+ * client's delayed ACK: ~41 ms per keep-alive response (B01b follow-up,
+ * docs/devel/evidence/keepalive-stall.md). The client cannot read the peer's
+ * option, so assert it on the loop-owned descriptor. */
+CF_TEST(loop_accept_sets_tcp_nodelay) {
+    struct reply_state st;
+    memset(&st, 0, sizeof st);
+    pthread_mutex_init(&st.mutex, NULL);
+    struct htest *t = htest_start(reply_admit, &st, 0, 0, 0, NULL);
+    CF_REQUIRE(t != NULL);
+    unsigned port = htest_port(t);
+
+    int fd = htest_connect(port, 0);
+    CF_REQUIRE(fd >= 0);
+    char req[256];
+    request(req, sizeof req, "GET", "/nodelay", port, "");
+    CF_CHECK(htest_send_all(fd, req, strlen(req)) == 0);
+    char resp[1024];
+    CF_CHECK(htest_read_response(fd, resp, sizeof resp, 5000) > 0);
+
+    /* The connection is live (keep-alive) and owned by the loop slot. */
+    cf_http_loop *loop = htest_loop(t);
+    CF_REQUIRE(loop != NULL);
+    int server_fd = -1;
+    for (size_t i = 0; i < loop->conn_cap && server_fd < 0; i++) {
+        if (loop->conns[i].fd >= 0) server_fd = loop->conns[i].fd;
+    }
+    CF_REQUIRE(server_fd >= 0);
+    int nodelay = 0;
+    socklen_t len = sizeof nodelay;
+    CF_CHECK(getsockopt(server_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay,
+                        &len) == 0);
+    CF_CHECK(nodelay == 1);
+
+    close(fd);
     htest_stop(t);
     pthread_mutex_destroy(&st.mutex);
 }

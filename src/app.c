@@ -14,6 +14,7 @@
 #include "app_internal.h"
 
 #include "auth.h" /* bounded crypto queue: start/stop wiring */
+#include "cache.h" /* K01c body cache lifecycle */
 #include "config.h"
 #include "context.h"
 #include "db/db_internal.h"
@@ -58,6 +59,7 @@ struct cf_request_worker {
 struct cf_app {
     cf_config *config;               /* owned; freed only after workers join */
     cf_cable *cable;                 /* borrowed C02 cable (cf_app_set_cable) */
+    cf_cache *cache;                 /* K01c: owned; created by cf_app_start */
     _Atomic uint64_t data_version;   /* 06: initialized to 1, one writer */
     _Atomic bool stop_requested;
     pthread_mutex_t version_mutex;   /* cache/version mutex; always exists */
@@ -151,6 +153,10 @@ void cf_app_destroy(cf_app *app) {
     if (app == NULL) return;
     cf_app_request_stop(app);
     cf_app_join_workers(app); /* no worker may reference app/config after this */
+    /* K01c: destroy the cache after the workers joined (no get/put in flight)
+     * and before the version mutex, which it borrows (06: lifecycle). */
+    cf_cache_destroy(app->cache);
+    app->cache = NULL;
     if (app->crypto_started) {
         /* Releases this app's reference; the last one drains and joins after
          * every submitter has been joined. */
@@ -256,6 +262,46 @@ void cf_app_advance_data_version(cf_app *app) {
 pthread_mutex_t *cf_app_version_mutex(cf_app *app) {
     if (app == NULL) return NULL;
     return &app->version_mutex;
+}
+
+/* K01c: the version source cf_cache_create borrows. Called with the
+ * cache/version mutex held; cf_data_version is one acquire load and takes no
+ * locks (cache.h documents the contract). */
+static uint64_t cf_app_cache_version(void *user) {
+    return cf_data_version((const cf_app *)user);
+}
+
+/* Create and attach the K01c cache when the configured budget asks for one.
+ * Returns non-OK only when a nonzero budget could not be turned into an
+ * enabled cache (allocation/entropy); callers serve uncached (06: "Cache
+ * failure does not fail the page"). Budget 0 is the deliberate off switch; a
+ * nonzero budget below the bucket-array cost leaves caching off after the
+ * cache module's one diagnostic. */
+static cf_err cf_app_cache_attach(cf_app *app, size_t budget_bytes) {
+    if (budget_bytes == 0) return CF_OK;
+    if (app->cache != NULL) return CF_BUSY; /* already attached */
+    cf_cache *cache = NULL;
+    cf_err rc = cf_cache_create(budget_bytes, cf_app_cache_version, app,
+                                &app->version_mutex, &cache);
+    if (rc != CF_OK) return rc;
+    cf_cache_stats stats;
+    if (cf_cache_stats_get(cache, &stats) == CF_OK && stats.enabled) {
+        app->cache = cache;
+        return CF_OK;
+    }
+    cf_cache_destroy(cache); /* disabled by the module's budget rule */
+    return CF_OK;
+}
+
+cf_cache *cf_app_cache(cf_app *app) {
+    if (app == NULL) return NULL;
+    return app->cache;
+}
+
+cf_err cf_app_cache_enable_for_test(cf_app *app, size_t budget_bytes) {
+    if (app == NULL) return CF_INVALID;
+    if (app->cache != NULL || app->serving_started) return CF_BUSY;
+    return cf_app_cache_attach(app, budget_bytes);
 }
 
 uint64_t cf_data_version(const cf_app *app) {
@@ -408,6 +454,10 @@ cf_err cf_app_start(cf_app *app) {
     if (cf_app_stop_requested(app)) return CF_BUSY;
     const cf_config *config = app->config;
     size_t created = 0;
+
+    /* K01c: create the body cache before any worker can look up or admit; a
+     * creation failure keeps the app serving uncached (06). */
+    (void)cf_app_cache_attach(app, config->cache_bytes);
 
     cf_err rc = cf_writer_start(app, config);
     if (rc != CF_OK) return rc;

@@ -39,4 +39,15 @@ cf_err cf_action_messages_destroy(cf_ctx *ctx);
 cf_err cf_action_users_bans_destroy(cf_ctx *ctx);
 cf_err cf_action_users_bans_create(cf_ctx *ctx);
 
+/* A-users-sidebars (route 57). */
+cf_err cf_action_users_sidebars_show(cf_ctx *ctx);
+
+/* A-users-avatars (route 53; destroy 54 stays on dev-501 until S02). */
+cf_err cf_action_users_avatars_show(cf_ctx *ctx);
+
+/* A-searches (routes 145, 146, 147). */
+cf_err cf_action_searches_clear(cf_ctx *ctx);
+cf_err cf_action_searches_index(cf_ctx *ctx);
+cf_err cf_action_searches_create(cf_ctx *ctx);
+
 #endif /* CF_ACTIONS_H */

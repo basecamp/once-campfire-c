@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Run the pinned Elixir benchmark harness against the C port.
+#
+#   bench/run-c [bench/run options] [--build-image] [--rebuild-seed]
+#               [--cache-bytes N]
+#
+# The pinned harness is vendored byte-for-byte under
+# bench/pinned/once-campfire-elixir/ (see bench/PINNED-MANIFEST.json).  It is
+# never modified in place: this script copies it to bench/.work/pinned/ and
+# applies bench/adapters/c-app.patch, which adds the `c` app and makes the
+# Elixir-specific ledger/digest gates conditional.  Everything else -- the
+# workload definitions, timings, load generator, report and preflight -- is the
+# pinned code, unpatched.
+#
+# Cache ablation (06-cache-performance.md: uncached -> whole-body cache):
+#   --cache-bytes N   export CF_CACHE_BYTES=N for the run; the adapter passes
+#                     it into the c container, which exports it to the app.
+#                     0 (the default when the flag is absent) is the uncached
+#                     arm; 67108864 (64 MiB) is the cache-enabled arm:
+#                       bench/run-c --reps 2 --out bench/results/<rev>-uncached
+#                       bench/run-c --cache-bytes 67108864 --reps 2 \
+#                         --out bench/results/<rev>-cache
+#                     CF_CACHE_BYTES may also be set directly in the
+#                     environment (same effect).  The value is recorded in
+#                     env.txt (`c revision: ... cache_bytes: N ...`), so every
+#                     result row states its arm.  The flag is used instead of
+#                     a second image tag because the cache budget is runtime
+#                     configuration, not a build input: one image digest keeps
+#                     both arms attributable to the same binary.
+#
+# Prerequisites: docker (running), mise with rust@1.98.1 (the harness pins its
+# load-generator toolchain), python3, patch.  The C binary is built with
+# `make bench`; the production image from bench/image/Dockerfile.c wraps it.
+#
+# Defaults, all overridable in the environment exactly as bench/run documents:
+#   SEED=$BENCH/seed/.seed/default      imported by bench/seed/import_seed.py
+#   C_IMAGE=campfire-c:bench            built from bench/image/Dockerfile.c
+#   SERVER_CPUS=8-11 LOADGEN_CPUS=12-15 HTTP_SECS=8 HTTP_CONCS="1 16 64"
+#   CABLE_CLIENTS="100 500 1000" CABLE_TPUT_SECS=15 UPLOAD_REPS=5
+#
+# Raw outputs land in bench/results/<revision>/ by default (the candidate git
+# revision), with env.txt recording the seed hash, image ids, CPU sets, flags
+# and workload selection.  Override with --out.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+BENCH=$ROOT/bench
+PIN=$BENCH/pinned/once-campfire-elixir
+PATCH=$BENCH/adapters/c-app.patch
+WORK=$BENCH/.work/pinned
+SEED=${SEED:-$BENCH/seed/.seed/default}
+BINARY=$ROOT/build/bench/campfire
+C_IMAGE=${C_IMAGE:-campfire-c:bench}
+BASE_IMAGE=${BASE_IMAGE:-fedora:latest}
+CF_CACHE_BYTES=${CF_CACHE_BYTES:-0}
+BUILD_IMAGE=0
+REBUILD_SEED=0
+PASSTHROUGH=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --build-image) BUILD_IMAGE=1; shift ;;
+    --rebuild-seed) REBUILD_SEED=1; shift ;;
+    --cache-bytes)
+      [ $# -ge 2 ] || { echo "run-c: --cache-bytes needs a value" >&2; exit 2; }
+      case "$2" in
+        ''|*[!0-9]*) echo "run-c: --cache-bytes must be a non-negative integer" >&2; exit 2 ;;
+      esac
+      CF_CACHE_BYTES=$2; shift 2 ;;
+    *) PASSTHROUGH+=("$1"); shift ;;
+  esac
+done
+export CF_CACHE_BYTES
+
+log() { echo "[bench/run-c $(date +%T)] $*" >&2; }
+
+# -- provenance and prerequisites --------------------------------------------
+
+python3 "$BENCH/verify_pin.py" >&2
+
+command -v docker >/dev/null || { echo "run-c: docker is required" >&2; exit 1; }
+docker info >/dev/null 2>&1 || { echo "run-c: docker daemon is not running" >&2; exit 1; }
+command -v patch >/dev/null || { echo "run-c: patch is required" >&2; exit 1; }
+command -v mise >/dev/null || { echo "run-c: mise (rust@1.98.1) is required" >&2; exit 1; }
+
+if [ ! -x "$BINARY" ]; then
+  log "building the C binary: make bench"
+  make -C "$ROOT" bench >&2
+fi
+
+if [ "$REBUILD_SEED" = 1 ] || [ ! -f "$SEED/db/production.sqlite3" ]; then
+  log "importing the benchmark seed into $SEED"
+  rm -rf "$SEED"
+  python3 "$BENCH/seed/import_seed.py" --out "$SEED" >&2
+fi
+
+if [ "$BUILD_IMAGE" = 1 ] || ! docker image inspect "$C_IMAGE" >/dev/null 2>&1; then
+  log "building the C production image $C_IMAGE (base $BASE_IMAGE)"
+  CTX=$BENCH/.work/image
+  rm -rf "$CTX"
+  mkdir -p "$CTX/tests/fixtures"
+  cp "$BINARY" "$CTX/campfire"
+  cp -a "$ROOT/tests/fixtures/assets" "$CTX/tests/fixtures/assets"
+  cp "$BENCH/image/entrypoint.sh" "$CTX/entrypoint.sh"
+  docker build -f "$BENCH/image/Dockerfile.c" -t "$C_IMAGE" \
+    --build-arg "BASE_IMAGE=$BASE_IMAGE" "$CTX" >&2
+fi
+
+# -- the patched working copy -------------------------------------------------
+
+log "preparing the pinned harness copy at $WORK"
+rm -rf "$WORK"
+cp -a "$PIN" "$WORK"
+patch -p1 -s -d "$WORK" < "$PATCH"
+
+# The harness builds the load generator with --offline; warm the crate cache
+# once so the pinned invocation is unchanged after that.
+log "fetching load-generator crates (rust@1.98.1)"
+(cd "$WORK/bench/loadgen" && \
+  CARGO_TARGET_DIR="$WORK/target/bench" mise exec rust@1.98.1 -- \
+  cargo fetch --locked >&2)
+
+# -- run ----------------------------------------------------------------------
+
+if command -v git >/dev/null && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  C_REVISION=${C_REVISION:-$(git -C "$ROOT" rev-parse --short=12 HEAD)}
+else
+  C_REVISION=${C_REVISION:-unknown}
+fi
+C_BINARY_SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
+export SEED C_IMAGE C_REVISION C_BINARY_SHA256
+
+HAS_APPS=0
+HAS_OUT=0
+for arg in "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"; do
+  [ "$arg" = "--apps" ] && HAS_APPS=1
+  [ "$arg" = "--out" ] && HAS_OUT=1
+done
+
+ARGS=("${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}")
+[ "$HAS_APPS" = 1 ] || ARGS=(--apps c "${ARGS[@]+"${ARGS[@]}"}")
+if [ "$HAS_OUT" = 0 ]; then
+  ARGS=(--out "$BENCH/results/${C_REVISION}" "${ARGS[@]}")
+fi
+
+# Record the disclosed seed divergence in every result directory (B01a
+# integrator ruling): the seed omits jason's avatar attachment, so the avatar
+# endpoint serves the fallback initials SVG instead of the reference's
+# processed webp variant.
+OUT_DIR=""
+expect_out=0
+for arg in "${ARGS[@]}"; do
+  if [ "$expect_out" = 1 ]; then OUT_DIR=$arg; expect_out=0; fi
+  [ "$arg" = "--out" ] && expect_out=1
+done
+OUT_DIR=${OUT_DIR:-$BENCH/results/${C_REVISION}}
+mkdir -p "$OUT_DIR"
+SEED_SHA=$(sha256sum "$SEED/db/production.sqlite3" | awk '{print $1}')
+cat > "$OUT_DIR/DIVERGENCE.md" <<EOF
+# Seed divergence (disclosed)
+
+The benchmark seed omits jason's avatar attachment so the fallback avatar path
+is exercised; \`/users/<token>/avatar\` therefore serves a generated initials
+SVG (image/svg+xml) rather than the reference's processed webp variant.  The
+avatar workload row must be read with this representation difference in mind.
+
+- seed: \`$SEED\`
+- seed db sha256: \`$SEED_SHA\`
+- c revision: \`$C_REVISION\` (binary sha256 \`$C_BINARY_SHA256\`)
+EOF
+
+log "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES"
+exec "$WORK/bench/run" "${ARGS[@]}"

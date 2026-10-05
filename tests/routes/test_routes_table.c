@@ -185,7 +185,13 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
                      strcmp(task, "A-sessions") == 0 ||
                      strcmp(task, "A-rooms") == 0 ||
                      strcmp(task, "A-messages") == 0 ||
-                     strcmp(task, "A-users-bans") == 0;
+                     strcmp(task, "A-users-bans") == 0 ||
+                     strcmp(task, "A-users-sidebars") == 0 ||
+                     strcmp(task, "A-searches") == 0 ||
+                     strcmp(task, "A-users-avatars") == 0;
+        /* A-users-avatars is partially landed: show (53) is bound, destroy
+         * (54) stays on the development 501 until S02. */
+        if (yyjson_get_int(id) == 54) bound = false;
         if (!bound) {
             expected_501[yyjson_get_int(id)] = true;
             expected_count++;
@@ -204,9 +210,10 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
     CF_CHECK(actual_count == expected_count);
     /* The four POST conductor rows are bound (A01's cf_check_csrf) and the
      * A-welcome / A-first_runs / A-sessions / A-rooms / A-messages /
-     * A-users-bans rows are rebound to their real symbols; everything else
-     * unbound is a packet that has not landed. */
-    CF_CHECK(actual_count == 92);
+     * A-users-bans / A-users-sidebars / A-searches rows are rebound to their
+     * real symbols (A-users-avatars row 54 excepted, pending S02); everything
+     * else unbound is a packet that has not landed. */
+    CF_CHECK(actual_count == 87);
 }
 
 CF_TEST_MAIN()

@@ -1,0 +1,6 @@
+# Generated local state: the patched harness copy and the imported seed.
+# Results (bench/results/<revision>/) are evidence and stay tracked.
+.work/
+seed/.seed/
+__pycache__/
+*.pyc
