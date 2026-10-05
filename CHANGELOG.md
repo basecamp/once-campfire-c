@@ -5,6 +5,73 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-04 — Phase 1a: foundation modules (F03, D01 core + headers, H02, R01)
+
+Phase status: **F03 DONE, F01 DONE** (Fil-C axis closed), **D01 IN_PROGRESS**
+(db-core + frozen headers done; model bodies next), **H02 PARTIAL** (multipart
+awaits S01), **R01 DONE**. Milestone **M0 (reproducible foundation) is DONE**
+for the core dependency set; media probes remain open for S03.
+
+### Verification (independent verifiers on every task; defects found and re-verified)
+- Fil-C 0.685 drops custom section data, so `tests/cf_test.h` case registration
+  failed under Fil-C → dual registration (section table on clang, constructor
+  list under Fil-C, exactly-once execution) now enumerates identically under
+  both compilers; orphan-case link failure preserved.
+- A shutdown signal race in `src/main.c` (loss window between predicate check
+  and `sigsuspend`) → replaced with `pthread_sigmask` + `sigwait` (no
+  handler). The verifier injected signals into the exact old window and the
+  repaired binary exited 0 in 40/40 dev and 32/32 TSan runs, while a
+  reconstructed old-pattern binary hung — the test has teeth.
+- H02 deep-merged body/query where the reference replaces whole top-level
+  values (plus a depth-1 copy bug) → repaired; the verifier re-derived the
+  rule with its own Rust reference driver: 39/39 merge shapes byte-identical,
+  corpus re-derived exactly (1961 successes, 794 matched errors, exactly one
+  spec-mandated depth divergence — the 99-bracket vector under the depth-32 C
+  limit), 241/241 adversarial checks pass, reverts reproduce the defects.
+- Suite: **86 cf_test cases** green under dev, bench, ASan/UBSan, TSan and
+  Fil-C (core 4, config 15, app 6, db 3+7+5+3, params 20, views 27).
+
+### Added — database core (D01)
+- `src/db/schema.c` + embedded `schema_sql.h` (provenance SHA-256): fresh
+  database executed transactionally with `user_version=1` from the exact
+  contract DDL; open rules require version 1 and required tables.
+- `src/db/reader.c` / `statements.c` / `db_internal.h`: WAL, NORMAL sync,
+  FK ON, mmap 0, 1 s busy timeout, autocheckpoint 1000; per-connection
+  statement sets with reset/clear discipline; FK/FTS5 verified; datetime
+  text↔µs helpers at six fractional digits (reference-exact conditional
+  fraction).
+
+### Added — model headers (D01)
+- Frozen headers for all 15 model families plus shared types (`cf_str`,
+  `cf_optional_str`, UTC-µs datetimes, per-model record/vector/dispose,
+  `cf_model_error`) covering all 232 inventory symbols (227 prototyped,
+  5 deferred with reasons); naming and argument rules per the shared contract.
+
+### Added — params and escaping (H02, R01)
+- `src/http/params.*`: bounded bracket-notation tree (depth 32, 4096 nodes),
+  form/JSON/multipart parsing, the reference shallow merge rule, the approved
+  accessor subset, and method override with the fixed allowed list. Multipart
+  uploads are rejected explicitly until S01 (partial, disclosed — no
+  completion claimed).
+- `src/views/escape.c`: reference-exact HTML text/attribute, JSON string and
+  URL-component escaping plus trusted-HTML handling (VIEW-01).
+
+### Added — build, config, lifecycle (F03)
+- `Makefile`: dev/bench/filc/sanitize/tsan modes, dependency paths from
+  `vendor/DEPS.json` (SQLite + yyjson, `-lm`), explicit source/test lists,
+  `deps`/`clean`, per-binary failure aggregation, loud failures for missing
+  modes/compilers.
+- `src/config.*`: the full fixed environment table with checked parsing and
+  failures naming the setting; secrets never logged and zeroed on destroy.
+- `src/app.*` + `src/app_internal.h`: minimal app seed (config,
+  `data_version=1` with the cache/version mutex always initialized, worker
+  registry with join-before-free per CORE-05); `src/main.c` boot/shutdown
+  lifecycle with race-free signal handling.
+
+### Known gaps
+- H02 multipart uploads await S01; D01 model bodies land in Phase 1b; F00
+  media probes (libvips/ffmpeg) still BLOCKED for S03.
+
 ## 2026-10-04 — Phase 0: reproducible foundation (F00, F01, F02)
 
 Phase status: **F00 PARTIAL, F01 PARTIAL, F02 DONE**. No milestone (M0) claimed.
