@@ -5,6 +5,29 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 4 wiring: merge phase 3, bind all landed packets
+
+- Merged `master` (phase 3 K01/B01.initial + pulled-forward searches,
+  sidebars, avatars-show) into `phase4`: no file overlap with wave
+  packets; CHANGELOG keeps both sections.
+- Integrator wiring (`build:` commit): Makefile sources/test lists plus
+  curl/libssl/qrcodegen linkage in all five modes; `actions.h`
+  declarations; 78 route rows rebound from dev-501; `main.c` job-queue
+  start, default-handler + writer-consumer registration, libcurl global
+  init, and ordered shutdown; new `cf_qr_code_svg` via vendored qrcodegen
+  (gem-envelope SVG at level H; module-matrix bytes may differ from the
+  gem-faithful algorithm — documented gap, byte-exact `rqrcode.rs` port
+  remains a defined follow-up).
+- Held back deliberately: rows 50/51/74/75 (users new/create/show,
+  autocomplete — controller done, page/prompt views pending in the views
+  wave) and S02 routes 169-177 (helpers only, controller actions never
+  dispatched). 13 dev-501s remain; route-table/builtins expectations
+  updated to the landed set.
+- `test_media` live case: reports BLOCKED and passes inside `make test`
+  (pinned tools absent by design); stays strict-red under
+  CF_MEDIA_LIVE=1, with env save/restore so full-suite strict runs work.
+- Full dev suite green on the wired tree.
+
 ## 2026-10-05 — Phase 4 wave 1: jobs, storage, integrations, first controllers
 
 Six packets implemented and unit-verified at dispatch level in the `phase4`
