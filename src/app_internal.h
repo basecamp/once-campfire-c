@@ -1,6 +1,6 @@
 /* Internal cf_app surface for D02 (writer/version) and H01/A00 (loops and
  * request workers). Not a shared contract: the integrator approves any
- * addition that another module consumes. F03 owns the definitions in app.c. */
+ * addition that another module consumes. F03/A00 own the definitions. */
 #ifndef CF_APP_INTERNAL_H
 #define CF_APP_INTERNAL_H
 
@@ -20,7 +20,7 @@ void cf_app_join_workers(cf_app *app);
 
 /* Orderly shutdown request. Workers poll cf_app_stop_requested() and return;
  * cf_app_destroy sets this before joining. After the request, new worker
- * registrations fail with CF_BUSY. */
+ * registrations fail with CF_BUSY. A00 also wakes its request pool. */
 void cf_app_request_stop(cf_app *app);
 bool cf_app_stop_requested(const cf_app *app);
 
@@ -34,5 +34,12 @@ void cf_app_advance_data_version(cf_app *app);
  * under this one lock. It exists even when CF_CACHE_BYTES is 0. Borrowed
  * until cf_app_destroy. */
 pthread_mutex_t *cf_app_version_mutex(cf_app *app);
+
+/* A00 observability for tests and counters: tasks admitted and not yet
+ * submitted/abandoned (running + queued). */
+size_t cf_app_admitted_count(const cf_app *app);
+
+/* Requests whose response was submitted or abandoned (worker completions). */
+uint64_t cf_app_completed_requests(const cf_app *app);
 
 #endif /* CF_APP_INTERNAL_H */

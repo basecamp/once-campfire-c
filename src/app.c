@@ -1,21 +1,46 @@
-/* Minimal cf_app seed (F03): config ownership, data version + cache/version
- * mutex, and the worker registry used by shutdown (CORE-05).
+/* Application lifecycle (F03 seed extended by A00): config ownership,
+ * data version + cache/version mutex, worker registry, the single writer, the
+ * CF_READERS request-worker pool with CF_REQUEST_SLOTS admission accounting,
+ * and the H01 admission hook.
  *
- * A00 extends this file later for dispatch/completion; D02 uses
- * cf_app_advance_data_version from src/app_internal.h. Destruction order is
- * fixed: request stop, join workers, then free config and destroy mutexes. */
+ * Shutdown order (00-contracts.md CORE-05, 01-foundation-http.md H01, A00):
+ * the caller stops/drains the HTTP loops first, then cf_app_stop() (or
+ * cf_app_destroy) requests stop, rejoins every registered worker (the writer
+ * exits on the stop request too), and only then frees config/queues. A request
+ * worker owns one read-only SQLite connection, opened on its own thread after
+ * registering, and runs one synchronous handler at a time; a queued task is
+ * submitted or abandoned exactly once, also during shutdown (CORE-04). */
 #include "app.h"
 #include "app_internal.h"
 
 #include "config.h"
+#include "context.h"
+#include "db/db_internal.h"
+#include "db/writer.h"
+#include "http/http.h"
+#include "routes.h" /* cf_assets_serve (H03 static front mount) */
 
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct cf_worker {
     pthread_t thread;
     bool active;
+};
+
+/* One request worker: its own reader connection and start handshake. */
+struct cf_request_worker {
+    cf_app *app;
+    pthread_t thread;
+    pthread_mutex_t ready_mutex;
+    pthread_cond_t ready_cv;
+    bool ready;
+    cf_err err;
+    bool registered; /* in the cf_app registry (join via cf_app_join_workers) */
+    bool ready_init; /* ready_mutex/ready_cv were initialized */
+    cf_db *reader;   /* opened by the worker; closed by the worker on exit */
 };
 
 struct cf_app {
@@ -26,6 +51,18 @@ struct cf_app {
     pthread_mutex_t workers_mutex;   /* guards the registry below */
     struct cf_worker workers[CF_APP_MAX_WORKERS];
     size_t worker_count;
+
+    /* A00 request pool: bounded by CF_REQUEST_SLOTS (running + queued). */
+    bool serving_started;
+    bool writer_started;
+    pthread_mutex_t pool_mutex;
+    pthread_cond_t pool_cv;
+    cf_http_task **pool_queue;
+    size_t pool_cap, pool_head, pool_count, pool_admitted;
+    struct cf_request_worker *rw;
+    size_t rw_count;
+    _Atomic uint64_t completed_requests;
+    _Atomic uint64_t last_completed_sequence;
 };
 
 cf_err cf_app_create(cf_config *config, cf_app **out) {
@@ -38,12 +75,27 @@ cf_err cf_app_create(cf_config *config, cf_app **out) {
 
     atomic_init(&app->data_version, UINT64_C(1));
     atomic_init(&app->stop_requested, false);
+    atomic_init(&app->completed_requests, 0);
+    atomic_init(&app->last_completed_sequence, 0);
 
     if (pthread_mutex_init(&app->version_mutex, NULL) != 0) {
         free(app);
         return CF_INTERNAL;
     }
     if (pthread_mutex_init(&app->workers_mutex, NULL) != 0) {
+        pthread_mutex_destroy(&app->version_mutex);
+        free(app);
+        return CF_INTERNAL;
+    }
+    if (pthread_mutex_init(&app->pool_mutex, NULL) != 0) {
+        pthread_mutex_destroy(&app->workers_mutex);
+        pthread_mutex_destroy(&app->version_mutex);
+        free(app);
+        return CF_INTERNAL;
+    }
+    if (pthread_cond_init(&app->pool_cv, NULL) != 0) {
+        pthread_mutex_destroy(&app->pool_mutex);
+        pthread_mutex_destroy(&app->workers_mutex);
         pthread_mutex_destroy(&app->version_mutex);
         free(app);
         return CF_INTERNAL;
@@ -55,15 +107,49 @@ cf_err cf_app_create(cf_config *config, cf_app **out) {
     return CF_OK;
 }
 
+/* Free the pool storage; every pool thread must already be joined (the
+ * registry sweep plus the start-failure path join both registered and
+ * unregistered workers). */
+static void cf_app_pool_dispose(cf_app *app) {
+    if (app->rw != NULL) {
+        for (size_t i = 0; i < app->rw_count; i++) {
+            struct cf_request_worker *w = &app->rw[i];
+            if (w->ready_init) {
+                pthread_cond_destroy(&w->ready_cv);
+                pthread_mutex_destroy(&w->ready_mutex);
+            }
+        }
+        free(app->rw);
+        app->rw = NULL;
+        app->rw_count = 0;
+    }
+    free(app->pool_queue);
+    app->pool_queue = NULL;
+    app->pool_cap = 0;
+    app->pool_head = 0;
+    app->pool_count = 0;
+    app->pool_admitted = 0;
+}
+
 void cf_app_destroy(cf_app *app) {
     if (app == NULL) return;
     cf_app_request_stop(app);
     cf_app_join_workers(app); /* no worker may reference app/config after this */
+    cf_writer_stop(app);      /* no-op when the writer was never started */
+    app->writer_started = false;
+    cf_app_pool_dispose(app);
     cf_config_destroy(app->config);
     app->config = NULL;
+    pthread_cond_destroy(&app->pool_cv);
+    pthread_mutex_destroy(&app->pool_mutex);
     pthread_mutex_destroy(&app->workers_mutex);
     pthread_mutex_destroy(&app->version_mutex);
     free(app);
+}
+
+const cf_config *cf_app_config(const cf_app *app) {
+    if (app == NULL) return NULL;
+    return app->config;
 }
 
 cf_err cf_app_register_worker(cf_app *app, pthread_t thread) {
@@ -108,6 +194,11 @@ void cf_app_join_workers(cf_app *app) {
 void cf_app_request_stop(cf_app *app) {
     if (app == NULL) return;
     atomic_store_explicit(&app->stop_requested, true, memory_order_relaxed);
+    /* Wake the request pool: workers waiting for a task must observe the
+     * stop instead of sleeping forever. */
+    pthread_mutex_lock(&app->pool_mutex);
+    pthread_cond_broadcast(&app->pool_cv);
+    pthread_mutex_unlock(&app->pool_mutex);
 }
 
 bool cf_app_stop_requested(const cf_app *app) {
@@ -138,4 +229,281 @@ pthread_mutex_t *cf_app_version_mutex(cf_app *app) {
 uint64_t cf_data_version(const cf_app *app) {
     if (app == NULL) return 0;
     return atomic_load_explicit(&app->data_version, memory_order_acquire);
+}
+
+size_t cf_app_admitted_count(const cf_app *app) {
+    if (app == NULL) return 0;
+    cf_app *mutable_app = (cf_app *)app;
+    pthread_mutex_lock(&mutable_app->pool_mutex);
+    size_t count = app->pool_admitted;
+    pthread_mutex_unlock(&mutable_app->pool_mutex);
+    return count;
+}
+
+uint64_t cf_app_completed_requests(const cf_app *app) {
+    if (app == NULL) return 0;
+    return atomic_load_explicit(&app->completed_requests,
+                                memory_order_acquire);
+}
+
+/* ------------------------------------------------------- worker pool --- */
+
+static void cf_request_worker_ready(struct cf_request_worker *w, cf_err err) {
+    pthread_mutex_lock(&w->ready_mutex);
+    w->err = err;
+    w->ready = true;
+    pthread_cond_broadcast(&w->ready_cv);
+    pthread_mutex_unlock(&w->ready_mutex);
+}
+
+/* One synchronous handler per pop. The task is submitted or abandoned
+ * exactly once; stale completions are H01's checks, so the worker never
+ * touches the task after either call. */
+static void cf_request_worker_run_task(cf_app *app, cf_db *reader,
+                                       cf_http_task *task) {
+    uint64_t sequence = cf_http_task_sequence(task); /* borrowed accessor */
+    cf_response response;
+    cf_response_init(&response);
+    const cf_request *request = cf_http_task_request(task);
+
+    /* H03's static front mount runs before the application context exists
+     * (it takes request/response only). When it answers, the app dispatch
+     * does not run; the response is submitted exactly like a dispatch one. */
+    bool handled = false;
+    cf_err rc = cf_assets_serve(request, &response, &handled);
+    if (rc != CF_OK) {
+        /* Internal failure (allocation): map it like any other resource
+         * failure, matching cf_finish_mapped's 500. */
+        cf_response_dispose(&response);
+        cf_response_init(&response);
+        response.status = 500;
+        handled = true;
+        rc = CF_OK;
+    }
+    if (!handled) rc = cf_ctx_process(app, reader, request, &response);
+    if (rc == CF_OK) {
+        cf_err submitted = cf_http_task_submit(task, &response);
+        if (submitted != CF_OK) {
+            /* Ownership stayed with the caller on submit failure; give it
+             * back exactly once. */
+            cf_http_task_abandon(task);
+        }
+        cf_response_dispose(&response);
+    } else {
+        cf_http_task_abandon(task);
+        cf_response_dispose(&response);
+    }
+    atomic_fetch_add_explicit(&app->completed_requests, 1,
+                              memory_order_relaxed);
+    atomic_store_explicit(&app->last_completed_sequence, sequence,
+                          memory_order_relaxed);
+}
+
+static void *cf_request_worker_main(void *arg) {
+    struct cf_request_worker *w = arg;
+    cf_app *app = w->app;
+
+    cf_err rc = cf_app_register_worker(app, pthread_self());
+    w->registered = rc == CF_OK;
+    if (rc != CF_OK) {
+        cf_request_worker_ready(w, rc);
+        return NULL;
+    }
+
+    cf_db *reader = NULL;
+    rc = cf_db_open(app->config->database_path, true, &reader);
+    if (rc != CF_OK) {
+        cf_request_worker_ready(w, rc);
+        return NULL;
+    }
+    w->reader = reader;
+    cf_request_worker_ready(w, CF_OK);
+
+    for (;;) {
+        pthread_mutex_lock(&app->pool_mutex);
+        while (app->pool_count == 0 && !cf_app_stop_requested(app)) {
+            pthread_cond_wait(&app->pool_cv, &app->pool_mutex);
+        }
+        if (app->pool_count == 0) { /* stop requested and queue drained */
+            pthread_mutex_unlock(&app->pool_mutex);
+            break;
+        }
+        cf_http_task *task = app->pool_queue[app->pool_head];
+        app->pool_head = (app->pool_head + 1) % app->pool_cap;
+        app->pool_count--;
+        bool stopping = cf_app_stop_requested(app);
+        pthread_mutex_unlock(&app->pool_mutex);
+
+        if (stopping) {
+            /* Shutdown: queued work is discarded without losing its
+             * completion (CORE-04). */
+            cf_http_task_abandon(task);
+        } else {
+            cf_request_worker_run_task(app, reader, task);
+        }
+
+        pthread_mutex_lock(&app->pool_mutex);
+        app->pool_admitted--;
+        pthread_mutex_unlock(&app->pool_mutex);
+    }
+
+    cf_db_close(w->reader);
+    w->reader = NULL;
+    return NULL;
+}
+
+cf_err cf_app_start(cf_app *app) {
+    if (app == NULL) return CF_INVALID;
+    if (app->serving_started) return CF_BUSY;
+    if (cf_app_stop_requested(app)) return CF_BUSY;
+    const cf_config *config = app->config;
+    size_t created = 0;
+
+    cf_err rc = cf_writer_start(app, config);
+    if (rc != CF_OK) return rc;
+    app->writer_started = true;
+
+    size_t slots = config->request_slots;
+    size_t readers = config->readers;
+    if (slots == 0 || readers == 0) {
+        rc = CF_INVALID;
+        goto fail;
+    }
+    if (slots > SIZE_MAX / sizeof(cf_http_task *)) {
+        rc = CF_LIMIT;
+        goto fail;
+    }
+    app->pool_queue = calloc(slots, sizeof *app->pool_queue);
+    if (app->pool_queue == NULL) {
+        rc = CF_NOMEM;
+        goto fail;
+    }
+    app->pool_cap = slots;
+    app->pool_head = 0;
+    app->pool_count = 0;
+    app->pool_admitted = 0;
+
+    app->rw = calloc(readers, sizeof *app->rw);
+    if (app->rw == NULL) {
+        rc = CF_NOMEM;
+        goto fail;
+    }
+    app->rw_count = readers;
+
+    for (size_t i = 0; i < readers; i++) {
+        struct cf_request_worker *w = &app->rw[i];
+        w->app = app;
+        w->ready = false;
+        w->err = CF_OK;
+        w->registered = false;
+        w->reader = NULL;
+        w->thread = 0;
+        if (pthread_mutex_init(&w->ready_mutex, NULL) != 0) {
+            rc = CF_INTERNAL;
+            goto fail;
+        }
+        if (pthread_cond_init(&w->ready_cv, NULL) != 0) {
+            pthread_mutex_destroy(&w->ready_mutex);
+            rc = CF_INTERNAL;
+            goto fail;
+        }
+        w->ready_init = true;
+        if (pthread_create(&w->thread, NULL, cf_request_worker_main, w) !=
+            0) {
+            w->thread = 0;
+            rc = CF_INTERNAL;
+            goto fail;
+        }
+        created++;
+    }
+
+    for (size_t i = 0; i < created; i++) {
+        struct cf_request_worker *w = &app->rw[i];
+        pthread_mutex_lock(&w->ready_mutex);
+        while (!w->ready) pthread_cond_wait(&w->ready_cv, &w->ready_mutex);
+        cf_err worker_err = w->err;
+        pthread_mutex_unlock(&w->ready_mutex);
+        if (worker_err != CF_OK) {
+            rc = worker_err;
+            goto fail;
+        }
+    }
+
+    app->serving_started = true;
+    return CF_OK;
+
+fail:
+    cf_app_request_stop(app);
+    /* Every created worker signals ready exactly once (registration failure
+     * or reader open). Wait for that, then join the ones that never reached
+     * the registry; registered ones are joined by the registry sweep. */
+    for (size_t i = 0; i < created; i++) {
+        struct cf_request_worker *w = &app->rw[i];
+        pthread_mutex_lock(&w->ready_mutex);
+        while (!w->ready) pthread_cond_wait(&w->ready_cv, &w->ready_mutex);
+        pthread_mutex_unlock(&w->ready_mutex);
+    }
+    for (size_t i = 0; i < created; i++) {
+        struct cf_request_worker *w = &app->rw[i];
+        if (!w->registered) {
+            (void)pthread_join(w->thread, NULL);
+        }
+        w->thread = 0;
+    }
+    cf_app_join_workers(app);
+    cf_writer_stop(app);
+    app->writer_started = false;
+    cf_app_pool_dispose(app);
+    return rc;
+}
+
+void cf_app_stop(cf_app *app) {
+    if (app == NULL) return;
+    cf_app_request_stop(app);
+    cf_app_join_workers(app);
+    cf_writer_stop(app);
+    app->writer_started = false;
+}
+
+cf_err cf_app_admit(void *app_user, struct cf_http_task *task) {
+    cf_app *app = app_user;
+    if (app == NULL || task == NULL) return CF_INVALID;
+    pthread_mutex_lock(&app->pool_mutex);
+    if (!app->serving_started || cf_app_stop_requested(app) ||
+        app->pool_cap == 0 || app->pool_admitted >= app->pool_cap) {
+        pthread_mutex_unlock(&app->pool_mutex);
+        return CF_BUSY;
+    }
+    size_t tail = (app->pool_head + app->pool_count) % app->pool_cap;
+    app->pool_queue[tail] = task;
+    app->pool_count++;
+    app->pool_admitted++;
+    pthread_cond_signal(&app->pool_cv);
+    pthread_mutex_unlock(&app->pool_mutex);
+    return CF_OK;
+}
+
+static size_t cf_app_loop_share(size_t total, size_t loops, size_t index) {
+    if (loops == 0 || index >= loops) return 0;
+    size_t base = total / loops;
+    size_t remainder = total % loops;
+    size_t share = base + (index < remainder ? 1 : 0);
+    if (share == 0) {
+        /* H01 treats 0 as its 64 MiB default; a config smaller than CF_LOOPS
+         * cannot be expressed, so each loop gets the smallest nonzero share. */
+        share = 1;
+    }
+    return share;
+}
+
+size_t cf_app_loop_input_bytes(const cf_app *app, size_t loop_index) {
+    if (app == NULL || app->config == NULL) return 0;
+    return cf_app_loop_share(app->config->input_bytes, app->config->loops,
+                             loop_index);
+}
+
+size_t cf_app_loop_output_bytes(const cf_app *app, size_t loop_index) {
+    if (app == NULL || app->config == NULL) return 0;
+    return cf_app_loop_share(app->config->output_bytes, app->config->loops,
+                             loop_index);
 }
