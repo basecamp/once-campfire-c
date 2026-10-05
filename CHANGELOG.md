@@ -5,14 +5,43 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-04 — Independent review repairs (Phase 0 reopenings + Phase 1a findings)
+
+All findings in `docs/devel/INDEPENDENT-REVIEW.md` are resolved and
+independently re-verified; on that evidence **M0 (reproducible foundation) is
+re-claimed DONE**.
+
+- **P0-2 (High, reopened)** — probe recipes required gitignored sources.
+  Committed probe sources (`vendor/probes/src/`), 20 build+probe scripts
+  (`vendor/probes/scripts/`) and the curl loopback fixture. Verified from a
+  fresh `git archive` checkout: all 20 probes (10 deps × clang/Fil-C) pass
+  from committed inputs; pins, claims and the lock are untouched; normal
+  builds never fetch; removing or mutating a probe source fails loudly.
+- **P0-3 (Medium, reopened)** — fixture verification depended on ignored docs.
+  Contract inputs committed under `tests/fixtures/contracts/`; the default
+  verifier and schema regeneration now use committed copies only; verified
+  from clean-checkout simulations with mutation teeth checks.
+- **P1A-01 (High)** — multipart separator underflow (heap OOB read on
+  adjacent boundary lines). Bounds fixed; the original 12-byte repro now
+  rejects `CF_INVALID` with empty output under clang/ASan/Fil-C; 13,160
+  truncation/substitution parses, a 55-case edge matrix and 180k random cases
+  run clean; the pre-fix parser reproduces the abort.
+- **P1A-02 (Medium)** — `make deps` ran Bash scripts via `sh`. The target now
+  honors each script's interpreter (bash fallback); verified with the host
+  `sh` as both bash and dash, including a failing script aborting the target.
+- **Disclosure** — rebuilt dependency archives are not byte-identical to the
+  original probe artifacts (archive timestamps, embedded paths, configured
+  prefixes); the lock and probe records were deliberately left unchanged.
+- **Follow-up recorded** — relink Fil-C libcurl against the Fil-C zlib-ng
+  archive and check content decoding before accepting I01.
+
 ## 2026-10-04 — Phase 1a: foundation modules (F03, D01 core + headers, H02, R01)
 
 Phase status: **F03 DONE, F01 DONE** (Fil-C axis closed), **D01 IN_PROGRESS**
 (db-core + frozen headers done; model bodies next), **H02 PARTIAL** (multipart
-awaits S01), **R01 DONE**. Milestone **M0 remains open** pending the
-independent review's clean-checkout reproducibility findings (dependency probe
-sources; fixture-verification inputs); media probes remain open for S03.
-Open review findings are tracked in the roadmap's disposition table.
+awaits S01), **R01 DONE**. Milestone M0 was held open by the independent
+review's clean-checkout reproducibility findings and was re-claimed after the
+review repairs above; media probes remain open for S03.
 
 ### Verification (independent verifiers on every task; defects found and re-verified)
 - Fil-C 0.685 drops custom section data, so `tests/cf_test.h` case registration
