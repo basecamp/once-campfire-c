@@ -28,6 +28,26 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   CF_MEDIA_LIVE=1, with env save/restore so full-suite strict runs work.
 - Full dev suite green on the wired tree.
 
+## 2026-10-05 — Phase 4 wiring 2: views wave, storage controllers
+
+- Makefile/test wiring for all eight views-wave packets; `actions.h`
+  S02 declarations; routes 50/51/74/75 + 169-177 rebound — **zero
+  dev-501 rows remain** (both route expectation tests pin the completed
+  set; profiles/push routes stay bound to loud-500 gates until their
+  presenter mapping lands).
+- V-A closed at the action level: test stubs deleted, assertions
+  retargeted to real renders, `User#title` fills the mention model
+  (G1 golden gap closed, empty-title fallback keeps Anna byte-exact).
+- V-F: bot/bot-boost JSON shims replaced by the shared serializers
+  (PUBLIC_ORIGIN confirmed). Touch helper at three call sites.
+- Wiring repairs: profiles membership href use-after-scope (borrowed
+  block temporary), uninitialized sweep title field.
+- Deferred with owner: bots/accounts/profiles/push shim→real swaps
+  (need presenter constructors), room form/partial swaps + cable slots
+  + broadcast-expectation updates, translation/host-resolve call-site
+  switches, transfer-partial + model-header dedups, byte-exact
+  `rqrcode.rs` port. Full dev suite green.
+
 ## 2026-10-05 — Phase 4 wave 1: jobs, storage, integrations, first controllers
 
 Six packets implemented and unit-verified at dispatch level in the `phase4`
