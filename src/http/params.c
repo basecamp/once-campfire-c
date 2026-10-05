@@ -976,24 +976,32 @@ static cf_err parse_multipart(cf_params *p, cf_span body, cf_span boundary) {
         const unsigned char *next = find_delim_line(b, len, delim, dlen, pos);
         if (next == NULL) return CF_INVALID; /* no closing delimiter */
         size_t pe = (size_t)(next - b);
-        if (pe >= 2 && b[pe - 2] == '\r' && b[pe - 1] == '\n') {
+        if (pe < pos) return CF_INVALID; /* malformed delimiter ordering */
+        /* Strip only the line break that introduces the next delimiter: it
+         * ends this part's body and lies inside [pos, pe). The bytes before
+         * `pos` belong to the previous delimiter line, so an empty malformed
+         * part between adjacent boundaries must not consume them (P1A-01:
+         * the former absolute `pe >= 2` check underflowed `pe - pos`). */
+        if (pe - pos >= 2 && b[pe - 2] == '\r' && b[pe - 1] == '\n') {
             pe -= 2;
-        } else if (pe >= 1 && b[pe - 1] == '\n') {
+        } else if (pe - pos >= 1 && b[pe - 1] == '\n') {
             pe -= 1;
         }
-        const unsigned char *sep = find_seq(b + pos, pe - pos, (const unsigned char *)"\r\n\r\n", 4);
+        size_t part_len = pe - pos;
+        const unsigned char *sep = find_seq(b + pos, part_len, (const unsigned char *)"\r\n\r\n", 4);
         size_t header_len, body_off;
         if (sep != NULL) {
             header_len = (size_t)(sep - (b + pos));
             body_off = header_len + 4;
         } else {
-            sep = find_seq(b + pos, pe - pos, (const unsigned char *)"\n\n", 2);
-            if (sep == NULL) return CF_INVALID;
+            sep = find_seq(b + pos, part_len, (const unsigned char *)"\n\n", 2);
+            if (sep == NULL) return CF_INVALID; /* no header/body separator */
             header_len = (size_t)(sep - (b + pos));
             body_off = header_len + 2;
         }
+        if (header_len > part_len || body_off > part_len) return CF_INVALID;
         cf_span headers = {b + pos, header_len};
-        cf_span value = {b + pos + body_off, pe - pos - body_off};
+        cf_span value = {b + pos + body_off, part_len - body_off};
         struct part_disposition part;
         memset(&part, 0, sizeof(part));
         cf_err err;

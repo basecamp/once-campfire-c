@@ -1038,6 +1038,25 @@ static void mb_finish(struct mbuf *m) {
     mb_add(m, "--\r\n");
 }
 
+/* A request whose body is allocated at exactly its byte length, as the
+ * independent P1A-01 probe did: any separator search that looks past the body
+ * is an ASan/Fil-C failure, not just a wrong result. Free er.body after the
+ * call; every span the parser stores is copied into the params arena. */
+struct exact_req {
+    struct reqb b;
+    unsigned char *body;
+};
+
+static void exact_req_init(struct exact_req *e, const char *bytes, size_t len,
+                           const char *ct, cf_method method, cf_method original) {
+    e->body = malloc(len);
+    if (e->body == NULL) abort();
+    memcpy(e->body, bytes, len);
+    reqb_init(&e->b, method, original);
+    if (ct != NULL) reqb_ct(&e->b, ct);
+    e->b.r.body = (cf_span){e->body, len};
+}
+
 CF_TEST(multipart_fields_and_structure) {
     struct mbuf m;
     mb_start(&m, "B");
@@ -1206,6 +1225,156 @@ CF_TEST(multipart_malformed) {
         cf_params_destroy(params);
         free(m.p);
     }
+}
+
+/* P1A-01 regression: malformed shapes around consecutive boundary lines, each
+ * body in an exactly sized allocation. The fix must reject them with
+ * CF_INVALID and *out == NULL, never read past the body, and keep a valid
+ * empty field value an empty string. */
+CF_TEST(multipart_adjacent_boundaries_exact_length) {
+    static const char ct[] = "multipart/form-data; boundary=x";
+    struct exact_req e;
+    cf_params *params = NULL;
+
+    /* The review's 12-byte repro: an empty part between the opening boundary
+     * line and the terminator (boundary followed immediately by `--x--`).
+     * Before the fix `pe - pos` wrapped and find_seq read past the body. */
+    static const char adjacent_crlf[] = "--x\r\n--x--\r\n";
+    exact_req_init(&e, adjacent_crlf, sizeof(adjacent_crlf) - 1, ct, CF_POST, CF_POST);
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* the same adjacent boundaries with LF-only framing */
+    static const char adjacent_lf[] = "--x\n--x--\n";
+    exact_req_init(&e, adjacent_lf, sizeof(adjacent_lf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* an empty part between two real boundary lines: still malformed, in
+     * both framings */
+    static const char adjacent_mid_crlf[] =
+        "--x\r\n--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n--x--\r\n";
+    exact_req_init(&e, adjacent_mid_crlf, sizeof(adjacent_mid_crlf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    static const char adjacent_mid_lf[] =
+        "--x\n--x\nContent-Disposition: form-data; name=\"a\"\n\n1\n--x--\n";
+    exact_req_init(&e, adjacent_mid_lf, sizeof(adjacent_mid_lf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* truncated part headers: header line runs into the closing delimiter
+     * without a header/body separator, and a body cut before any closing
+     * delimiter */
+    static const char truncated_headers[] =
+        "--x\r\nContent-Disposition: form-data; name=\"a\"\r\n--x--\r\n";
+    exact_req_init(&e, truncated_headers, sizeof(truncated_headers) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    static const char truncated_no_close[] = "--x\r\nContent-Disposition: form-data; name=\"a\"";
+    exact_req_init(&e, truncated_no_close, sizeof(truncated_no_close) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* empty part headers (only the line break before the next delimiter) and
+     * an explicitly empty field name */
+    static const char empty_headers[] = "--x\r\n\r\n--x--\r\n";
+    exact_req_init(&e, empty_headers, sizeof(empty_headers) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    static const char empty_name[] =
+        "--x\r\nContent-Disposition: form-data; name=\"\"\r\n\r\nv\r\n--x--\r\n";
+    exact_req_init(&e, empty_name, sizeof(empty_name) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* missing header/body separator, CRLF and LF framings */
+    static const char missing_sep_crlf[] =
+        "--x\r\nContent-Disposition: form-data; name=\"a\"\r\nvalue\r\n--x--\r\n";
+    exact_req_init(&e, missing_sep_crlf, sizeof(missing_sep_crlf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    static const char missing_sep_lf[] =
+        "--x\nContent-Disposition: form-data; name=\"a\"\nvalue\n--x--\n";
+    exact_req_init(&e, missing_sep_lf, sizeof(missing_sep_lf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_CHECK(parse(&e.b.r, &params) == CF_INVALID);
+    CF_CHECK(params == NULL);
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* a valid part whose field value is empty stays a valid empty string */
+    static const char empty_value_crlf[] =
+        "--x\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n\r\n--x--\r\n";
+    exact_req_init(&e, empty_value_crlf, sizeof(empty_value_crlf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_REQUIRE(parse(&e.b.r, &params) == CF_OK);
+    CF_REQUIRE(params != NULL);
+    CF_CHECK(str_is_empty(pget(params, "a")));
+    cf_params_destroy(params);
+    free(e.body);
+
+    static const char empty_value_lf[] =
+        "--x\nContent-Disposition: form-data; name=\"a\"\n\n\n--x--\n";
+    exact_req_init(&e, empty_value_lf, sizeof(empty_value_lf) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_REQUIRE(parse(&e.b.r, &params) == CF_OK);
+    CF_REQUIRE(params != NULL);
+    CF_CHECK(str_is_empty(pget(params, "a")));
+    cf_params_destroy(params);
+    free(e.body);
+
+    /* cf_effective_method parses multipart form bodies through the same
+     * parser: the malformed exact-length body is a bad request, and a valid
+     * body with an empty-valued part still supplies _method. */
+    exact_req_init(&e, adjacent_crlf, sizeof(adjacent_crlf) - 1, ct, CF_POST, CF_POST);
+    cf_method method = CF_OTHER;
+    CF_CHECK(cf_effective_method(&e.b.r, &method) == CF_INVALID);
+    free(e.body);
+
+    static const char eff_body[] =
+        "--x\r\nContent-Disposition: form-data; name=\"_method\"\r\n\r\nPATCH\r\n"
+        "--x\r\nContent-Disposition: form-data; name=\"empty\"\r\n\r\n\r\n--x--\r\n";
+    exact_req_init(&e, eff_body, sizeof(eff_body) - 1, ct, CF_POST, CF_POST);
+    params = NULL;
+    CF_REQUIRE(parse(&e.b.r, &params) == CF_OK);
+    CF_REQUIRE(params != NULL);
+    CF_CHECK(str_is_empty(pget(params, "empty")));
+    cf_params_destroy(params);
+    method = CF_OTHER;
+    CF_CHECK(cf_effective_method(&e.b.r, &method) == CF_OK);
+    CF_CHECK(method == CF_PATCH);
+    free(e.body);
 }
 
 /* ---------------------------------------------------- method override */
