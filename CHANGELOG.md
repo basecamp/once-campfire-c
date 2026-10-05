@@ -5,6 +5,99 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 4 wave 1: jobs, storage, integrations, first controllers
+
+Six packets implemented and unit-verified at dispatch level in the `phase4`
+worktree. New sources and tests are committed; shared wiring (`Makefile`
+`SRCS`/`UNIT_TEST_SRCS` entries, `src/actions/actions.h` declarations,
+`src/routes.c` rebinding, `main.c` startup/consumer registration) is held for
+a serial integrator pass, so the affected routes still answer dev-501 and the
+new objects are not yet linked into the app build. All six suites were
+re-run green by the integrator in the worktree before commit (commands and
+counts below); sanitizer/TSan/Fil-C axes per packet are as noted.
+
+### J02 model-event job handlers
+- New: `src/jobs/handlers.{c,h}`, `tests/jobs/test_handlers.c` (14/14 x3;
+  existing `test_jobs` 9/9 and `test_jobs_writer` 4/4 unaffected).
+- One handler per queueable kind with own-reader discipline (reader opened
+  per invocation, closed before integration calls/`cf_write`);
+  deleted/revoked targets are recorded no-ops; failures return non-`CF_OK`
+  with no retry. RemoveBannedContent scans in fixed SQL bounded by
+  `LIMIT 101`, destroys at most 100 messages per `cf_write`, and requeues
+  the remainder (205-message convergence: 100+100+5, 2 requeues).
+  I01/I02/S02 calls are weak-hook seams (NULL today, TODO-marked).
+- Acceptance: JOB-02/03, DB-02 re-read/revalidation half. Gaps: sanitizer
+  runs not done; non-NULL cable broadcast path untested (NULL by design, no
+  sockets in tests).
+
+### S02 Active Storage signed helpers
+- New: `src/storage/active_storage.{c,h}`, `tests/storage/test_active_storage.c`
+  (24/24 dev and ASan/UBSan; race case 8x stable on pthread barriers).
+- Signed blob IDs, variation keys/digests (all 12 pinned digests), disk
+  download/upload tokens with exact purpose separation; 5-state attachment
+  machine; proxy 200/206/416 + multipart framing; disk OPTIONS/HEAD/304 and
+  direct-upload 422/413 matrix; purge referenced-refuse/unreferenced-delete/
+  missing-success. Token/variation/range/disposition vectors byte-exact
+  against the pinned fixtures. Representation processing returns
+  fail-loudly `CF_INTERNAL` (S03); variant-record SQL stays with actions.
+- Acceptance: STORE-02/03 + DB-02 file halves. Live media-bytes parity
+  BLOCKED (S03/pinned tools absent here) — not claimed.
+
+### S03 media argv builders
+- New: `src/storage/media.{c,h}`, `tests/storage/test_media.c` (21/21
+  deterministic vectors dev and ASan/UBSan; live gate reports BLOCKED, never
+  skip/pass).
+- Fixed argv builders for vips/ffmpeg/ffprobe per the five pinned Rust
+  modules; scalar-only user arguments; 4-slot bound; task-owned temp
+  intermediates with kill/reap/cleanup; 16-byte stdout-cap and checksum
+  vectors. Installed tools observed: vips absent, ffmpeg/ffprobe 9.0.2 vs
+  pinned 7.1.5 — live byte parity BLOCKED by design.
+- Acceptance: STORE-04 vectors pass; live bytes BLOCKED. Open adapter items:
+  sharpen `conv` mask spelling vs pinned vips 8.16.1; Openslide has no CLI
+  equivalent.
+
+### I01 outbound HTTP, unfurl, webhooks
+- New: `src/integrations/{http,unfurl,webhook}.{c,h}`,
+  `tests/integrations/test_{unfurl,webhook}.c` (17/17 + 9/9, ASan/UBSan/LSan
+  clean; 3 leak/over-read defects found and fixed via sanitizers).
+- libcurl exchange with TLS verification never disabled; test-CA + RESOLVE
+  origin for loopback servers; http/https-only enforcement. Unfurl honors
+  the 16-slot/5s/10s/256-attr/5MiB/10-redirect contract; webhook honors
+  7s/60s/100MB-decoded with exact JSON/signatures and no POST retry.
+  Bodies byte-compared against `opengraph_expected.json`. Decoding is
+  implemented over zlib (magic-based multi-member gzip) because the Fil-C
+  libcurl is `--without-zlib`; integrator links vendored zlib-ng.
+- Acceptance: INT-01/02 on the executed matrix; JOB-01/02 webhook side
+  (no-retry verified, consumer registration left to integrator). Gaps: full
+  90-case opengraph replay not executed; IPv6 pinning falls back to system
+  resolution after guard approval.
+
+### I02 Web Push
+- New: `src/integrations/push.{c,h}`, `tests/integrations/test_push.c`
+  (23/23 dev, ASan/UBSan/LSan, and Fil-C 0.685).
+- OpenSSL EVP port of encryption/VAPID/pool: RFC 8291 vectors, JWT segments
+  and `authorization_k` byte-exact vs `web_push_expected.json`; loopback
+  wire case; deletion matrix (404/410/invalid-key destroy; 4xx/5xx/TLS
+  preserve); 3KiB/256B valid-UTF-8 truncation; sanitized logs proven free
+  of endpoint/key text; missing VAPID is an explicit error.
+- Acceptance: INT-03 unit evidence. Real TLS delivery/timeout enforcement
+  lives in I01's exchange helper (signature proposed); push-side queue
+  wiring stays with D02/J02.
+
+### First controller slice: A-pwa, A-rooms-refreshes, A-rooms-involvements
+- New: `src/actions/pwa.c`, `src/actions/rooms/{refreshes,involvements}.c`,
+  `tests/actions/{pwa,rooms_refreshes,rooms_involvements}_test.c`
+  (8+13+18 = 39/39; neighbors `rooms_test` 27/27, `messages_test` 35/35
+  unbroken).
+- Manifest field order/escaping and verbatim service-worker bytes;
+  refreshes `since` to_i/saturating-clamp with bare TURBO_STREAM bytes
+  verified against Askama 0.14; involvements blank-to-nil incl. `[]`,
+  writer update, change broadcast with previous, room-URL redirect.
+- Acceptance: VIEW-04, AUTH-06. Gaps: update-from-`invisible` prepend path
+  needs the sidebar `_shared` partial (404 after commit until A02 provides
+  it); view/presenter symbols requested from the integrator as listed in
+  the packet handoff; routes 91/93/94/95/149/150 binding pending.
+
 ## 2026-10-05 — Phase 2c: remaining controllers, review repairs, A01/A02 completion
 
 ### Controllers (routes rebound from the dev-501 placeholder)
