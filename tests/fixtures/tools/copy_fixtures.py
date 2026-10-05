@@ -13,12 +13,17 @@ What it does
    ("Fixture provenance" table) and the F02 task card, preserving the path
    relative to the rust-ref root (tests/fixtures/<relative path>), plus the
    upstream license as tests/fixtures/LICENSE.rust-ref.
-3. Copies the pinned seed recipes (parity/bin/seed, parity/seeds/**) into
+3. Copies the required development contracts (routes.json,
+   route-recognition.json, schema.sql) from docs/devel/implementation/contracts/
+   into tests/fixtures/contracts/, so tests/fixtures/tools/verify_manifest.py
+   and tests/db/gen_schema_sql.py work from a clean checkout without docs/devel.
+4. Copies the pinned seed recipes (parity/bin/seed, parity/seeds/**) into
    tests/seed/ (tests/seed/bin/seed, tests/seed/seeds/**).
-4. Writes tests/fixtures/MANIFEST.json with per-file provenance: source repo,
+5. Writes tests/fixtures/MANIFEST.json with per-file provenance: source repo,
    pinned revision, source path, sha256 of the copied bytes, license, selection
    of case IDs, and explicit OUT_OF_SCOPE: D-C01 marks for the old-key/Marshal
-   compatibility vectors excluded by 02-data-auth.md A01.
+   compatibility vectors excluded by 02-data-auth.md A01.  Contract inputs
+   additionally record their purpose and the capture revision.
 
 Re-running is idempotent for unchanged sources: existing destination files must
 be byte-identical or the copy fails (it never silently overwrites a difference).
@@ -27,7 +32,9 @@ Usage
 -----
     python3 tests/fixtures/tools/copy_fixtures.py [--rust-ref DIR]
 
-The default rust-ref directory is <repo>/tmp/rust-ref.
+The default rust-ref directory is <repo>/tmp/rust-ref.  Regeneration is a
+maintenance operation and needs the oracle tree plus docs/devel; the committed
+outputs it writes are self-contained.
 """
 
 from __future__ import annotations
@@ -149,6 +156,39 @@ SEED_TREES: list[tuple[str, str]] = [
 
 # Special destinations: source path -> path relative to tests/fixtures/.
 SPECIAL: dict[str, str] = {"MIT-LICENSE": "LICENSE.rust-ref"}
+
+# Required development contracts committed under tests/fixtures/contracts/ so
+# fixture verification and schema regeneration are self-contained.  "source" is
+# relative to REPO_ROOT; the committed copy keeps its basename.
+CONTRACT_INPUTS: list[dict[str, str]] = [
+    {
+        "source": "docs/devel/implementation/contracts/routes.json",
+        "surface": "routes",
+        "purpose": "contract test input: ordered route table (177 routes) for routing tests",
+    },
+    {
+        "source": "docs/devel/implementation/contracts/route-recognition.json",
+        "surface": "routes",
+        "purpose": "contract test input: 111 route-recognition vectors for routing tests",
+    },
+    {
+        "source": "docs/devel/implementation/contracts/schema.sql",
+        "surface": "schema",
+        "purpose": "contract test input: fresh database DDL consumed by src/db/schema_sql.h and DB tests",
+    },
+]
+
+CONTRACT_LICENSE_NOTE = (
+    "Authored development contract from this repository under docs/devel "
+    "(untracked); not an upstream fixture. Derived from the MIT-licensed "
+    "Rust reference (tests/fixtures/LICENSE.rust-ref)."
+)
+CONTRACT_NOTE = (
+    "docs/devel is gitignored, so no repository revision pins these bytes; "
+    "sha256 is the authoritative pin. pinned_revision is the reference revision "
+    "the contract encodes; captured_from_revision is the checkout HEAD the copy "
+    "was taken from."
+)
 
 # ---------------------------------------------------------------------------
 # rails_compat.json selection (07-verification "current-format selections only").
@@ -353,6 +393,54 @@ def case_ids_for(src_rel: str, src: Path):
     return None
 
 
+def repo_head() -> str:
+    """HEAD of this repository, recorded as the contract capture revision."""
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def contract_entries() -> list[dict]:
+    """Manifest entries for the committed contract inputs (docs/devel sources)."""
+    captured = repo_head()
+    entries = []
+    for item in CONTRACT_INPUTS:
+        src = REPO_ROOT / item["source"]
+        dest = FIXTURES / "contracts" / Path(item["source"]).name
+        if not dest.is_file():
+            raise RuntimeError(f"contract fixture missing: {dest}")
+        if not src.is_file():
+            raise RuntimeError(f"contract source missing: {src}")
+        if src.read_bytes() != dest.read_bytes():
+            raise RuntimeError(f"contract fixture differs from docs/devel source: {dest}")
+        digest = sha256_file(dest)
+        entries.append(
+            {
+                "fixture": dest.relative_to(REPO_ROOT).as_posix(),
+                "source_repo": None,
+                "source_revision": None,
+                "source_path": item["source"],
+                "surface": item["surface"],
+                "role": "contract-input",
+                "purpose": item["purpose"],
+                "bytes": dest.stat().st_size,
+                "sha256": digest,
+                "source_sha256": digest,
+                "license": None,
+                "license_note": CONTRACT_LICENSE_NOTE,
+                "frozen_in_reference_files": False,
+                "pinned_revision": PINNED_REVISION,
+                "captured_from_revision": captured,
+                "note": CONTRACT_NOTE,
+            }
+        )
+    return entries
+
+
 def build_manifest(fixtures: Path, rust_ref: Path, copied: list[dict]) -> dict:
     frozen = load_reference_files()
     entries = []
@@ -386,28 +474,15 @@ def build_manifest(fixtures: Path, rust_ref: Path, copied: list[dict]) -> dict:
             entry["case_ids"] = case_ids
         entries.append(entry)
 
-    # External references: pinned tables that are contract artifacts or
-    # source-as-spec and are deliberately not duplicated under tests/fixtures/.
+    # Required contract inputs are committed copies under tests/fixtures/contracts/;
+    # the verifier checks these entries, so a clean checkout needs no docs/devel.
+    entries.extend(contract_entries())
+
+    # External references: pinned source-as-spec trees and files that are
+    # deliberately not duplicated under tests/fixtures/.  Required test inputs
+    # are committed entries above, not ambient development files.
     external = []
     ext_paths = [
-        {
-            "surface": "routes",
-            "path": "docs/devel/implementation/contracts/routes.json",
-            "kind": "contract-artifact",
-            "note": "ordered 177 routes; contract already in docs/, not duplicated",
-        },
-        {
-            "surface": "routes",
-            "path": "docs/devel/implementation/contracts/route-recognition.json",
-            "kind": "contract-artifact",
-            "note": "111 recognition vectors; contract already in docs/, not duplicated",
-        },
-        {
-            "surface": "routes",
-            "path": "docs/devel/implementation/contracts/schema.sql",
-            "kind": "contract-artifact",
-            "note": "fresh schema; contract already in docs/, not duplicated",
-        },
         {
             "surface": "controllers",
             "path": "tmp/rust-ref/crates/campfire/src/controllers",
@@ -496,7 +571,11 @@ def build_manifest(fixtures: Path, rust_ref: Path, copied: list[dict]) -> dict:
         "license": {"spdx": "MIT", "file": "tests/fixtures/LICENSE.rust-ref"},
         "note": (
             "Reference fixtures copied by tests/fixtures/tools/copy_fixtures.py; "
-            "tests never read tmp/ at runtime. sha256 is over the copied bytes."
+            "tests never read tmp/ at runtime. Required route/schema contract "
+            "inputs are committed byte-identical under tests/fixtures/contracts/ "
+            "(role=contract-input entries), so "
+            "tests/fixtures/tools/verify_manifest.py succeeds in a clean checkout "
+            "without docs/devel or tmp/. sha256 is over the copied bytes."
         ),
         "entries": fixture_entries,
         "seed": seed_paths,
@@ -572,6 +651,13 @@ def main() -> int:
             copied.append(
                 {"src_rel": src_rel, "dest": dest, "surface": "seed", "role": "seed-recipe"}
             )
+
+    # Required development contracts: committed copies so verification and
+    # schema regeneration need no docs/devel.  copy_one fails loudly if the
+    # docs source is absent or a destination differs.
+    for item in CONTRACT_INPUTS:
+        dest = FIXTURES / "contracts" / Path(item["source"]).name
+        copy_one(REPO_ROOT / item["source"], dest)
 
     # Selection records, attached to the two cookie/ID fixtures.
     for record in copied:

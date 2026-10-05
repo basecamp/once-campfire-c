@@ -7,7 +7,7 @@
     "spdx": "MIT",
     "file": "tests/fixtures/LICENSE.rust-ref"
   },
-  "note": "Reference fixtures copied by tests/fixtures/tools/copy_fixtures.py; tests never read tmp/ at runtime. sha256 is over the copied bytes.",
+  "note": "Reference fixtures copied by tests/fixtures/tools/copy_fixtures.py; tests never read tmp/ at runtime. Required route/schema contract inputs are committed byte-identical under tests/fixtures/contracts/ (role=contract-input entries), so tests/fixtures/tools/verify_manifest.py succeeds in a clean checkout without docs/devel or tmp/. sha256 is over the copied bytes.",
   "entries": [
     {
       "fixture": "tests/fixtures/crates/kit/tests/params_vectors.json",
@@ -5473,6 +5473,60 @@
       "source_sha256": "d33de6da3734f0b46e6345a63a431611cf511fad4e4be9ef781bb94b0791ee04",
       "license": "MIT",
       "frozen_in_reference_files": true
+    },
+    {
+      "fixture": "tests/fixtures/contracts/routes.json",
+      "source_repo": null,
+      "source_revision": null,
+      "source_path": "docs/devel/implementation/contracts/routes.json",
+      "surface": "routes",
+      "role": "contract-input",
+      "purpose": "contract test input: ordered route table (177 routes) for routing tests",
+      "bytes": 76763,
+      "sha256": "b8c34e442b768cc3727b257c41b4b2905c16d5b91f0d0873779c95f318435302",
+      "source_sha256": "b8c34e442b768cc3727b257c41b4b2905c16d5b91f0d0873779c95f318435302",
+      "license": null,
+      "license_note": "Authored development contract from this repository under docs/devel (untracked); not an upstream fixture. Derived from the MIT-licensed Rust reference (tests/fixtures/LICENSE.rust-ref).",
+      "frozen_in_reference_files": false,
+      "pinned_revision": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+      "captured_from_revision": "b57cf39a11fafc4de148e727cdc3edf16c89db59",
+      "note": "docs/devel is gitignored, so no repository revision pins these bytes; sha256 is the authoritative pin. pinned_revision is the reference revision the contract encodes; captured_from_revision is the checkout HEAD the copy was taken from."
+    },
+    {
+      "fixture": "tests/fixtures/contracts/route-recognition.json",
+      "source_repo": null,
+      "source_revision": null,
+      "source_path": "docs/devel/implementation/contracts/route-recognition.json",
+      "surface": "routes",
+      "role": "contract-input",
+      "purpose": "contract test input: 111 route-recognition vectors for routing tests",
+      "bytes": 16384,
+      "sha256": "e45c65cff9db6b554f9229b2530f1c8050f7458147f60a5944a02025dba12738",
+      "source_sha256": "e45c65cff9db6b554f9229b2530f1c8050f7458147f60a5944a02025dba12738",
+      "license": null,
+      "license_note": "Authored development contract from this repository under docs/devel (untracked); not an upstream fixture. Derived from the MIT-licensed Rust reference (tests/fixtures/LICENSE.rust-ref).",
+      "frozen_in_reference_files": false,
+      "pinned_revision": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+      "captured_from_revision": "b57cf39a11fafc4de148e727cdc3edf16c89db59",
+      "note": "docs/devel is gitignored, so no repository revision pins these bytes; sha256 is the authoritative pin. pinned_revision is the reference revision the contract encodes; captured_from_revision is the checkout HEAD the copy was taken from."
+    },
+    {
+      "fixture": "tests/fixtures/contracts/schema.sql",
+      "source_repo": null,
+      "source_revision": null,
+      "source_path": "docs/devel/implementation/contracts/schema.sql",
+      "surface": "schema",
+      "role": "contract-input",
+      "purpose": "contract test input: fresh database DDL consumed by src/db/schema_sql.h and DB tests",
+      "bytes": 7111,
+      "sha256": "9dacc4bda60e2a12e583454989dc41c9640c99c0ef41a29640a09e9e984dadc6",
+      "source_sha256": "9dacc4bda60e2a12e583454989dc41c9640c99c0ef41a29640a09e9e984dadc6",
+      "license": null,
+      "license_note": "Authored development contract from this repository under docs/devel (untracked); not an upstream fixture. Derived from the MIT-licensed Rust reference (tests/fixtures/LICENSE.rust-ref).",
+      "frozen_in_reference_files": false,
+      "pinned_revision": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+      "captured_from_revision": "b57cf39a11fafc4de148e727cdc3edf16c89db59",
+      "note": "docs/devel is gitignored, so no repository revision pins these bytes; sha256 is the authoritative pin. pinned_revision is the reference revision the contract encodes; captured_from_revision is the checkout HEAD the copy was taken from."
     }
   ],
   "seed": [
@@ -5622,30 +5676,6 @@
   ],
   "external_references": [
     {
-      "surface": "routes",
-      "path": "docs/devel/implementation/contracts/routes.json",
-      "kind": "contract-artifact",
-      "note": "ordered 177 routes; contract already in docs/, not duplicated",
-      "exists_at_authoring": true,
-      "sha256": "b8c34e442b768cc3727b257c41b4b2905c16d5b91f0d0873779c95f318435302"
-    },
-    {
-      "surface": "routes",
-      "path": "docs/devel/implementation/contracts/route-recognition.json",
-      "kind": "contract-artifact",
-      "note": "111 recognition vectors; contract already in docs/, not duplicated",
-      "exists_at_authoring": true,
-      "sha256": "e45c65cff9db6b554f9229b2530f1c8050f7458147f60a5944a02025dba12738"
-    },
-    {
-      "surface": "routes",
-      "path": "docs/devel/implementation/contracts/schema.sql",
-      "kind": "contract-artifact",
-      "note": "fresh schema; contract already in docs/, not duplicated",
-      "exists_at_authoring": true,
-      "sha256": "9dacc4bda60e2a12e583454989dc41c9640c99c0ef41a29640a09e9e984dadc6"
-    },
-    {
       "surface": "controllers",
       "path": "tmp/rust-ref/crates/campfire/src/controllers",
       "kind": "source-as-spec",
@@ -5707,8 +5737,8 @@
     }
   ],
   "totals": {
-    "fixture_files": 196,
-    "fixture_bytes": 11679323,
+    "fixture_files": 199,
+    "fixture_bytes": 11779581,
     "seed_files": 11,
     "seed_bytes": 49607
   }

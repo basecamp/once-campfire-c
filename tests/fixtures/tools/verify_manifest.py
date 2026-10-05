@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Recompute every SHA-256 in tests/fixtures/MANIFEST.json and audit the tree.
 
-Fails (exit 1) if a copied fixture is missing, has a different size or hash,
-if tests/fixtures/ contains files the manifest does not list, or if a
-repo-local external reference (a docs/ contract artifact) is missing or
-changed.  tmp/ external references are verified when the read-only oracle tree
-is present and reported as absent otherwise (tmp/ is not required at runtime).
+Fails (exit 1) if a copied fixture or contract input is missing, has a
+different size or hash, if tests/fixtures/ contains files the manifest does not
+list, or if a repo-local external reference is missing or changed.
+
+All required test inputs are committed: the route/schema development contracts
+are copied byte for byte into tests/fixtures/contracts/ and listed as
+role="contract-input" entries, so the default run succeeds in a clean checkout
+without docs/devel.  tmp/ external references are verified when the read-only
+oracle tree is present and reported as absent otherwise (tmp/ is not required
+at runtime); --require-tmp makes their absence fatal.
 
 Usage:
     python3 tests/fixtures/tools/verify_manifest.py [--require-tmp]
@@ -67,6 +72,17 @@ def main() -> int:
     for entry in manifest["seed"]:
         check(entry, "seed")
 
+    # Required contract inputs must carry their provenance; a missing field
+    # would make the committed copy unverifiable from the manifest alone.
+    contract_inputs = 0
+    for entry in manifest["entries"]:
+        if entry.get("role") != "contract-input":
+            continue
+        contract_inputs += 1
+        for key in ("source_path", "purpose", "pinned_revision", "captured_from_revision"):
+            if not entry.get(key):
+                errors.append(f"entry: contract input {entry['fixture']} lacks {key}")
+
     # The fixture tree must contain exactly the manifest-listed bytes (plus the
     # manifest and this tools/ directory).
     listed = {e["fixture"] for e in manifest["entries"]}
@@ -84,6 +100,11 @@ def main() -> int:
     for entry in manifest["external_references"]:
         rel = entry["path"]
         path = REPO_ROOT / rel
+        if rel.startswith("tests/fixtures/"):
+            errors.append(
+                f"external: {rel} is committed fixture content; list it as an entry instead"
+            )
+            continue
         if not path.exists():
             if rel.startswith("tmp/"):
                 if args.require_tmp:
@@ -112,6 +133,7 @@ def main() -> int:
     print(
         f"checked {checked} files, {bytes_total} bytes "
         f"(fixtures {totals['fixture_files']}, seed {totals['seed_files']}); "
+        f"contract inputs: {contract_inputs}; "
         f"external file references hashed: {external_checked}; "
         f"tmp/rust-ref present: {tmp_present}"
     )

@@ -6,9 +6,16 @@ from the repository root (or anywhere; paths are resolved from this file):
 
     python3 tests/db/gen_schema_sql.py
 
-It embeds docs/devel/implementation/contracts/schema.sql byte for byte as the
-CF_DB_SCHEMA_SQL macro and records the source path, byte count and SHA-256 in
-the header.  No schema changes are generated: the contract is copied exactly.
+It embeds the committed schema contract tests/fixtures/contracts/schema.sql
+byte for byte as the CF_DB_SCHEMA_SQL macro and records the source path, byte
+count and SHA-256 in the header.  That fixture is a byte-identical copy of
+docs/devel/implementation/contracts/schema.sql, with its provenance and hash
+pinned in tests/fixtures/MANIFEST.json (role="contract-input"), so
+regeneration needs committed inputs only.  No schema changes are generated:
+the contract is copied exactly.
+
+The generated header names the canonical contract path below; the committed
+fixture copy is byte-identical, and the emitted SHA-256 pins the bytes.
 """
 
 import hashlib
@@ -16,7 +23,8 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-CONTRACT = ROOT / "docs/devel/implementation/contracts/schema.sql"
+CONTRACT = ROOT / "tests" / "fixtures" / "contracts" / "schema.sql"
+CONTRACT_SOURCE = "docs/devel/implementation/contracts/schema.sql"
 OUT = ROOT / "src/db/schema_sql.h"
 
 
@@ -45,7 +53,7 @@ def main() -> int:
  *
  * Provenance
  * ----------
- * Source:      docs/devel/implementation/contracts/schema.sql
+ * Source:      {CONTRACT_SOURCE}
  * Source sha256: {digest}
  * Source bytes:  {len(data)}
  * Generated:   2026-10-04 by task D01 (db-core) from the contract revision
@@ -58,7 +66,7 @@ def main() -> int:
 #ifndef CF_DB_SCHEMA_SQL_H
 #define CF_DB_SCHEMA_SQL_H
 
-#define CF_DB_SCHEMA_SQL_SOURCE "docs/devel/implementation/contracts/schema.sql"
+#define CF_DB_SCHEMA_SQL_SOURCE "{CONTRACT_SOURCE}"
 #define CF_DB_SCHEMA_SQL_SHA256 "{digest}"
 #define CF_DB_SCHEMA_SQL_BYTES {len(data)}
 
