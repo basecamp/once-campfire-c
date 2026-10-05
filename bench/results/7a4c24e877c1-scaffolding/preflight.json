@@ -1,0 +1,244 @@
+{
+  "base": "http://127.0.0.1:55899",
+  "binary": "/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/build/dev/campfire",
+  "binary_sha256": "39e11f1948f6bb55bc99c4a84ccf5c19b9f8504df1d1d911c5f9a1713577a7b1",
+  "blocked_routes": [],
+  "complete": true,
+  "database": {
+    "avatar_attachment_rows": 0,
+    "avatar_blob_rows": 0,
+    "busy_room_messages": 131,
+    "busy_room_messages_gt_50": true,
+    "integrity_check": "ok",
+    "integrity_ok": true
+  },
+  "failed_routes": [],
+  "labels": {
+    "accounts.signal": 1,
+    "avatar_tokens.david": "eyJfcmFpbHMiOnsiZGF0YSI6MSwicHVyIjoidXNlci9hdmF0YXIifX0--023b16424a00933214f527b2dbc6cb54ffa966a5b4fa3375c0678891f4e168e1",
+    "avatar_tokens.jason": "eyJfcmFpbHMiOnsiZGF0YSI6MiwicHVyIjoidXNlci9hdmF0YXIifX0--18b8839b6557c9efbe30c5aa140bd88b7b723b705167ec563f69e2522adb22b3",
+    "clock.now": "2026-03-02T16:00:00Z",
+    "emails.david": "david@37signals.com",
+    "emails.jason": "jason@37signals.com",
+    "emails.kevin": "kevin@37signals.com",
+    "messages.busy_001": 11,
+    "messages.busy_060": 70,
+    "messages.busy_120": 130,
+    "passwords.all": "secret123456",
+    "rooms.designers": 3,
+    "rooms.hq": 2,
+    "rooms.watercooler": 1,
+    "users.bender": 5,
+    "users.david": 1,
+    "users.jason": 2,
+    "users.jz": 4,
+    "users.kevin": 3
+  },
+  "passed": true,
+  "pinned_preflight": {
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "",
+    "validation": {
+      "passed": true,
+      "populated_fixture_and_integrity": true,
+      "responses": {
+        "avatar": {
+          "body_bytes": 630,
+          "body_sha256": "a6b9988840ad75aaa3a2140cd9b901a7f036deb73e7a15d02bd42eb3029facb0",
+          "encoding": null,
+          "status": 200,
+          "type": "image/svg+xml; charset=utf-8",
+          "wire_bytes": 630
+        },
+        "messages_page": {
+          "body_bytes": 361636,
+          "body_sha256": "70aef3455e634238f286e0eee4d168a7d3099fbeffb031d91111708820bce6d1",
+          "encoding": null,
+          "status": 200,
+          "type": "text/html; charset=utf-8",
+          "wire_bytes": 361636
+        },
+        "room_show": {
+          "body_bytes": 395180,
+          "body_sha256": "47e75b3c04d012fa507202304f6ba089c6791cd9f94bb8cff0424faafe6bced3",
+          "encoding": null,
+          "status": 200,
+          "type": "text/html; charset=utf-8",
+          "wire_bytes": 395180
+        },
+        "search": {
+          "body_bytes": 149694,
+          "body_sha256": "a5482d1e0a6018aa0665cdf1cdfbf8336da02a3f72001ece0afb0fd07c20e5c2",
+          "encoding": null,
+          "status": 200,
+          "type": "text/html; charset=utf-8",
+          "wire_bytes": 149694
+        },
+        "sidebar": {
+          "body_bytes": 26835,
+          "body_sha256": "ed7fd4ddebdaef459dd7d8709b7be1691750639c45e866d234f8200a4c074f64",
+          "encoding": null,
+          "status": 200,
+          "type": "text/html; charset=utf-8",
+          "wire_bytes": 26835
+        },
+        "static_css": {
+          "body_bytes": 1218,
+          "body_sha256": "506e23f429d9d56fc5716e4dbe135c35dd0f017c6883290d58fab02ece4a141c",
+          "encoding": null,
+          "status": 200,
+          "type": "text/css",
+          "wire_bytes": 1218
+        },
+        "up": {
+          "body_bytes": 73,
+          "body_sha256": "7e6c9877b2dec7dfadc43e742246d94d515f703dc8e04611320aaca6e26c3af3",
+          "encoding": null,
+          "status": 200,
+          "type": "text/html; charset=utf-8",
+          "wire_bytes": 73
+        }
+      }
+    }
+  },
+  "routes": {
+    "avatar": {
+      "body_bytes": 630,
+      "body_sha256": "a6b9988840ad75aaa3a2140cd9b901a7f036deb73e7a15d02bd42eb3029facb0",
+      "checks": {
+        "avatar_bytes_gt_100": true,
+        "image_content_type": true,
+        "nonempty_body": true,
+        "not_redirect": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "image/svg+xml; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 630
+    },
+    "messages_page": {
+      "body_bytes": 361636,
+      "body_sha256": "70aef3455e634238f286e0eee4d168a7d3099fbeffb031d91111708820bce6d1",
+      "checks": {
+        "nonempty_body": true,
+        "not_redirect": true,
+        "populated_messages": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "text/html; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 361636
+    },
+    "room_show": {
+      "body_bytes": 395180,
+      "body_sha256": "47e75b3c04d012fa507202304f6ba089c6791cd9f94bb8cff0424faafe6bced3",
+      "checks": {
+        "nonempty_body": true,
+        "not_redirect": true,
+        "populated_messages": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "text/html; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 395180
+    },
+    "search": {
+      "body_bytes": 149694,
+      "body_sha256": "a5482d1e0a6018aa0665cdf1cdfbf8336da02a3f72001ece0afb0fd07c20e5c2",
+      "checks": {
+        "nonempty_body": true,
+        "not_redirect": true,
+        "populated_messages": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "text/html; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 149694
+    },
+    "sidebar": {
+      "body_bytes": 26835,
+      "body_sha256": "ed7fd4ddebdaef459dd7d8709b7be1691750639c45e866d234f8200a4c074f64",
+      "checks": {
+        "nonempty_body": true,
+        "not_redirect": true,
+        "shared_rooms": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "text/html; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 26835
+    },
+    "static_css": {
+      "body_bytes": 1218,
+      "body_sha256": "506e23f429d9d56fc5716e4dbe135c35dd0f017c6883290d58fab02ece4a141c",
+      "checks": {
+        "css_body": true,
+        "css_content_type": true,
+        "nonempty_body": true,
+        "not_redirect": true,
+        "status_200": true
+      },
+      "content_encoding": null,
+      "content_type": "text/css",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 1218
+    },
+    "up": {
+      "body_bytes": 73,
+      "body_sha256": "7e6c9877b2dec7dfadc43e742246d94d515f703dc8e04611320aaca6e26c3af3",
+      "checks": {
+        "nonempty_body": true,
+        "not_redirect": true,
+        "status_200": true,
+        "up_marker": true
+      },
+      "content_encoding": null,
+      "content_type": "text/html; charset=utf-8",
+      "passed": true,
+      "redirect": null,
+      "status": 200,
+      "wire_bytes": 73
+    }
+  },
+  "seed": {
+    "avatar_attachment_absent": true,
+    "avatar_token_label": "eyJfcmFpbHMiOnsiZGF0YSI6MiwicHVyIjoidXNlci9hdmF0YXIifX0--18b8839b6557c9efbe30c5aa140bd88b7b723b705167ec563f69e2522adb22b3",
+    "avatar_token_rendered_by_server": true,
+    "rendered_avatar_tokens": [
+      "eyJfcmFpbHMiOnsiZGF0YSI6MSwicHVyIjoidXNlci9hdmF0YXIifX0--023b16424a00933214f527b2dbc6cb54ffa966a5b4fa3375c0678891f4e168e1",
+      "eyJfcmFpbHMiOnsiZGF0YSI6MiwicHVyIjoidXNlci9hdmF0YXIifX0--18b8839b6557c9efbe30c5aa140bd88b7b723b705167ec563f69e2522adb22b3",
+      "eyJfcmFpbHMiOnsiZGF0YSI6MywicHVyIjoidXNlci9hdmF0YXIifX0--bc40f3a5184d42e6e2adaab7a9da5efdc31b02cc5bfc4c1b493357777cf6d666",
+      "eyJfcmFpbHMiOnsiZGF0YSI6NCwicHVyIjoidXNlci9hdmF0YXIifX0--d7d57e52a1e55ceb83873d307f9e1ad4755621f3e52ed646a4e399c2cf8413f6",
+      "eyJfcmFpbHMiOnsiZGF0YSI6NSwicHVyIjoidXNlci9hdmF0YXIifX0--45e5d348e3ccf4decf51225648e3e11c0f1b23b22e3d7ffca2f513fe4326d0fc"
+    ]
+  },
+  "seed_db_sha256": "a763014643b8e26d38f153e98647500e42ef2c305fdbaf24145fccdbcb9ae030",
+  "seed_divergence": {
+    "db_bytes": 266240,
+    "db_sha256": "a763014643b8e26d38f153e98647500e42ef2c305fdbaf24145fccdbcb9ae030",
+    "divergence": "The benchmark seed omits jason's avatar attachment so the fallback avatar path is exercised; /users/<token>/avatar therefore serves a generated initials SVG (image/svg+xml) rather than the reference's processed webp variant. This divergence is disclosed in every result file, and avatar rows must be read with the representation difference in mind.",
+    "importer": "bench/seed/import_seed.py",
+    "importer_sha256": "3b8aa22e987f51758570739ac7b50c37c9854aeec164f4011850040f857759cf",
+    "note": "Generated, not vendored: regenerate with `python3 bench/seed/import_seed.py --out bench/seed/.seed/default`. The db sha256 identifies the seed in every result directory (also written to env.txt and DIVERGENCE.md).",
+    "ruling": "integrator ruling, Phase 3 roadmap Contract changes: leave the preflight avatar user without an attachment so the fallback initials-SVG path is exercised; A-users-avatars show implements fallback paths only, no S02/S03",
+    "storage_files": 0
+  }
+}

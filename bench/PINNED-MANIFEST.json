@@ -1,0 +1,247 @@
+{
+ "format": 1,
+ "task": "B01",
+ "note": "Pinned Elixir benchmark harness vendored from basecamp/once-campfire-elixir at b6b82e50a653c4060136bb04e805eb78fd76ba10, the commit whose README published the Ruby/Elixir/Go/Rust medians quoted in docs/devel/port-experiment.md. bench/ is byte-identical at f15fc9eb609286f1e3da970e7dfd95e3bf69f82f (the fetch-time default-branch head; only README.md changed between the two); `git diff --stat b6b82e5 f15fc9e -- bench` is empty. Generated logs (bench/*.log) and the 2.5 MB bench/results subtrees are not vendored; the published results stay upstream and are referenced below. sha256 is over the vendored bytes. No build step fetches this tree.",
+ "source_repo": "https://github.com/basecamp/once-campfire-elixir",
+ "source_revision": "b6b82e50a653c4060136bb04e805eb78fd76ba10",
+ "fetched_via": "git clone --filter=blob:none --no-checkout https://github.com/basecamp/once-campfire-elixir.git && git archive b6b82e5 -- <paths> | tar -x",
+ "fetched_at_head": "f15fc9eb609286f1e3da970e7dfd95e3bf69f82f",
+ "license": {
+  "spdx": "MIT",
+  "file": "bench/pinned/once-campfire-elixir/MIT-LICENSE"
+ },
+ "entries": [
+  {
+   "path": "bench/pinned/once-campfire-elixir/MIT-LICENSE",
+   "source_path": "MIT-LICENSE",
+   "role": "license",
+   "sha256": "fa0d1454375cbc7701bc13d916c3ae71e613b8ae718321641e678e09409393c4",
+   "bytes": 1053,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/README.md",
+   "source_path": "bench/README.md",
+   "role": "harness-doc",
+   "sha256": "16a6ac4a173df5b2501ff74de762124a78e30a8fb790c081173dc774ecf82669",
+   "bytes": 5150,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/TUNING.md",
+   "source_path": "bench/TUNING.md",
+   "role": "harness-doc",
+   "sha256": "55909e374731c0079e0173cdf010d678c9027e2f9b47fc1001d59cb50dcac49b",
+   "bytes": 4037,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/compare",
+   "source_path": "bench/compare",
+   "role": "harness-tool",
+   "sha256": "f867f3ef5e9e7cc90d867b27a080abd04630284f85bff1f1b5ade39bc0d35f7f",
+   "bytes": 2483,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/job-state.py",
+   "source_path": "bench/job-state.py",
+   "role": "harness-tool",
+   "sha256": "a5f4fe0fa7e2c2f581e45a0e4d6c9fc4d85b54e3afbe576491f8bbdf55919b0b",
+   "bytes": 720,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/benchlib.py",
+   "source_path": "bench/lib/benchlib.py",
+   "role": "harness-library",
+   "sha256": "07bdd418ee0526b514d8a4df31cb282383fc06b5b92318c047453364e047d793",
+   "bytes": 15587,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/children.py",
+   "source_path": "bench/lib/children.py",
+   "role": "harness-library",
+   "sha256": "6df61c5fce488c391ef051ec1eff767e9f405966de69ccbb7a35d54f59e0f425",
+   "bytes": 1272,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/cpuprof.py",
+   "source_path": "bench/lib/cpuprof.py",
+   "role": "harness-library",
+   "sha256": "88e30fa2da07077b4efb9330a62ceb317f82078e83ef1cf815ddc187cc807d42",
+   "bytes": 10165,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/iotrace.c",
+   "source_path": "bench/lib/iotrace.c",
+   "role": "harness-library",
+   "sha256": "79d1dfaf34cd99d319b9ac0c24f9f19d5be2287bcb28414e498bfc1d0864f1e0",
+   "bytes": 1769,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/procmem.py",
+   "source_path": "bench/lib/procmem.py",
+   "role": "harness-library",
+   "sha256": "2e3483e01b5a51db634873b71500f6581897efd7a0867cf70ac3fff760c68adf",
+   "bytes": 3723,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/lib/share.py",
+   "source_path": "bench/lib/share.py",
+   "role": "harness-library",
+   "sha256": "a5cb99ae6e4e9838ac630829735fcdccb6646f6b0912ccb53ac08bdbdad90549",
+   "bytes": 981,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/loadgen/Cargo.lock",
+   "source_path": "bench/loadgen/Cargo.lock",
+   "role": "harness-loadgen",
+   "sha256": "3288af8c661aaa26b65377984008bc04457fcd416f2b9ecd423bec57f131ce6b",
+   "bytes": 19341,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/loadgen/Cargo.toml",
+   "source_path": "bench/loadgen/Cargo.toml",
+   "role": "harness-loadgen",
+   "sha256": "20c593331e3556ba4ea480cdc06e003d0dfc6f569eda36afb923ac77b97b22b3",
+   "bytes": 903,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/loadgen/src/main.rs",
+   "source_path": "bench/loadgen/src/main.rs",
+   "role": "harness-loadgen",
+   "sha256": "60979a1c90639cc565cce4670ad71450253b85ce26f64d805a09ec6e106f6f9c",
+   "bytes": 41674,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/profile-elixir",
+   "source_path": "bench/profile-elixir",
+   "role": "harness-profile",
+   "sha256": "d0c4c777dc9cf859b4d99186b8c53fd93e616c7b1c0a38716e85385d7a05d8a8",
+   "bytes": 3299,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/report",
+   "source_path": "bench/report",
+   "role": "harness-tool",
+   "sha256": "5d6cd51d7b466abc0741e290ae8765c091de21d1221c5efa5fb1caa87252e290",
+   "bytes": 8926,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/run",
+   "source_path": "bench/run",
+   "role": "harness-entrypoint",
+   "sha256": "aa362427d73aa532e55bd2dabe8bffc2d4d18d45232a4ec7fc0b7f696e57cf82",
+   "bytes": 17624,
+   "mode": "100755"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/bench/validate.py",
+   "source_path": "bench/validate.py",
+   "role": "harness-preflight",
+   "sha256": "8425b2c7f208fa88f62c26e30f4e9aa9be5c73f8f5eef93be3e404d144d36ef2",
+   "bytes": 2596,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/parity/reference.env",
+   "source_path": "parity/reference.env",
+   "role": "harness-config",
+   "sha256": "5f9669354423abdf3b4606668f23cdd5f3fb77318a7ce775bd1bc5458c8b08d5",
+   "bytes": 1096,
+   "mode": "100644"
+  },
+  {
+   "path": "bench/pinned/once-campfire-elixir/reference/test/fixtures/files/black_hole.jpg",
+   "source_repo": "https://github.com/basecamp/once-campfire",
+   "source_revision": "90b330024dec3e757c79b6a7e6568f93da8e3148",
+   "source_path": "test/fixtures/files/black_hole.jpg",
+   "role": "fixture-input",
+   "note": "505,420-byte JPEG used by the pinned upload suite; the Elixir harness pins this Rails reference revision as its submodule",
+   "sha256": "c2bb690aae06d44635f525a8a5594e286e10a5fb547d116e1a7d38e3782e7a09",
+   "bytes": 505420,
+   "mode": "100644"
+  }
+ ],
+ "external_references": [
+  {
+   "surface": "results",
+   "path": "bench/results/ruby-elixir-go-rust-20261004/report.md",
+   "url": "https://github.com/basecamp/once-campfire-elixir/blob/b6b82e5/bench/results/ruby-elixir-go-rust-20261004/report.md",
+   "note": "published four-way report the README medians come from; not vendored"
+  },
+  {
+   "surface": "results",
+   "path": "bench/results/baseline-20261004/report.md",
+   "url": "https://github.com/basecamp/once-campfire-elixir/blob/b6b82e5/bench/results/baseline-20261004/report.md",
+   "note": "Elixir baseline result directory (raw json, env.txt, validation) behind the report"
+  },
+  {
+   "surface": "seed",
+   "path": "parity/.seed/default",
+   "url": "https://github.com/basecamp/once-campfire-rust/tree/64f86353021145b63849fb1cd93adeb08f3b8dbb/parity",
+   "note": "published workload seed the harness reads (RUST_ROOT/parity/.seed/default); built by the Ruby recipes vendored in tests/seed/, not committed upstream. bench/seed/import_seed.py synthesizes the benchmark-relevant equivalent into the C schema; the seed hash is recorded per run."
+  }
+ ],
+ "seed": {
+  "importer": "bench/seed/import_seed.py",
+  "importer_sha256": "3b8aa22e987f51758570739ac7b50c37c9854aeec164f4011850040f857759cf",
+  "db_sha256": "a763014643b8e26d38f153e98647500e42ef2c305fdbaf24145fccdbcb9ae030",
+  "db_bytes": 266240,
+  "storage_files": 0,
+  "divergence": "The benchmark seed omits jason's avatar attachment so the fallback avatar path is exercised; /users/<token>/avatar therefore serves a generated initials SVG (image/svg+xml) rather than the reference's processed webp variant. This divergence is disclosed in every result file, and avatar rows must be read with the representation difference in mind.",
+  "ruling": "integrator ruling, Phase 3 roadmap Contract changes: leave the preflight avatar user without an attachment so the fallback initials-SVG path is exercised; A-users-avatars show implements fallback paths only, no S02/S03",
+  "note": "Generated, not vendored: regenerate with `python3 bench/seed/import_seed.py --out bench/seed/.seed/default`. The db sha256 identifies the seed in every result directory (also written to env.txt and DIVERGENCE.md)."
+ },
+ "images": {
+  "note": "Production images built for the B01b comparison rows, 2026-10-05. Source checkouts are bench/.work/rust-ref (gitignored, a dedicated clone; tmp/rust-ref stays the shared oracle). Durations are cache-warm (BuildKit layers reused from earlier parity builds). Image Ids are recorded per run in env.txt; the published comparison used the same source revisions.",
+  "built_at": "2026-10-05",
+  "entries": [
+   {
+    "app": "rust",
+    "image": "campfire-rust:app",
+    "source_repo": "https://github.com/basecamp/once-campfire-rust",
+    "source_revision": "1ea6d6f6b24fd21e7d01e69b7c92df5c380bcbde",
+    "submodule": {
+     "path": "reference",
+     "repo": "https://github.com/basecamp/once-campfire",
+     "revision": "90b330024dec3e757c79b6a7e6568f93da8e3148"
+    },
+    "dockerfile": "Dockerfile",
+    "dockerfile_sha256": "88898806f6c40a7d9d252453f9cc4ff999be0b139c2b08ed830c8c568fbf5e38",
+    "build_command": "docker build -t campfire-rust:app -f Dockerfile --build-arg APP_VERSION=parity --build-arg GIT_REVISION=90b330024dec3e757c79b6a7e6568f93da8e3148 .",
+    "image_id": "sha256:e21301de680434ef8346575cb08322234761baa2b97df0827c7fd085132fa454",
+    "size_bytes": 71131348,
+    "duration_seconds": 183,
+    "build_log": "bench/results/7a4c24e877c1-b01b-images/rust-build.log",
+    "validation": "bench/results/7a4c24e877c1-b01b-images/rust-preflight.json"
+   },
+   {
+    "app": "reference",
+    "image": "campfire-reference:app",
+    "source_repo": "https://github.com/basecamp/once-campfire",
+    "source_revision": "90b330024dec3e757c79b6a7e6568f93da8e3148",
+    "dockerfile": "Dockerfile",
+    "dockerfile_sha256": "46f3244de07b7c3f652216ed03374aaeeb3f2c90c8a5ee0aff9bf72d58f65d46",
+    "build_command": "docker build -t campfire-reference:app -f reference/Dockerfile --build-arg APP_VERSION=parity --build-arg GIT_REVISION=90b330024dec3e757c79b6a7e6568f93da8e3148 reference",
+    "image_id": "sha256:3a49887062ac56790d9143ffbd5f9252121d1a6a677c2d05e9adeddb379b6cf4",
+    "size_bytes": 359063494,
+    "duration_seconds": 114,
+    "build_log": "bench/results/7a4c24e877c1-b01b-images/rails-build.log",
+    "validation": "bench/results/7a4c24e877c1-b01b-images/rails-preflight.json"
+   }
+  ]
+ }
+}

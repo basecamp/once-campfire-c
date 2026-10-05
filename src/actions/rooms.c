@@ -332,14 +332,27 @@ cf_err cf_action_rooms_index(cf_ctx *ctx) {
 cf_err cf_action_rooms_show(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
 
+    /* K01c: capture the version before authentication (06 step 1). The round
+     * serves a hit below, after authorization and the per-request cookie
+     * work, and admits after the render (context.h has the recipe). */
+    cf_cache_round round;
+    cf_cache_round_init(ctx, &round);
+    /* The Turbo-Frame header selects the frame layout and is also a key field;
+     * computing it here keeps the hit path byte-exact. */
+    bool frame = rooms_turbo_frame_request(ctx->request);
+
     cf_before policy = {CF_AUTH_REQUIRED, true, true};
     cf_err rc = cf_before_actions(ctx, policy);
-    if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
+    if (rc != CF_OK || cf_auth_halted(ctx)) {
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
 
     cf_user user = {0};
     rc = rooms_current_user(ctx, &user);
     if (rc != CF_OK) {
         cf_user_dispose(&user);
+        cf_cache_round_dispose(&round);
         return rc;
     }
 
@@ -348,15 +361,40 @@ cf_err cf_action_rooms_show(cf_ctx *ctx) {
     if (rc != CF_OK || cf_auth_halted(ctx)) {
         cf_room_dispose(&room);
         cf_user_dispose(&user);
+        cf_cache_round_dispose(&round);
         return rc;
     }
 
+    /* Cache lookup after authorization, before the presenter gather, and
+     * before remember_last_room mutates the last_room cookie: the key carries
+     * the request's incoming cookie, not the response's. */
+    cf_cached_body cached = {0};
+    bool hit = round.cache != NULL &&
+               cf_cache_round_lookup(
+                   ctx, &round,
+                   rooms_span("text/html; charset=utf-8"), &cached) == CF_OK;
+
     rc = rooms_remember_last_room(ctx, room.id);
     if (rc != CF_OK) {
+        cf_cached_body_dispose(&cached);
         cf_room_dispose(&room);
         cf_user_dispose(&user);
+        cf_cache_round_dispose(&round);
         return rc;
     }
+
+    if (hit) {
+        rc = cf_cache_serve_hit(ctx, &round, &cached);
+        cf_cached_body_dispose(&cached);
+        /* The page layout's preload Link header is not part of the cached
+         * representation; the same deterministic links are re-emitted. */
+        if (rc == CF_OK && !frame) rc = rooms_link_header(ctx);
+        cf_room_dispose(&room);
+        cf_user_dispose(&user);
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
+    cf_cached_body_dispose(&cached);
 
     /* `render_show`: the presenter read (page around params[:message_id] when
      * it names a message of this room, else the last page; invitation; join
@@ -374,13 +412,17 @@ cf_err cf_action_rooms_show(cf_ctx *ctx) {
                                 &model);
     cf_room_dispose(&room);
     cf_user_dispose(&user);
-    if (rc != CF_OK) return rc;
+    if (rc != CF_OK) {
+        cf_cache_round_dispose(&round);
+        return rc;
+    }
 
     const cf_format *offered[1] = {&cf_format_html};
     const cf_format *chosen = NULL;
     rc = cf_ctx_respond_to(ctx, offered, 1, &chosen);
     if (rc != CF_OK) {
         cf_view_room_show_model_dispose(&model);
+        cf_cache_round_dispose(&round);
         return rc;
     }
 
@@ -388,12 +430,12 @@ cf_err cf_action_rooms_show(cf_ctx *ctx) {
     rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
     if (rc != CF_OK) {
         cf_view_room_show_model_dispose(&model);
+        cf_cache_round_dispose(&round);
         return rc;
     }
     cf_view_ctx view_ctx;
     cf_view_ctx_init(&view_ctx, ctx, &layout);
 
-    bool frame = rooms_turbo_frame_request(ctx->request);
     cf_builder body = {0};
     rc = frame ? cf_view_room_show_frame(&view_ctx, &model, &body)
                : cf_view_room_show(&view_ctx, &model, &body);
@@ -405,6 +447,10 @@ cf_err cf_action_rooms_show(cf_ctx *ctx) {
 
     cf_view_layout_model_dispose(&layout);
     cf_view_room_show_model_dispose(&model);
+    /* K01c: representation + admission after the render; the presenter's read
+     * transaction is closed and no cache lock is held here. */
+    cf_cache_round_finish(ctx, &round);
+    cf_cache_round_dispose(&round);
     return rc;
 }
 

@@ -91,6 +91,9 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/http/output.c \
 	src/routes.c \
 	src/assets.c \
+	src/cache.c \
+	src/encoding.c \
+	src/gzip.c \
 	src/views/escape.c \
 	src/views/ctx.c \
 	src/views/render.c \
@@ -104,15 +107,24 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/views/messages.c \
 	src/views/pwa.c \
 	src/views/model.c \
+	src/views/users_sidebars.c \
+	src/views/searches.c \
+	src/views/users_avatars.c \
 	src/presenters/accounts.c \
 	src/presenters/layout.c \
 	src/presenters/messages.c \
 	src/presenters/rooms.c \
+	src/presenters/sidebars.c \
+	src/presenters/searches.c \
 	src/actions/first_runs.c \
 	src/actions/messages.c \
 	src/actions/rooms.c \
 	src/actions/sessions.c \
 	src/actions/users/bans.c \
+	src/actions/users/sidebars.c \
+	src/actions/searches.c \
+	src/cache_key.c \
+	src/actions/users/avatars.c \
 	src/actions/welcome.c \
 	$(AUTH_SRCS) \
 	$(MODEL_SRCS) \
@@ -250,6 +262,8 @@ UNIT_TEST_SRCS := \
 	tests/db/test_statements.c \
 	tests/db/test_time.c \
 	tests/http/test_params.c \
+	tests/http/test_gzip.c \
+	tests/http/test_encoding.c \
 	tests/views/test_escape.c \
 	tests/views/test_presenters.c \
 	tests/views/test_presenters_messages.c \
@@ -257,6 +271,9 @@ UNIT_TEST_SRCS := \
 	tests/routes/test_routes_recognition.c \
 	tests/routes/test_builtins.c \
 	tests/assets/test_assets.c \
+	tests/cache/test_cache.c \
+	tests/cache/test_cache_threads.c \
+	tests/cache/test_cache_key.c \
 	tests/richtext/test_corpus.c \
 	tests/richtext/test_richtext.c \
 	tests/cable/test_cable_handshake.c \
@@ -351,7 +368,10 @@ VIEWS_BUCKET_SRCS := \
 	tests/views/test_welcome.c \
 	tests/views/test_layout.c \
 	tests/views/test_rooms.c \
-	tests/views/test_messages.c
+	tests/views/test_messages.c \
+	tests/views/test_users_avatars.c \
+	tests/views/test_users_sidebars.c \
+	tests/views/test_searches.c
 VIEWS_TEST_BIN := $(TESTS_DIR)/views/test_views
 VIEWS_MAIN_OBJ := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_MAIN_SRC))
 VIEWS_SUPPORT_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_SUPPORT_SRCS))
@@ -371,6 +391,9 @@ ACTIONS_TEST_SRCS := \
 	tests/actions/messages_test.c \
 	tests/actions/rooms_test.c \
 	tests/actions/users_bans_test.c \
+	tests/actions/users_avatars_test.c \
+	tests/actions/users_sidebars_test.c \
+	tests/actions/searches_test.c \
 	tests/actions/welcome_test.c \
 	tests/actions/sessions_test.c
 ACTIONS_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(ACTIONS_TEST_SRCS))
@@ -392,7 +415,8 @@ AUTH_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(AUTH_TEST_SRCS))
 # completion queue) and the app/config suite touched by the shutdown path.
 TSAN_TEST_SRCS := tests/core/test_buffer.c tests/config/test_config.c \
 	tests/db/test_writer.c tests/jobs/test_jobs_writer.c \
-	tests/cable/test_cable_queue.c tests/cable/test_cable_live.c
+	tests/cable/test_cable_queue.c tests/cable/test_cable_live.c \
+	tests/cache/test_cache_threads.c
 TSAN_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_TEST_SRCS))
 TSAN_HTTP_TEST_SRCS := tests/http/test_http_completion.c
 TSAN_HTTP_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_HTTP_TEST_SRCS))
@@ -541,6 +565,18 @@ $(TESTS_DIR)/http/test_params: $(MODE_OBJ)/tests/http/test_params.o \
 		$(MODE_OBJ)/tests/http/params_vectors.o \
 		$(APP_LIB_OBJS) $(MODE_DEP_LIBS) -lm -o $@
 
+# K01c's dispatch-level cache admission suite builds against the route
+# double + views support (like the actions bucket), not the plain unit link.
+CACHE_ADMISSION_TEST_BIN := $(TESTS_DIR)/cache/test_cache_admission
+$(CACHE_ADMISSION_TEST_BIN): $(MODE_OBJ)/tests/cache/test_cache_admission.o \
+		$(APP_DOUBLE_OBJ) $(VIEWS_SUPPORT_OBJS) $(APP_GOLDEN_BUCKET_OBJS) \
+		$(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) -Itests/views \
+		$(MODE_OBJ)/tests/cache/test_cache_admission.o $(APP_DOUBLE_OBJ) \
+		$(VIEWS_SUPPORT_OBJS) $(APP_GOLDEN_BUCKET_OBJS) \
+		$(MODE_DEP_LIBS) -lm -o $@
+
 # H01 binaries share the test_http_common.c auxiliary translation unit.
 $(HTTP_TEST_BINS): $(TESTS_DIR)/http/%: $(MODE_OBJ)/tests/http/%.o \
 		$(HTTP_COMMON_OBJ) $(APP_LIB_OBJS) $(MODE_DEP_LIBS) | check-cc
@@ -612,11 +648,11 @@ $(APP_WIRING_TEST_BIN): $(MODE_OBJ)/tests/app/test_dispatch_wiring.o \
 # is nonzero if any binary, or the app checks, failed.
 test-impl: $(BIN) $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) \
 		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS) $(VIEWS_TEST_BIN) \
-		$(ACTIONS_TEST_BINS) $(TEST_OBJS)
+		$(ACTIONS_TEST_BINS) $(CACHE_ADMISSION_TEST_BIN) $(TEST_OBJS)
 	@fail=0; \
 	for t in $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) \
 		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS) $(VIEWS_TEST_BIN) \
-		$(ACTIONS_TEST_BINS); do \
+		$(ACTIONS_TEST_BINS) $(CACHE_ADMISSION_TEST_BIN); do \
 		echo "-- $$t"; \
 		$(RUN_ENV) "$$t" || fail=1; \
 	done; \
@@ -660,4 +696,4 @@ tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) \
 	$(MODE_OBJ)/tests/cable/*.d $(MODE_OBJ)/tests/jobs/*.d \
 	$(MODE_OBJ)/tests/storage/*.d $(MODE_OBJ)/tests/actions/*.d \
 	$(MODE_OBJ)/tests/views/*.d $(MODE_OBJ)/tests/views/support/*.d \
-	$(MODE_OBJ)/tests/support/*.d
+	$(MODE_OBJ)/tests/support/*.d $(MODE_OBJ)/tests/cache/*.d

@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <stdarg.h>
@@ -156,11 +157,41 @@ static void finish_flow(struct cf_http_conn *conn) {
     }
 }
 
+/* hyper caps a vectored flush at 64 buffers (MAX_WRITEV_BUFS in
+ * hyper-1.11.1 src/proto/h1/io.rs); the port batches the same way. */
+#define CF_HTTP_FLUSH_IOV_MAX 64
+
 void cf_http_conn_flush(struct cf_http_conn *conn) {
     while (conn->fd >= 0 && conn->out_head != NULL) {
-        struct cf_http_out_seg *s = conn->out_head;
-        ssize_t n = send(conn->fd, s->ptr + s->sent, seg_unsent(s),
-                         MSG_NOSIGNAL); /* SIGPIPE suppressed per send */
+        /* The reference's HTTP/1 server queues the serialized head and the
+         * first body bytes into one write buffer and flushes them with a
+         * single vectored write (hyper io.rs WriteStrategy::Queue ->
+         * poll_write_vectored), so head+body leave together instead of as
+         * two small sends. MSG_NOSIGNAL keeps SIGPIPE suppressed per call
+         * exactly as the previous single-segment send did. */
+        struct iovec iov[CF_HTTP_FLUSH_IOV_MAX];
+        int iovcnt = 0;
+        for (struct cf_http_out_seg *s = conn->out_head;
+             s != NULL && iovcnt < CF_HTTP_FLUSH_IOV_MAX; s = s->next) {
+            size_t len = seg_unsent(s);
+            if (len == 0) continue; /* defensive: empty segments never queue */
+            iov[iovcnt].iov_base = (void *)(s->ptr + s->sent);
+            iov[iovcnt].iov_len = len;
+            iovcnt++;
+        }
+        if (iovcnt == 0) break; /* defensive: no unsent segment to write */
+
+        ssize_t n;
+        if (iovcnt == 1) {
+            n = send(conn->fd, iov[0].iov_base, iov[0].iov_len,
+                     MSG_NOSIGNAL);
+        } else {
+            struct msghdr msg;
+            memset(&msg, 0, sizeof msg);
+            msg.msg_iov = iov;
+            msg.msg_iovlen = (size_t)iovcnt;
+            n = sendmsg(conn->fd, &msg, MSG_NOSIGNAL);
+        }
         cf_http_write_result r =
             cf_http_output_apply(conn, n, n < 0 ? errno : 0);
         if (r == CF_HTTP_WRITE_RETRY) continue;

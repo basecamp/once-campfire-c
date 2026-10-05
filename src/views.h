@@ -366,6 +366,37 @@ typedef struct {
 
 void cf_view_message_edit_model_dispose(cf_view_message_edit_model *model);
 
+/* --------------------------------------------------------- searches models */
+
+/* An owned list of owned strings (searches::IndexView's recent searches). */
+typedef struct {
+    cf_str *items;
+    size_t len, cap;
+} cf_view_str_vector;
+
+void cf_view_str_vector_dispose(cf_view_str_vector *vector);
+
+/* `searches::IndexView` (crates/views/src/searches.rs), the data
+ * searches/index.html.erb renders. */
+typedef struct {
+    /* `@query`: params[:q] with every non-word character turned into a space,
+     * present exactly when the param was. */
+    bool has_query;
+    cf_str query; /* owned when has_query */
+    /* `params[:q]` as submitted, the search field's value. */
+    bool has_q;
+    cf_str q; /* owned when has_q */
+    /* `Current.user.reachable_messages.search(query).last(100)`. */
+    cf_view_message_item_vector messages;
+    /* `Current.user.searches.ordered.pluck(:query)`, newest first. */
+    cf_view_str_vector recent_searches;
+    /* `last_room_visited.id` where the exit button goes (`unwrap_or_default`:
+     * 0 when the user has no room). */
+    int64_t return_to_room_id;
+} cf_view_searches_index_model;
+
+void cf_view_searches_index_model_dispose(cf_view_searches_index_model *model);
+
 /* ----------------------------------------------------- users presenter */
 
 /* A users row as the message/room views see it: `UserView` (name, User#title,
@@ -418,6 +449,90 @@ cf_err cf_presenter_message_edit(cf_ctx *ctx, const cf_message *row,
 /* `messages::BoostView` for one boost row (booster loaded here). */
 cf_err cf_presenter_boost(cf_ctx *ctx, const cf_boost *row,
                           cf_view_boost *out);
+
+/* ------------------------------------------------------ sidebar presenters */
+
+/* `users::UserSummary` as the sidebar templates read it: the id, the name and
+ * the token-based `fresh_user_avatar_path`.  The full summary (bio, role,
+ * status, transfer ids, ...) belongs to A-users; the sidebar never reads the
+ * extra fields, so the presenter does not load them. */
+typedef struct {
+    int64_t id;
+    cf_str name;        /* owned */
+    cf_str avatar_path; /* owned: fresh_user_avatar_path (S02 does not change it) */
+} cf_view_sidebar_user;
+
+void cf_view_sidebar_user_dispose(cf_view_sidebar_user *user);
+
+typedef struct {
+    cf_view_sidebar_user *items;
+    size_t len, cap;
+} cf_view_sidebar_user_vector;
+
+void cf_view_sidebar_user_vector_dispose(cf_view_sidebar_user_vector *vector);
+
+/* `users::SidebarDirect`: one `users/sidebars/rooms/_direct` membership. */
+typedef struct {
+    int64_t room_id;
+    bool unread;
+    cf_str updated_at_epoch; /* owned: room.updated_at.to_fs(:epoch) text */
+    /* `room.users.without(membership.user).presence || [ membership.user ]` */
+    cf_view_sidebar_user_vector members;
+} cf_view_sidebar_direct;
+
+void cf_view_sidebar_direct_dispose(cf_view_sidebar_direct *membership);
+
+typedef struct {
+    cf_view_sidebar_direct *items;
+    size_t len, cap;
+} cf_view_sidebar_direct_vector;
+
+void cf_view_sidebar_direct_vector_dispose(
+    cf_view_sidebar_direct_vector *vector);
+
+/* `users::SidebarRoom`: one `users/sidebars/rooms/_shared` room. */
+typedef struct {
+    int64_t id;
+    cf_str param_key; /* owned: "rooms_open" / "rooms_closed" / "rooms_direct" */
+    cf_str name;      /* owned; empty for a nameless room */
+    bool unread;
+} cf_view_sidebar_room;
+
+void cf_view_sidebar_room_dispose(cf_view_sidebar_room *room);
+
+typedef struct {
+    cf_view_sidebar_room *items;
+    size_t len, cap;
+} cf_view_sidebar_room_vector;
+
+void cf_view_sidebar_room_vector_dispose(cf_view_sidebar_room_vector *vector);
+
+/* `users::SidebarShow` (Users::SidebarsController#show). */
+typedef struct {
+    cf_view_sidebar_user current_user; /* owned */
+    cf_str rooms_stream;               /* owned: signed_stream_name(:rooms) */
+    cf_str user_rooms_stream;          /* owned: signed_stream_name([user, :rooms]) */
+    cf_view_sidebar_direct_vector direct_memberships;       /* owned */
+    cf_view_sidebar_user_vector direct_placeholder_users;   /* owned */
+    cf_view_sidebar_room_vector other_memberships;          /* owned */
+    /* `Current.user.administrator? || !account.settings.restrict_room_creation_to_administrators?` */
+    bool can_create_rooms;
+} cf_view_sidebar_model;
+
+void cf_view_sidebar_model_dispose(cf_view_sidebar_model *model);
+
+/* `Users::SidebarsController::DIRECT_PLACEHOLDERS` (the placeholder limit). */
+#define CF_VIEW_SIDEBAR_DIRECT_PLACEHOLDERS 20
+
+/* The sidebar read, inside one read transaction on ctx->reader: the visible
+ * memberships (direct rooms sorted by room.updated_at descending, stable, and
+ * the rest in `Membership::visible_with_ordered_room` order), the direct
+ * placeholder users, the account's room-creation setting and the two signed
+ * stream names.  No fragment cache exists yet, so direct memberships always
+ * carry their view (the A02 message-item precedent); `user` is the
+ * authenticated row the controller already resolved. */
+cf_err cf_presenter_sidebar(cf_ctx *ctx, const cf_user *user,
+                            cf_view_sidebar_model *out);
 
 /* ------------------------------------------------------------- renderers */
 
@@ -509,6 +624,39 @@ cf_err cf_view_message_destroy_stream(const cf_view_message *message,
 /* messages/room_not_found.html.erb inside the application layout. */
 cf_err cf_view_message_room_not_found(const cf_view_ctx *ctx, cf_builder *out);
 
+/* users/sidebars/show.html.erb (page and turbo-rails frame): the room list
+ * for the `user_sidebar` turbo frame.  The content block wraps itself in
+ * `sidebar_turbo_frame_tag` (no src), so the page's sidebar region is empty
+ * and the frame response carries the same content in turbo-rails' frame
+ * layout. */
+cf_err cf_view_users_sidebar_show(const cf_view_ctx *ctx,
+                                  const cf_view_sidebar_model *model,
+                                  cf_builder *out);
+cf_err cf_view_users_sidebar_show_frame(const cf_view_ctx *ctx,
+                                        const cf_view_sidebar_model *model,
+                                        cf_builder *out);
+
+/* users/sidebars/rooms/_direct.html.erb and _shared.html.erb on their own
+ * (the sidebar includes them; the room broadcasts render a single room). */
+cf_err cf_view_sidebar_direct_partial(const cf_view_ctx *ctx,
+                                      const cf_view_sidebar_direct *membership,
+                                      cf_builder *out);
+cf_err cf_view_sidebar_shared_partial(const cf_view_sidebar_room *room,
+                                      cf_builder *out);
+
+/* `SearchesHelper#search_path`: "/searches?q=" + CGI.escape(query) into the
+ * caller's builder (the renderer's links and the create action's redirect).
+ * The builder is left at its entry length on failure. */
+cf_err cf_view_searches_search_path(cf_span query, cf_builder *out);
+
+/* searches/index.html.erb (page and turbo-rails frame). */
+cf_err cf_view_searches_index(const cf_view_ctx *ctx,
+                              const cf_view_searches_index_model *model,
+                              cf_builder *out);
+cf_err cf_view_searches_index_frame(const cf_view_ctx *ctx,
+                                    const cf_view_searches_index_model *model,
+                                    cf_builder *out);
+
 /* messages/boosts/index and messages/boosts/new (pages and frames). */
 cf_err cf_view_boosts_index(const cf_view_ctx *ctx,
                             const cf_view_message *message, cf_builder *out);
@@ -520,6 +668,16 @@ cf_err cf_view_new_boost(const cf_view_ctx *ctx, const cf_view_message *message,
 cf_err cf_view_new_boost_frame(const cf_view_ctx *ctx,
                                const cf_view_message *message,
                                const cf_view_user *user, cf_builder *out);
+
+/* ------------------------------------------------------- users avatars */
+
+/* `users/avatars/show.svg.erb` (crates/views/src/users.rs `AvatarSvg`): the
+ * initials avatar A-users-avatars serves for a non-bot user without an
+ * uploaded avatar.  `initials` is `User#initials` (cf_user_initials); the
+ * fill color is `avatar_background_color(user_id)`.  Pure render: no rows,
+ * no filesystem.  On failure the builder is unchanged. */
+cf_err cf_view_users_avatar_svg(int64_t user_id, cf_span initials,
+                                cf_builder *out);
 
 /* The 8 MiB output cap (03-application.md A02). */
 #define CF_VIEWS_MAX_OUTPUT (8u * 1024u * 1024u)

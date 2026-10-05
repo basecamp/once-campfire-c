@@ -20,6 +20,7 @@
 
 #include "auth/platform.h"
 #include "cf.h"
+#include "encoding.h" /* cf_encoding (K01c round state) */
 
 /* ---- dispatch ---------------------------------------------------------- */
 
@@ -187,6 +188,12 @@ bool cf_ctx_flash_at(const cf_ctx *ctx, size_t index, cf_span *key,
 bool cf_ctx_flash_pending_at(const cf_ctx *ctx, size_t index, cf_span *key,
                              cf_span *value);
 
+/* True when the flash map holds any entry right now (loaded from the session
+ * or set during the request, consumed or not). Never loads the map, so a
+ * request that did not touch the flash reports false. K01c: a flash-bearing
+ * body bypasses the body cache entirely. */
+bool cf_ctx_flash_present(const cf_ctx *ctx);
+
 /* reset_session drops the flash (the reference sets flash = None); A01's
  * terminate_current_session calls it. */
 void cf_ctx_flash_reset(cf_ctx *ctx);
@@ -248,5 +255,98 @@ const cf_format *cf_ctx_rendered_format(cf_ctx *ctx);
 /* request.should_apply_vary_header?: the format came from the Accept header
  * (not a format param) and the header is one Rails uses for negotiation. */
 bool cf_ctx_vary_accept(const cf_ctx *ctx);
+
+/* ---- K01c complete-body cache admission (06 "K01: complete-body cache") ---
+ *
+ * One admitted action uses this five-call round (src/context.c implements it;
+ * the field struct below is private state despite its visibility):
+ *
+ *   cf_cache_round round;
+ *   cf_cache_round_init(ctx, &round);            // as the first statement
+ *   ... cf_before_actions / authorization / per-request cookie work ...
+ *   cf_cached_body cached = {0};
+ *   bool hit = round.cache != NULL &&
+ *              cf_cache_round_lookup(ctx, &round, content_type, &cached) == CF_OK;
+ *   if (hit) {
+ *       rc = cf_cache_serve_hit(ctx, &round, &cached);   // representation + 304
+ *       cf_cached_body_dispose(&cached);
+ *       cf_cache_round_dispose(&round);
+ *       return rc;
+ *   }
+ *   ... gather (one read transaction) and render ...
+ *   cf_cache_round_finish(ctx, &round);          // representation + admission
+ *   cf_cache_round_dispose(&round);
+ *
+ * Lookup must follow authentication/authorization and any cookie write that
+ * changes a keyed cookie (rooms#show's remember_last_room reads the incoming
+ * last_room cookie, so lookup precedes it) and must precede the data gather.
+ * Finish must run after the render and after the read transaction ended.
+ * cf_cache_round_dispose is safe on every path, including before a lookup.
+ *
+ * All four admitted handlers are wired: rooms#show (96, 101),
+ * messages#index (76, 137), users/sidebars#show (57) and searches#index (146)
+ * are in cache_route_admitted (src/context.c) and follow this recipe. A
+ * handler-local validator or Vary must be skipped while the round owns the
+ * response (cf_cache_representation_active), as messages#index and
+ * searches#index do. Nothing else in the round is handler-specific; the
+ * content type is passed at lookup so a hit reproduces the miss's
+ * representation. */
+
+typedef struct cf_cache_round cf_cache_round;
+
+struct cf_cache_round {
+    bool active;           /* representation pipeline owns this response */
+    cf_cache *cache;       /* borrowed; NULL when body caching is disabled */
+    uint64_t version;      /* captured before the read; admission compares it */
+    cf_builder key;        /* built at lookup, reused by finish */
+    bool key_built;
+    bool unacceptable;     /* both codings forbidden: 406 at finish */
+    cf_encoding encoding;  /* selected coding (key field 3) */
+    cf_span content_type;  /* borrowed; the caller's representation type */
+};
+
+/* Zero *round; when the request is eligible (admitted route, GET/HEAD wire
+ * method) round->active is set and the coding selection (06 field 3) is made
+ * -- this is the always-on representation, independent of the cache. When an
+ * enabled cache exists it is borrowed into round->cache and the data version
+ * is captured before the authentication/read work; without one round->cache
+ * stays NULL and only storage/reuse is off. */
+void cf_cache_round_init(cf_ctx *ctx, cf_cache_round *round);
+
+/* Build the key (06 fields 1-7) and look up under the cache/version mutex
+ * (cf_cache_get takes it; the caller must not hold it). Only callable when
+ * round->cache is non-NULL (the four actions guard the call). CF_OK and a
+ * filled *out on a hit; CF_NOT_FOUND for a miss, no cache, an unacceptable
+ * Accept-Encoding (406 at finish) or any internal failure -- the caller
+ * serves the computed response either way. */
+cf_err cf_cache_round_lookup(cf_ctx *ctx, cf_cache_round *round,
+                             cf_span content_type, cf_cached_body *out);
+
+/* Serve a hit: 200 identity/gzip representation (or 304 when If-None-Match
+ * matches), with Content-Type, ETag, Vary and Content-Encoding. Cookie
+ * bookkeeping already ran; cf_finish_cookies still runs after the action. */
+cf_err cf_cache_serve_hit(cf_ctx *ctx, cf_cache_round *round,
+                          cf_cached_body *body);
+
+/* Apply the representation: gzip/identity and Vary always (the 406
+ * replacement for an unacceptable encoding), plus -- only when round->cache
+ * is non-NULL -- the weak body-hash ETag, the 304 conversion and the 200 GET
+ * admission when the captured version is still current. Never fails the
+ * page: every internal failure leaves the computed response in place. */
+void cf_cache_round_finish(cf_ctx *ctx, cf_cache_round *round);
+
+/* Release the round's key; safe on an unused or zeroed round, idempotent. */
+void cf_cache_round_dispose(cf_cache_round *round);
+
+/* True when the K01c representation pipeline owns this request's response
+ * (admitted route, non-overridden GET/HEAD). This is independent of the body
+ * cache: the four admitted handlers honor Accept-Encoding (gzip/identity/406)
+ * and carry `Vary: Accept-Encoding` whether or not CF_CACHE_BYTES is set --
+ * the reference's Rack::Deflater is always on (deflater.rs:44-102), and the
+ * B01 ablation needs an encoding-symmetric uncached arm. The cache flag
+ * decides only whether computed bodies are stored and reused. Handlers whose
+ * own pinned behavior would add the same header (messages#index and
+ * searches#index emit `Vary: Accept`) skip it when this returns true. */
+bool cf_cache_representation_active(const cf_ctx *ctx);
 
 #endif /* CF_CONTEXT_H */

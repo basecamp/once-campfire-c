@@ -22,9 +22,15 @@
 #include "context.h"
 
 #include "app.h"
+#include "app_internal.h" /* K01c: cf_app_cache (the enabled cache) */
 #include "auth.h" /* cf_auth_flash_load (A01's flash hand-off) */
+#include "cache.h"     /* K01c: cf_cache_get/put, stats */
+#include "cache_key.h" /* K01c: key encoding, ETag, admission table */
+#include "config.h"    /* PUBLIC_ORIGIN (key field 7) */
+#include "encoding.h"  /* K01c: cf_encoding_select */
 #include "http/params.h"
 #include "routes.h" /* cf_action_reference_action_not_found (fallback 404) */
+#include "views/internal.h" /* cf_views_integer_cast (last_room's parsed ID) */
 
 #include <limits.h>
 #include <math.h>
@@ -2163,6 +2169,374 @@ void cf_ctx_flash_reset(cf_ctx *ctx) {
     cf_flash_dispose(&st->flash);
     st->flash_loaded = true;
     st->flash_touched = false;
+}
+
+bool cf_ctx_flash_present(const cf_ctx *ctx) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    return st != NULL && st->flash.len != 0;
+}
+
+/* ------------------------------------------- K01c complete-body cache --- */
+
+/* The four admitted handlers of 06, in route-ID order:
+ * rooms#show (96, 101), messages#index (76, 137), users/sidebars#show (57)
+ * and searches#index (146). Each handler's action follows the five-call
+ * recipe in context.h. */
+static bool cache_route_admitted(uint32_t route_id) {
+    switch (route_id) {
+    case 57u:  /* /users/:user_id/sidebar      users/sidebars#show */
+    case 76u:  /* /rooms/:room_id/messages     messages#index */
+    case 96u:  /* /rooms/:room_id/@:message_id rooms#show */
+    case 101u: /* /rooms/:id                   rooms#show */
+    case 137u: /* /messages                    messages#index */
+    case 146u: /* /searches                    searches#index */
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool cf_cache_representation_active(const cf_ctx *ctx) {
+    if (ctx == NULL || ctx->app == NULL || ctx->request == NULL) return false;
+    if (!cache_route_admitted(ctx->route.id)) return false;
+    cf_method method = ctx->request->method;
+    if (method != CF_GET && method != CF_HEAD) return false;
+    /* Rack::MethodOverride can turn a POST into GET, but the body that drove
+     * the parameters is not part of the key: only the wire verb is
+     * representable. This predicate is deliberately independent of the body
+     * cache (deflater.rs:44-102 applies to every eligible response). */
+    return ctx->request->original_method == method;
+}
+
+void cf_cache_round_init(cf_ctx *ctx, cf_cache_round *round) {
+    if (round == NULL) return;
+    memset(round, 0, sizeof *round);
+    if (!cf_cache_representation_active(ctx)) return;
+    round->active = true;
+
+    /* The coding selection is part of the always-on representation (06 field
+     * 3): both forbidden is remembered for the finish-path 406, independent
+     * of whether a body cache exists. */
+    cf_span accept_encoding = {NULL, 0};
+    (void)cf_request_header(ctx->request, "accept-encoding", &accept_encoding);
+    round->encoding = cf_encoding_select(accept_encoding);
+    round->unacceptable = round->encoding == CF_ENC_UNACCEPTABLE;
+
+    round->cache = cf_app_cache(ctx->app);
+    if (round->cache == NULL) return; /* representation only, no storage */
+    /* 06 step 1: load the version with acquire ordering before the
+     * authentication/read work that follows. */
+    round->version = cf_data_version(ctx->app);
+}
+
+void cf_cache_round_dispose(cf_cache_round *round) {
+    if (round == NULL) return;
+    cf_builder_dispose(&round->key);
+    memset(round, 0, sizeof *round);
+}
+
+/* The last_room cookie's parsed optional ID (concerns.rs `last_room_cookie`:
+ * the A00 cookie value through the pinned integer cast). Absent, empty and
+ * uncastable all parse to None and share the absent key marker. */
+static bool cache_last_room_id(const cf_ctx *ctx, int64_t *out) {
+    cf_span cookie = {NULL, 0};
+    if (cf_ctx_cookie_get(ctx, (cf_span){(const unsigned char *)"last_room", 9},
+                          &cookie) != CF_OK) {
+        return false;
+    }
+    return cf_views_integer_cast(cookie, out);
+}
+
+cf_err cf_cache_round_lookup(cf_ctx *ctx, cf_cache_round *round,
+                             cf_span content_type, cf_cached_body *out) {
+    if (out == NULL) return CF_INVALID;
+    memset(out, 0, sizeof *out);
+    if (ctx == NULL || round == NULL || round->cache == NULL) {
+        return CF_NOT_FOUND;
+    }
+    /* Both forbidden: no entry can exist under an unacceptable selection (the
+     * finish path answers the 406). */
+    if (round->unacceptable) return CF_NOT_FOUND;
+    /* Authentication and authorization have run: only an authenticated
+     * session is cacheable (06: no bot JSON; both admitted handlers require a
+     * user, so anything else is a halted request the caller is not serving
+     * through this path). */
+    if (ctx->identity.kind != CF_AUTH_SESSION) return CF_NOT_FOUND;
+
+    /* The auth pass may have committed a session-activity update; 06's
+     * boxed rule restarts the read/version sequence once instead of
+     * continuing with the old snapshot. The gather and render below follow
+     * this capture, and cf_cache_put compares it again under the mutex. */
+    uint64_t current = cf_data_version(ctx->app);
+    if (current != round->version) round->version = current;
+
+    /* The rendered format is a key field, so the request's negotiation must
+     * resolve: a malformed or empty negotiation would answer 406/400 from the
+     * action and must not be served from another request's entry. */
+    const cf_format **formats = NULL;
+    size_t formats_count = 0;
+    if (cf_ctx_formats(ctx, &formats, &formats_count) != CF_OK ||
+        formats_count == 0) {
+        return CF_NOT_FOUND;
+    }
+
+    cf_span turbo_frame = {NULL, 0};
+    bool has_turbo_frame =
+        cf_request_header(ctx->request, "turbo-frame", &turbo_frame);
+    cf_span user_agent = {NULL, 0};
+    bool has_user_agent =
+        cf_request_header(ctx->request, "user-agent", &user_agent);
+    int64_t last_room_id = 0;
+    bool has_last_room = cache_last_room_id(ctx, &last_room_id);
+
+    const cf_format *format = cf_ctx_rendered_format(ctx);
+    const cf_config *config = cf_app_config(ctx->app);
+    cf_span public_origin = {NULL, 0};
+    if (config != NULL && config->public_origin != NULL) {
+        public_origin = (cf_span){
+            (const unsigned char *)config->public_origin,
+            strlen(config->public_origin)};
+    }
+
+    cf_cache_key_fields fields = {
+        .route_id = ctx->route.id,
+        .data_version = round->version,
+        .has_user_id = true,
+        .user_id = ctx->identity.user_id,
+        .target = ctx->request->target,
+        .format_symbol = format != NULL ? format->symbol : "html",
+        .encoding = round->encoding,
+        .has_turbo_frame = has_turbo_frame,
+        .turbo_frame = turbo_frame,
+        .has_last_room = has_last_room,
+        .last_room_id = last_room_id,
+        .has_user_agent = has_user_agent,
+        .user_agent = user_agent,
+        .public_origin = public_origin,
+    };
+    cf_builder_dispose(&round->key); /* idempotent; one lookup per round */
+    cf_err rc = cf_cache_key_build(&fields, &round->key);
+    if (rc != CF_OK) {
+        cf_builder_dispose(&round->key);
+        return CF_NOT_FOUND; /* cache failure: serve the computed response */
+    }
+    round->key_built = true;
+    round->content_type = content_type;
+
+    /* cf_cache_get takes the cache/version mutex itself and compares the
+     * stored entry's version with the current one; the captured version is
+     * not re-checked here (no double reject) -- a stale entry is a miss and
+     * is evicted lazily by the module. */
+    rc = cf_cache_get(round->cache,
+                      (cf_span){round->key.ptr, round->key.len}, out);
+    if (rc == CF_OK) return CF_OK;
+    memset(out, 0, sizeof *out);
+    return CF_NOT_FOUND;
+}
+
+/* `Vary: Accept-Encoding`, plus `, Accept` when the format came from the
+ * Accept header (format.rs should_apply_vary_header; the pin's deflater adds
+ * Accept-Encoding to the app's Vary at deflater.rs:54-67). */
+static cf_err cache_apply_vary(cf_response *response, const cf_ctx *ctx) {
+    static const char accept_encoding[] = "Accept-Encoding";
+    static const char accept[] = ", Accept";
+    cf_builder vary = {0};
+    cf_err rc = cf_builder_append(
+        &vary, (cf_span){(const unsigned char *)accept_encoding,
+                         sizeof accept_encoding - 1});
+    if (rc == CF_OK && cf_ctx_vary_accept(ctx)) {
+        rc = cf_builder_append(
+            &vary, (cf_span){(const unsigned char *)accept, sizeof accept - 1});
+    }
+    if (rc == CF_OK) {
+        rc = cf_response_header(
+            response, (cf_span){(const unsigned char *)"Vary", 4},
+            (cf_span){vary.ptr, vary.len});
+    }
+    cf_builder_dispose(&vary);
+    return rc;
+}
+
+cf_err cf_cache_serve_hit(cf_ctx *ctx, cf_cache_round *round,
+                          cf_cached_body *body) {
+    if (ctx == NULL || ctx->response == NULL || round == NULL || body == NULL ||
+        body->body == NULL) {
+        return CF_INVALID;
+    }
+    cf_response *response = ctx->response;
+    cf_span if_none_match = {NULL, 0};
+    bool has_if_none_match =
+        cf_request_header(ctx->request, "if-none-match", &if_none_match);
+    bool not_modified =
+        has_if_none_match &&
+        cf_cache_if_none_match(if_none_match, body->weak_etag);
+
+    cf_err rc;
+    if (not_modified) {
+        /* 06: matching validators yield 304 with the required headers and no
+         * body; kit ctx.rs conditional_get also drops Content-Type. Cookies
+         * are appended afterwards by cf_finish_cookies. */
+        response->status = 304;
+    } else {
+        response->status = 200;
+        rc = cf_response_body(response, body->body);
+        if (rc != CF_OK) return rc;
+        if (round->content_type.len != 0) {
+            rc = cf_response_header(
+                response, (cf_span){(const unsigned char *)"Content-Type", 12},
+                round->content_type);
+            if (rc != CF_OK) return rc;
+        }
+        if (body->gzip) {
+            rc = cf_response_header(
+                response,
+                (cf_span){(const unsigned char *)"Content-Encoding", 16},
+                (cf_span){(const unsigned char *)"gzip", 4});
+            if (rc != CF_OK) return rc;
+        }
+    }
+    rc = cf_response_header(response,
+                            (cf_span){(const unsigned char *)"ETag", 4},
+                            (cf_span){(const unsigned char *)body->weak_etag,
+                                      strlen(body->weak_etag)});
+    if (rc != CF_OK) return rc;
+    return cache_apply_vary(response, ctx);
+}
+
+/* Rack::Deflater's 406 (deflater.rs:94-102): a fresh text/plain body naming
+ * the request's path-and-query. The port commits cookies after the action, so
+ * Set-Cookie headers still land on this response (the pin's middleware runs
+ * after commit and drops them; reported in the evidence). */
+static void cache_replace_406(cf_ctx *ctx) {
+    static const char prefix[] =
+        "An acceptable encoding for the requested resource ";
+    static const char suffix[] = " could not be found.";
+    cf_builder body = {0};
+    cf_err rc = cf_builder_append(
+        &body, (cf_span){(const unsigned char *)prefix, sizeof prefix - 1});
+    if (rc == CF_OK) rc = cf_builder_append(&body, ctx->request->target);
+    if (rc == CF_OK) {
+        rc = cf_builder_append(
+            &body, (cf_span){(const unsigned char *)suffix, sizeof suffix - 1});
+    }
+    cf_buf *buf = NULL;
+    if (rc == CF_OK) {
+        rc = cf_builder_freeze(&body, &buf);
+    } else {
+        cf_builder_dispose(&body);
+    }
+    if (rc != CF_OK) return; /* output limit: serve the computed response */
+
+    cf_response_dispose(ctx->response);
+    cf_response_init(ctx->response);
+    ctx->response->status = 406;
+    rc = cf_response_header(
+        ctx->response, (cf_span){(const unsigned char *)"Content-Type", 12},
+        (cf_span){(const unsigned char *)"text/plain", 10});
+    if (rc == CF_OK) (void)cf_response_body(ctx->response, buf);
+    cf_buf_release(buf);
+}
+
+void cf_cache_round_finish(cf_ctx *ctx, cf_cache_round *round) {
+    if (ctx == NULL || ctx->response == NULL || round == NULL ||
+        !round->active) {
+        return;
+    }
+    cf_response *response = ctx->response;
+    bool buffered =
+        response->body_kind == CF_BODY_BUFFER && response->body != NULL;
+    if (!cf_cache_representation_eligible(response->status, buffered)) return;
+
+    if (round->unacceptable) {
+        cache_replace_406(ctx);
+        return;
+    }
+
+    /* The body-hash validator and the 304 conversion are cache-path
+     * behavior (06: the cached representation's ETag); without a body cache
+     * the handlers keep their own validators (messages#index's pinned
+     * fresh_when), and the pin's Rack::ETag behavior stays out of scope. */
+    bool store = round->cache != NULL;
+    cf_span identity = cf_buf_span(response->body);
+    char etag[69];
+    bool have_etag = store && cf_cache_etag(identity, etag) == CF_OK;
+
+    cf_err rc = CF_OK;
+    if (have_etag) {
+        cf_span if_none_match = {NULL, 0};
+        bool has_if_none_match =
+            cf_request_header(ctx->request, "if-none-match", &if_none_match);
+        if (has_if_none_match &&
+            cf_cache_if_none_match(if_none_match, etag)) {
+            /* The serializer suppresses 304 bodies and the output accounting
+             * is gated on send_body; a 304 is not a 200 body. */
+            response->status = 304;
+        } else {
+            rc = cf_response_header(
+                response, (cf_span){(const unsigned char *)"ETag", 4},
+                (cf_span){(const unsigned char *)etag, sizeof etag - 1});
+        }
+    }
+    if (rc == CF_OK) rc = cache_apply_vary(response, ctx);
+    if (rc != CF_OK) return; /* resource failure: keep the computed body */
+    if (response->status == 304) return; /* never compressed, never admitted */
+
+    /* Compress outside the read transaction and the cache locks (06 step 4).
+     * A failure leaves the identity representation in place. */
+    cf_buf *identity_ref = cf_buf_retain(response->body);
+    cf_buf *gzip = NULL;
+    if (round->encoding == CF_ENC_GZIP) {
+        if (cf_gzip(identity, &gzip) != CF_OK) gzip = NULL;
+        if (gzip != NULL) {
+            rc = cf_response_body(response, gzip);
+            if (rc == CF_OK) {
+                rc = cf_response_header(
+                    response,
+                    (cf_span){(const unsigned char *)"Content-Encoding", 16},
+                    (cf_span){(const unsigned char *)"gzip", 4});
+            }
+            if (rc != CF_OK) {
+                (void)cf_response_body(response, identity_ref);
+                cf_buf_release(gzip);
+                gzip = NULL;
+            }
+        }
+    }
+
+    cf_cache_admit_input admission = {
+        .cache_enabled = store,
+        .route_admitted = cache_route_admitted(ctx->route.id),
+        .method_get = ctx->request->method == CF_GET, /* HEAD never populates */
+        .status = response->status,
+        .body_buffer = true,
+        .flash_present = cf_ctx_flash_present(ctx),
+        .bot = ctx->identity.kind == CF_AUTH_BOT,
+        /* Audited: none of the four admitted handlers sets Content-Encoding or
+         * Cache-Control before the round (the only headers they add are
+         * Content-Type, Link and Vary). A future handler that does must bypass
+         * or extend this decision table (06: audit each presenter). */
+        .action_content_encoding = false,
+        .no_transform = false,
+    };
+    /* A gzip-selected key must store the gzip representation: if compression
+     * failed, serve identity but never admit it under the gzip key. */
+    bool representation_ok = round->encoding != CF_ENC_GZIP || gzip != NULL;
+    if (store && have_etag && representation_ok &&
+        cf_cache_admit_decide(&admission) == CF_CACHE_ADMIT &&
+        round->key_built) {
+        cf_cached_body body = {
+            .body = gzip != NULL ? gzip : response->body,
+            .gzip = gzip != NULL,
+        };
+        memcpy(body.weak_etag, etag, sizeof body.weak_etag);
+        /* 06 step 5: admit only while the captured version is current; the
+         * module keeps an existing duplicate entry and counts the reject. */
+        (void)cf_cache_put(round->cache,
+                           (cf_span){round->key.ptr, round->key.len},
+                           round->version, &body);
+    }
+    cf_buf_release(gzip);
+    cf_buf_release(identity_ref);
 }
 
 cf_err cf_finish_cookies(cf_ctx *ctx) {
