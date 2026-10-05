@@ -30,8 +30,37 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/db/schema.c \
 	src/db/reader.c \
 	src/db/statements.c \
+	src/db/writer.c \
 	src/http/params.c \
+	src/http/loop.c \
+	src/http/request.c \
+	src/http/response.c \
+	src/http/output.c \
 	src/views/escape.c
+
+# Model sources (D01) are linked into the model test binaries and the
+# application library once the A01/R02 boundary lands; see MODEL_TEST_BINS.
+MODEL_SRCS := \
+	src/models/types.c \
+	src/models/account.c \
+	src/models/active_storage.c \
+	src/models/ban.c \
+	src/models/boost.c \
+	src/models/first_run.c \
+	src/models/membership.c \
+	src/models/message.c \
+	src/models/push_subscription.c \
+	src/models/rich_text_record.c \
+	src/models/room.c \
+	src/models/search.c \
+	src/models/session.c \
+	src/models/sound.c \
+	src/models/user.c \
+	src/models/webhook.c
+
+# Test-only support doubles for the not-yet-landed A01/R02 boundaries
+# (tests/models/support/, never part of the application library).
+SUPPORT_SRCS := tests/models/support/password.c tests/models/support/richtext.c
 
 APP_SRCS := $(APP_LIB_SRCS) \
 	src/main.c
@@ -45,7 +74,16 @@ SQLITE_INCLUDE := vendor/src/sqlite/sqlite-amalgamation-3530400
 YYJSON_CLANG_LIB := vendor/build/yyjson-clang/libyyjson.a
 YYJSON_FILC_LIB := vendor/build/yyjson-filc/libyyjson.a
 YYJSON_INCLUDE := vendor/src/yyjson/src
-DEP_INCLUDES := -I$(SQLITE_INCLUDE) -I$(YYJSON_INCLUDE)
+# libxcrypt: bcrypt crypt_r for A01 and the model test-support password double.
+LIBCRYPT_CLANG_LIB := vendor/build/libxcrypt-clang/.libs/libcrypt.a
+LIBCRYPT_FILC_LIB := vendor/build/libxcrypt-filc/.libs/libcrypt.a
+# picohttpparser: single-file upstream parser (no upstream build system). It
+# is compiled per mode but with upstream-appropriate flags only — never the
+# application's -Werror (01-foundation-http.md F00 build restriction).
+PICOHTTP_SRC := vendor/src/picohttpparser/picohttpparser.c
+# recursive: MODE_OBJ is defined further down (build-variant section)
+PICOHTTP_OBJ = $(MODE_OBJ)/vendor/picohttpparser.o
+DEP_INCLUDES := -I$(SQLITE_INCLUDE) -I$(YYJSON_INCLUDE) -Ivendor/src/picohttpparser
 
 # ---------- toolchain -------------------------------------------------------
 CLANG ?= clang
@@ -63,30 +101,38 @@ ifeq ($(MODE),dev)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_LIBS := $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(PICOHTTP_OBJ)
 else ifeq ($(MODE),bench)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O3 -flto
 	MODE_LDFLAGS := -flto
-	MODE_DEP_LIBS := $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(PICOHTTP_OBJ)
 else ifeq ($(MODE),filc)
 	MODE_CC := $(FILC)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_LIBS := $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-filc
+	MODE_DEP_LIBS = $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB) $(LIBCRYPT_FILC_LIB) $(PICOHTTP_OBJ)
 else ifeq ($(MODE),sanitize)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=address,undefined
-	MODE_DEP_LIBS := $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(PICOHTTP_OBJ)
 else ifeq ($(MODE),tsan)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=thread -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=thread
-	MODE_DEP_LIBS := $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(PICOHTTP_OBJ)
 else
 $(error unknown MODE '$(MODE)': use dev, bench, filc, sanitize or tsan)
 endif
+# Pinned libxcrypt headers for the mode (struct crypt_data layout must match
+# the linked archive; support/password.c and A01 crypto include <crypt.h>).
+DEP_INCLUDES += $(MODE_DEP_INCLUDES)
 
 BUILD_ROOT := build
 BUILD := $(BUILD_ROOT)/$(MODE)
@@ -123,17 +169,57 @@ UNIT_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(UNIT_TEST_SRCS))
 TEST_AUX_SRCS := tests/http/params_vectors.c
 TEST_AUX_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(TEST_AUX_SRCS))
 
-# TSan run of the threaded cases (buffer + worker join) and the app/config
-# suite touched by the shutdown-path change.
+# H01 HTTP test binaries: each links the shared tests/http/test_http_common.c
+# auxiliary translation unit (no CF_TEST_MAIN) plus the library.
+HTTP_TEST_SRCS := \
+	tests/http/test_http_loop.c \
+	tests/http/test_http_framing.c \
+	tests/http/test_http_limits.c \
+	tests/http/test_http_output.c \
+	tests/http/test_http_file.c \
+	tests/http/test_http_completion.c \
+	tests/http/test_http_ipv6_host.c
+HTTP_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(HTTP_TEST_SRCS))
+HTTP_COMMON_OBJ := $(MODE_OBJ)/tests/http/test_http_common.o
+
+# D01 model test binaries: each links every model source (the model set is
+# mutually dependent by design) plus the test-only support doubles for the
+# not-yet-landed A01/R02 boundaries.
+MODEL_TEST_SRCS := \
+	tests/models/account_test.c \
+	tests/models/active_storage_test.c \
+	tests/models/ban_test.c \
+	tests/models/boost_test.c \
+	tests/models/first_run_test.c \
+	tests/models/membership_test.c \
+	tests/models/message_test.c \
+	tests/models/push_subscription_test.c \
+	tests/models/rich_text_record_test.c \
+	tests/models/room_test.c \
+	tests/models/search_test.c \
+	tests/models/session_test.c \
+	tests/models/sound_test.c \
+	tests/models/user_test.c \
+	tests/models/webhook_test.c
+MODEL_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(MODEL_TEST_SRCS))
+MODEL_OBJS := $(patsubst %.c,$(MODE_OBJ)/%.o,$(MODEL_SRCS))
+SUPPORT_OBJS := $(patsubst %.c,$(MODE_OBJ)/%.o,$(SUPPORT_SRCS))
+
+# TSan run of the threaded cases (buffer + worker join, writer queue, HTTP
+# completion queue) and the app/config suite touched by the shutdown path.
 TSAN_TEST_SRCS := tests/core/test_buffer.c tests/config/test_config.c \
-	tests/app/test_app.c
+	tests/app/test_app.c tests/db/test_writer.c
 TSAN_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_TEST_SRCS))
+TSAN_HTTP_TEST_SRCS := tests/http/test_http_completion.c
+TSAN_HTTP_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_HTTP_TEST_SRCS))
 
 # Test translation units are compiled with -MMD -MP so header changes rebuild
 # the affected test binaries; all test objects share the mode's object tree.
 TEST_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(UNIT_TEST_SRCS)) \
-	$(TEST_AUX_OBJS)
-TSAN_TEST_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(TSAN_TEST_SRCS))
+	$(TEST_AUX_OBJS) $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(HTTP_TEST_SRCS)) \
+	$(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(MODEL_TEST_SRCS))
+TSAN_TEST_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(TSAN_TEST_SRCS)) \
+	$(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(TSAN_HTTP_TEST_SRCS))
 
 DEPS_SCRIPTS := $(sort $(wildcard vendor/scripts/*.sh))
 
@@ -205,7 +291,8 @@ build-app: $(BIN)
 
 # Missing dependency artifacts fail with the recorded recipe instead of
 # silently skipping (07-verification.md: missing prerequisites fail).
-$(SQLITE_CLANG_LIB) $(SQLITE_FILC_LIB) $(YYJSON_CLANG_LIB) $(YYJSON_FILC_LIB):
+$(SQLITE_CLANG_LIB) $(SQLITE_FILC_LIB) $(YYJSON_CLANG_LIB) $(YYJSON_FILC_LIB) \
+$(LIBCRYPT_CLANG_LIB) $(LIBCRYPT_FILC_LIB):
 	@echo "error: missing dependency artifact '$@'" >&2
 	@echo "       build it with the recorded F00 recipe in vendor/DEPS.json" >&2
 	@echo "       (see vendor/README.md); ordinary builds never fetch." >&2
@@ -238,6 +325,12 @@ $(MODE_OBJ)/tests/%.o: tests/%.c
 	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(APP_CPPFLAGS) \
 		$(DEP_INCLUDES) -MMD -MP -c $< -o $@
 
+# Upstream single-file dependency: upstream flags only, no -Werror.
+$(PICOHTTP_OBJ): $(PICOHTTP_SRC)
+	@mkdir -p $(dir $@)
+	$(MODE_CC) -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -pthread \
+		$(MODE_CFLAGS) -MMD -MP -c $< -o $@
+
 $(TESTS_DIR)/%: $(MODE_OBJ)/tests/%.o $(APP_LIB_OBJS) $(MODE_DEP_LIBS) | check-cc
 	@mkdir -p $(dir $@)
 	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) $< \
@@ -254,12 +347,28 @@ $(TESTS_DIR)/http/test_params: $(MODE_OBJ)/tests/http/test_params.o \
 		$(MODE_OBJ)/tests/http/params_vectors.o \
 		$(APP_LIB_OBJS) $(MODE_DEP_LIBS) -lm -o $@
 
+# H01 binaries share the test_http_common.c auxiliary translation unit.
+$(HTTP_TEST_BINS): $(TESTS_DIR)/http/%: $(MODE_OBJ)/tests/http/%.o \
+		$(HTTP_COMMON_OBJ) $(APP_LIB_OBJS) $(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) \
+		$(MODE_OBJ)/tests/http/$*.o $(HTTP_COMMON_OBJ) \
+		$(APP_LIB_OBJS) $(MODE_DEP_LIBS) -lm -o $@
+
+# D01 model binaries link all model sources plus the support doubles.
+$(MODEL_TEST_BINS): $(TESTS_DIR)/models/%: $(MODE_OBJ)/tests/models/%.o \
+		$(MODEL_OBJS) $(SUPPORT_OBJS) $(APP_LIB_OBJS) $(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) \
+		$(MODE_OBJ)/tests/models/$*.o $(MODEL_OBJS) $(SUPPORT_OBJS) \
+		$(APP_LIB_OBJS) $(MODE_DEP_LIBS) -lm -o $@
+
 # ---------- test execution -------------------------------------------------
 # Every test binary runs even when an earlier one fails; the aggregate exit
 # is nonzero if any binary, or the app checks, failed.
-test-impl: $(BIN) $(UNIT_TEST_BINS) $(TEST_OBJS)
+test-impl: $(BIN) $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) $(MODEL_TEST_BINS) $(TEST_OBJS)
 	@fail=0; \
-	for t in $(UNIT_TEST_BINS); do \
+	for t in $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) $(MODEL_TEST_BINS); do \
 		echo "-- $$t"; \
 		$(RUN_ENV) "$$t" || fail=1; \
 	done; \
@@ -281,9 +390,9 @@ test-impl: $(BIN) $(UNIT_TEST_BINS) $(TEST_OBJS)
 	fi; \
 	echo "unit tests ($(MODE)): all passed"
 
-tsan-impl: $(TSAN_TEST_BINS) $(TSAN_TEST_OBJS)
+tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_TEST_OBJS)
 	@fail=0; \
-	for t in $(TSAN_TEST_BINS); do \
+	for t in $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS); do \
 		echo "-- $$t"; \
 		$$t || fail=1; \
 	done; \
@@ -296,3 +405,4 @@ tsan-impl: $(TSAN_TEST_BINS) $(TSAN_TEST_OBJS)
 # Header dependencies (-MMD -MP).
 -include $(APP_OBJS:.o=.d)
 -include $(TEST_OBJS:.o=.d) $(TSAN_TEST_OBJS:.o=.d)
+-include $(MODEL_OBJS:.o=.d) $(SUPPORT_OBJS:.o=.d)
