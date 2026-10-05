@@ -24,6 +24,9 @@
 #include "cf.h"
 #include "config.h"
 #include "http/http.h"
+#include "integrations/http.h"
+#include "jobs/handlers.h"
+#include "jobs/jobs.h"
 #include "richtext.h"
 #include "views.h"
 
@@ -205,6 +208,25 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* J01/J02: bounded per-kind job queues and the model-event handlers.
+     * Started once the writer pool exists; the writer-consumer and handler
+     * registration happens below once the cable exists, before serving. */
+    cf_jobs *jobs = NULL;
+    if (cf_jobs_start(cfg, &jobs) != CF_OK) {
+        fprintf(stderr, "campfire: startup failed: job queues\n");
+        cf_app_stop(app);
+        cf_app_destroy(app);
+        return 1;
+    }
+    /* I01: process-lifetime libcurl global (pthread_once; no destructor). */
+    cf_http_global_init();
+    /* Handler context: main's frame outlives every worker (loops join before
+     * return), so this borrow is process-lifetime. `cable` is filled in once
+     * the cable exists below. */
+    cf_jobs_handler_ctx jobs_hctx;
+    memset(&jobs_hctx, 0, sizeof jobs_hctx);
+    jobs_hctx.app = app;
+
     /* C02: the application cable (channels, subscriptions, broadcasts) and
      * its /cable front mount. The loop upgrade seam owns the WebSocket
      * transport; authentication and command dispatch are this cable's
@@ -220,6 +242,8 @@ int main(int argc, char **argv) {
         cable_config.loops = cfg->loops;
         if (cf_cable_create(&cable_config, &cable) != CF_OK) {
             fprintf(stderr, "campfire: startup failed: cable creation\n");
+            cf_jobs_stop(jobs);
+            cf_jobs_destroy(jobs);
             cf_app_stop(app);
             cf_app_destroy(app);
             return 1;
@@ -239,6 +263,8 @@ int main(int argc, char **argv) {
             fprintf(stderr,
                     "campfire: startup failed: cable server creation\n");
             cf_cable_destroy(cable);
+            cf_jobs_stop(jobs);
+            cf_jobs_destroy(jobs);
             cf_app_stop(app);
             cf_app_destroy(app);
             return 1;
@@ -256,10 +282,38 @@ int main(int argc, char **argv) {
                     "campfire: startup failed: revocation handler\n");
             cf_cable_server_destroy(cable_server);
             cf_cable_destroy(cable);
+            cf_jobs_stop(jobs);
+            cf_jobs_destroy(jobs);
             cf_app_stop(app);
             cf_app_destroy(app);
             return 1;
         }
+    }
+
+    /* J02: default model-event handlers plus the writer post-commit consumer
+     * registration (the writer is started; the cable exists; nothing serves
+     * yet). A full queue or missing handler fails the enqueue cleanly at
+     * runtime — startup itself only fails on registration errors. */
+    jobs_hctx.cable = cable;
+    if (cf_jobs_register_default_handlers(jobs, &jobs_hctx) != CF_OK) {
+        fprintf(stderr, "campfire: startup failed: job handlers\n");
+        cf_cable_server_destroy(cable_server);
+        cf_cable_destroy(cable);
+        cf_jobs_stop(jobs);
+        cf_jobs_destroy(jobs);
+        cf_app_stop(app);
+        cf_app_destroy(app);
+        return 1;
+    }
+    if (cf_jobs_register_writer(jobs, app) != CF_OK) {
+        fprintf(stderr, "campfire: startup failed: job consumers\n");
+        cf_cable_server_destroy(cable_server);
+        cf_cable_destroy(cable);
+        cf_jobs_stop(jobs);
+        cf_jobs_destroy(jobs);
+        cf_app_stop(app);
+        cf_app_destroy(app);
+        return 1;
     }
 
     char errbuf[128];
@@ -269,6 +323,8 @@ int main(int argc, char **argv) {
                 cfg->host, cfg->port, errbuf);
         cf_cable_server_destroy(cable_server);
         cf_cable_destroy(cable);
+        cf_jobs_stop(jobs);
+        cf_jobs_destroy(jobs);
         cf_app_stop(app);
         cf_app_destroy(app);
         return 1;
@@ -284,6 +340,8 @@ int main(int argc, char **argv) {
         close(listen_fd);
         cf_cable_server_destroy(cable_server);
         cf_cable_destroy(cable);
+        cf_jobs_stop(jobs);
+        cf_jobs_destroy(jobs);
         cf_app_stop(app);
         cf_app_destroy(app);
         return 1;
@@ -380,6 +438,13 @@ shutdown:
         fprintf(stderr,
                 "campfire: shutdown: cable loops did not drain in time\n");
     }
+    /* J01/J02 shutdown loss point: stop accepting, discard and count every
+     * pending job, let running handlers finish, then release. This precedes
+     * cf_app_stop so no handler can be inside cf_write when the writer goes
+     * away; requests still draining enqueue into stopped queues (CF_BUSY,
+     * counted drops). */
+    cf_jobs_stop(jobs);
+    cf_jobs_destroy(jobs);
     cf_app_stop(app);
     for (size_t i = 0; i < loops_created; i++) {
         cf_http_loop_destroy(loops[i]);
