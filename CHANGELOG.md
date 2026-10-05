@@ -5,6 +5,29 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — B01b repair: memoized PBKDF2 derived keys (perf-profile finding 1)
+
+- `auth_pbkdf2_sha256` now memoizes derived keys per full secret + salt +
+  length in a bounded (32-entry), mutex-guarded table (the pin's
+  ActiveSupport::CachingKeyGenerator semantics); cache miss, full cache and
+  oversized keying material derive directly, so returned bytes never depend
+  on cache state. No caller/API change, no Makefile change.
+- Callgrind paired deltas (fresh baseline byte-identical to the profile's
+  frozen build, 65d877ad…): PBKDF2 calls/req room hit 1.00 -> 0.00, sidebar
+  1.00 -> 0.00, avatar 2.00 -> 0.00, room render 44.00 -> 0.00; Ir/req
+  16.46 M -> 0.23 M (hit) and 744.9 M -> 30.7 M (render). Whole process:
+  login + 13 renders 573 -> 3 derivations. Native rusage CPU/req: hit
+  567 -> 31 us, render 23.7 -> 1.9 ms, avatar 985 -> 94 us.
+- Guard tests: multi-secret isolation (63/64-byte shared prefix and
+  prefix-length variants), 40-secret capacity overflow, oversized secret,
+  token-level cross-secret verify, and a 4-thread churn case under TSan;
+  falsified by a cache-off mutation (regresses to the profile's 1.00/44.00)
+  and a forced collision mutation (guard tests fail). Evidence:
+  docs/devel/evidence/pbkdf2-cache.md.
+- Finding 2 (per-render avatar URL memo) not taken: call sites are outside
+  src/auth and the marginal win after this fix is ~1-2 us/URL (render
+  remainder 30.7 M Ir/req).
+
 ## 2026-10-05 — Phase 3: body cache and first pinned comparison (K01, B01.initial)
 
 ### K01 — complete-body cache with explicit keys/snapshot/version rules

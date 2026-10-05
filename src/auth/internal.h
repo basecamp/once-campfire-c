@@ -28,6 +28,10 @@ bool auth_request_header(const cf_request *request, const char *name,
 
 /* ---- random / crypto primitives (crypto.c) ------------------------------- */
 
+/* PBKDF2-HMAC-SHA256, 1000 iterations.  Derived keys are memoized per FULL
+ * secret bytes + salt + length in a bounded, mutex-guarded cache (the pin's
+ * ActiveSupport::CachingKeyGenerator semantics); a cache miss or a full cache
+ * derives directly, so the returned bytes never depend on cache state. */
 cf_err auth_pbkdf2_sha256(cf_span password, cf_span salt, size_t length,
                           unsigned char *out);
 cf_err auth_hmac(cf_auth_digest digest, cf_span key, cf_span data,

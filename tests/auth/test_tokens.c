@@ -277,4 +277,96 @@ CF_TEST(verifier_non_base64_payload_reads_unauthenticated) {
     }
 }
 
+/* Two fixtures with different SECRET_KEY_BASE values coexist in one process
+ * (the crypto-queue refcount lesson): the memoized key derivation must never
+ * hand one fixture's key to the other.  End-to-end over the two token paths
+ * that meet at render time: the session cookie and ActiveRecord::SignedId
+ * (avatar URLs).  Generation is interleaved so both secrets' keys are live in
+ * the cache when the cross-verifications run. */
+CF_TEST(derived_keys_never_cross_secrets) {
+    static const char secret_a[] =
+        "1111111111111111111111111111111111111111111111111111111111111111";
+    static const char secret_b[] =
+        "2222222222222222222222222222222222222222222222222222222222222222";
+    const int64_t expires_us = INT64_C(2400000000000000);
+    const int64_t now_us = INT64_C(1767272400000000);
+    cf_str cookie_a = {0}, cookie_b = {0}, sid_a = {0}, sid_b = {0};
+    CF_REQUIRE(cf_auth_signed_cookie_generate(
+                   S(secret_a), S("session_token"), S("token-a"), true,
+                   expires_us, &cookie_a) == CF_OK);
+    CF_REQUIRE(cf_auth_signed_cookie_generate(
+                   S(secret_b), S("session_token"), S("token-b"), true,
+                   expires_us, &cookie_b) == CF_OK);
+    CF_REQUIRE(cf_auth_signed_id_generate(S(secret_a), S("User"), 7,
+                                          (cf_span){NULL, 0}, false, false, 0,
+                                          &sid_a) == CF_OK);
+    CF_REQUIRE(cf_auth_signed_id_generate(S(secret_b), S("User"), 7,
+                                          (cf_span){NULL, 0}, false, false, 0,
+                                          &sid_b) == CF_OK);
+    /* Same model and id, different secret: the tokens must differ. */
+    CF_CHECK(!(sid_a.len == sid_b.len &&
+               memcmp(sid_a.ptr, sid_b.ptr, sid_a.len) == 0));
+
+    cf_str value = {0};
+    bool found = false;
+    CF_REQUIRE(cf_auth_signed_cookie_verify(
+                   S(secret_a), S("session_token"),
+                   (cf_span){(const unsigned char *)cookie_a.ptr, cookie_a.len},
+                   now_us, &value, &found) == CF_OK);
+    CF_CHECK(found && str_is(value, "token-a"));
+    cf_str_dispose(&value);
+    found = true;
+    CF_REQUIRE(cf_auth_signed_cookie_verify(
+                   S(secret_b), S("session_token"),
+                   (cf_span){(const unsigned char *)cookie_a.ptr, cookie_a.len},
+                   now_us, &value, &found) == CF_OK);
+    CF_CHECK(!found);
+    cf_str_dispose(&value);
+    found = false;
+    CF_REQUIRE(cf_auth_signed_cookie_verify(
+                   S(secret_b), S("session_token"),
+                   (cf_span){(const unsigned char *)cookie_b.ptr, cookie_b.len},
+                   now_us, &value, &found) == CF_OK);
+    CF_CHECK(found && str_is(value, "token-b"));
+    cf_str_dispose(&value);
+    found = true;
+    CF_REQUIRE(cf_auth_signed_cookie_verify(
+                   S(secret_a), S("session_token"),
+                   (cf_span){(const unsigned char *)cookie_b.ptr, cookie_b.len},
+                   now_us, &value, &found) == CF_OK);
+    CF_CHECK(!found);
+    cf_str_dispose(&value);
+
+    cf_optional_i64 id = {0};
+    found = false;
+    CF_REQUIRE(cf_auth_signed_id_verify(
+                   S(secret_a), S("User"),
+                   (cf_span){(const unsigned char *)sid_a.ptr, sid_a.len},
+                   (cf_span){NULL, 0}, false, now_us, &id, &found) == CF_OK);
+    CF_CHECK(found && id.value == 7);
+    found = true;
+    CF_REQUIRE(cf_auth_signed_id_verify(
+                   S(secret_b), S("User"),
+                   (cf_span){(const unsigned char *)sid_a.ptr, sid_a.len},
+                   (cf_span){NULL, 0}, false, now_us, &id, &found) == CF_OK);
+    CF_CHECK(!found);
+    found = false;
+    CF_REQUIRE(cf_auth_signed_id_verify(
+                   S(secret_b), S("User"),
+                   (cf_span){(const unsigned char *)sid_b.ptr, sid_b.len},
+                   (cf_span){NULL, 0}, false, now_us, &id, &found) == CF_OK);
+    CF_CHECK(found && id.value == 7);
+    found = true;
+    CF_REQUIRE(cf_auth_signed_id_verify(
+                   S(secret_a), S("User"),
+                   (cf_span){(const unsigned char *)sid_b.ptr, sid_b.len},
+                   (cf_span){NULL, 0}, false, now_us, &id, &found) == CF_OK);
+    CF_CHECK(!found);
+
+    cf_str_dispose(&cookie_a);
+    cf_str_dispose(&cookie_b);
+    cf_str_dispose(&sid_a);
+    cf_str_dispose(&sid_b);
+}
+
 CF_TEST_MAIN()

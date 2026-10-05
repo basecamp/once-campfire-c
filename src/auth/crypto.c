@@ -10,8 +10,116 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* --- derived-key memo (ActiveSupport::CachingKeyGenerator) ------------------
+ * The pinned reference's key generator is an
+ * ActiveSupport::CachingKeyGenerator: a mutex-guarded (salt, length) -> key map
+ * over one secret, deriving only on or_insert_with
+ * (tmp/rust-ref/crates/rails_compat/src/key_generator.rs).  Here every caller
+ * passes the secret explicitly, so the process-global cache is keyed by the
+ * FULL secret bytes + FULL salt bytes + length.  Full-byte keying (never a
+ * pointer or a hash): several app fixtures with different SECRET_KEY_BASE
+ * values coexist in one test or tool process, and a key derived under one
+ * secret must never be observable under another.
+ *
+ * Bounded (<= 32 entries), with no eviction: once full, new derivations are
+ * returned without being cached ("correctness over cache").  The pin's six
+ * named salts never reach the bound; process-lifetime fixtures that do simply
+ * lose the memo.  A hit copies the key out under the mutex.  A miss derives
+ * outside the mutex (PBKDF2 is ~0.5 ms; a global lock held across it would
+ * serialize request workers), then inserts under the mutex unless the entry
+ * appeared meanwhile or the cache is full.  All shared fields are read and
+ * written under the mutex, and the statics are zero-initialized before any
+ * thread starts, so there is no lazy-initialization window.
+ *
+ * The cache deliberately outlives cf_config (which zeroes its own secret
+ * copy): it is process-lifetime key material, exactly as the pin's generator
+ * keeps its secret and derived keys for the life of the app. */
+#define AUTH_KEY_CACHE_MAX_ENTRIES 32
+#define AUTH_KEY_CACHE_MAX_SECRET 512
+#define AUTH_KEY_CACHE_MAX_SALT 128
+#define AUTH_KEY_CACHE_MAX_KEY 512
+
+typedef struct {
+    size_t secret_len;
+    size_t salt_len;
+    size_t key_len;
+    unsigned char secret[AUTH_KEY_CACHE_MAX_SECRET];
+    unsigned char salt[AUTH_KEY_CACHE_MAX_SALT];
+    unsigned char key[AUTH_KEY_CACHE_MAX_KEY];
+} auth_key_cache_entry;
+
+static auth_key_cache_entry auth_key_cache[AUTH_KEY_CACHE_MAX_ENTRIES];
+static size_t auth_key_cache_used; /* entries [0, used) are valid */
+static pthread_mutex_t auth_key_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* `length` is already validated to be in [1, 512] by the caller. */
+static bool auth_key_cache_lookup(cf_span password, cf_span salt, size_t length,
+                                  unsigned char *out) {
+    bool hit = false;
+    pthread_mutex_lock(&auth_key_cache_mutex);
+    for (size_t i = 0; i < auth_key_cache_used; i++) {
+        const auth_key_cache_entry *entry = &auth_key_cache[i];
+        if (entry->secret_len != password.len ||
+            entry->salt_len != salt.len || entry->key_len != length) {
+            continue;
+        }
+        /* Zero-length inputs are compared by length alone: no memcmp with a
+         * possibly-NULL span pointer. */
+        if (password.len != 0 &&
+            memcmp(entry->secret, password.ptr, password.len) != 0) {
+            continue;
+        }
+        if (salt.len != 0 && memcmp(entry->salt, salt.ptr, salt.len) != 0) {
+            continue;
+        }
+        memcpy(out, entry->key, length);
+        hit = true;
+        break;
+    }
+    pthread_mutex_unlock(&auth_key_cache_mutex);
+    return hit;
+}
+
+/* Oversized keying material and a full cache both fall back to direct
+ * derivation: the caller already has the correct key bytes. */
+static void auth_key_cache_insert(cf_span password, cf_span salt, size_t length,
+                                  const unsigned char *key) {
+    if (password.len > AUTH_KEY_CACHE_MAX_SECRET ||
+        salt.len > AUTH_KEY_CACHE_MAX_SALT) {
+        return;
+    }
+    pthread_mutex_lock(&auth_key_cache_mutex);
+    for (size_t i = 0; i < auth_key_cache_used; i++) {
+        const auth_key_cache_entry *entry = &auth_key_cache[i];
+        if (entry->secret_len == password.len &&
+            entry->salt_len == salt.len && entry->key_len == length &&
+            (password.len == 0 ||
+             memcmp(entry->secret, password.ptr, password.len) == 0) &&
+            (salt.len == 0 || memcmp(entry->salt, salt.ptr, salt.len) == 0)) {
+            pthread_mutex_unlock(&auth_key_cache_mutex);
+            return; /* another thread derived the same key first */
+        }
+    }
+    if (auth_key_cache_used == AUTH_KEY_CACHE_MAX_ENTRIES) {
+        pthread_mutex_unlock(&auth_key_cache_mutex);
+        return;
+    }
+    /* Fill the slot before publishing it: `used` is the visibility fence, and
+     * every reader reads the count and the entries under the same mutex. */
+    auth_key_cache_entry *entry = &auth_key_cache[auth_key_cache_used];
+    entry->secret_len = password.len;
+    entry->salt_len = salt.len;
+    entry->key_len = length;
+    if (password.len != 0) memcpy(entry->secret, password.ptr, password.len);
+    if (salt.len != 0) memcpy(entry->salt, salt.ptr, salt.len);
+    memcpy(entry->key, key, length);
+    auth_key_cache_used++;
+    pthread_mutex_unlock(&auth_key_cache_mutex);
+}
 
 cf_err auth_pbkdf2_sha256(cf_span password, cf_span salt, size_t length,
                           unsigned char *out) {
@@ -23,12 +131,14 @@ cf_err auth_pbkdf2_sha256(cf_span password, cf_span salt, size_t length,
     if (password.len > (size_t)INT32_MAX || salt.len > (size_t)INT32_MAX) {
         return CF_LIMIT;
     }
+    if (auth_key_cache_lookup(password, salt, length, out)) return CF_OK;
     /* KeyGenerator: pbkdf2_hmac::<Sha256>(secret, salt, 1000, &mut key). */
     if (PKCS5_PBKDF2_HMAC((const char *)password.ptr, (int)password.len,
                           salt.ptr, (int)salt.len, 1000, EVP_sha256(),
                           (int)length, out) != 1) {
         return CF_INTERNAL;
     }
+    auth_key_cache_insert(password, salt, length, out);
     return CF_OK;
 }
 

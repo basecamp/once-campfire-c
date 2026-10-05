@@ -23,13 +23,26 @@
 
 #include "vectors.h"
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
+#include <openssl/evp.h>
 #include <yyjson.h>
 
 static cf_span S(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
+}
+
+/* The derivation oracle used by the memo tests: OpenSSL directly, bypassing
+ * auth_pbkdf2_sha256 and its cache entirely. */
+static void direct_pbkdf2(cf_span password, cf_span salt, size_t length,
+                          unsigned char *out) {
+    CF_REQUIRE(length <= 64);
+    CF_REQUIRE(PKCS5_PBKDF2_HMAC((const char *)password.ptr, (int)password.len,
+                                 salt.ptr, (int)salt.len, 1000, EVP_sha256(),
+                                 (int)length, out) == 1);
 }
 
 static int64_t vec_now_us(const char *iso) {
@@ -67,6 +80,153 @@ CF_TEST(key_derivation_vectors) {
         CF_REQUIRE(auth_hex_encode((cf_span){key, vec->length}, &hex) == CF_OK);
         CF_CHECK(str_is(hex, vec->key_hex));
         cf_str_dispose(&hex);
+    }
+}
+
+/* --- memoized key derivation ----------------------------------------------
+ * auth_pbkdf2_sha256 memoizes derived keys per full secret + salt + length
+ * (the pin's ActiveSupport::CachingKeyGenerator).  The tests below never
+ * inspect the cache directly: every result must equal the direct OpenSSL
+ * derivation, whatever the cache did, and distinct secrets must never expose
+ * each other's keys. */
+
+enum {
+    CHURN_THREADS = 4,
+    CHURN_SECRETS = 3,
+    CHURN_SALTS = 2,
+    CHURN_ROUNDS = 2
+};
+
+static const char *const churn_secrets[CHURN_SECRETS] = {
+    "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+    "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+};
+static const char *const churn_salts[CHURN_SALTS] = {
+    "cache-churn/one",
+    "cache-churn/two",
+};
+
+typedef struct {
+    unsigned char expected[CHURN_SECRETS][CHURN_SALTS][64];
+    atomic_int bad;
+} churn_state;
+
+static void *churn_worker(void *arg) {
+    churn_state *state = arg;
+    for (int round = 0; round < CHURN_ROUNDS; round++) {
+        for (int s = 0; s < CHURN_SECRETS; s++) {
+            for (int t = 0; t < CHURN_SALTS; t++) {
+                unsigned char got[64];
+                cf_err rc = auth_pbkdf2_sha256(S(churn_secrets[s]),
+                                               S(churn_salts[t]), 64, got);
+                if (rc != CF_OK ||
+                    memcmp(got, state->expected[s][t], 64) != 0) {
+                    atomic_store(&state->bad, 1);
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* All threads race to derive the same fresh (secret, salt) set, so the
+ * lookup/derive/insert path runs concurrently on first sight.  Runs under the
+ * TSan build (auth binaries are part of tsan-impl) with no data races and no
+ * wrong bytes. */
+CF_TEST(key_cache_thread_churn) {
+    churn_state state;
+    memset(&state, 0, sizeof state);
+    atomic_init(&state.bad, 0);
+    for (int s = 0; s < CHURN_SECRETS; s++) {
+        for (int t = 0; t < CHURN_SALTS; t++) {
+            direct_pbkdf2(S(churn_secrets[s]), S(churn_salts[t]), 64,
+                          state.expected[s][t]);
+        }
+    }
+    pthread_t threads[CHURN_THREADS];
+    for (int i = 0; i < CHURN_THREADS; i++) {
+        CF_REQUIRE(pthread_create(&threads[i], NULL, churn_worker, &state) ==
+                   0);
+    }
+    for (int i = 0; i < CHURN_THREADS; i++) {
+        CF_REQUIRE(pthread_join(threads[i], NULL) == 0);
+    }
+    CF_CHECK(atomic_load(&state.bad) == 0);
+}
+
+CF_TEST(key_cache_secrets_stay_isolated) {
+    /* Both 64 hex characters, sharing a 63-character prefix: only a full
+     * length+bytes comparison can tell them apart. */
+    static const char secret_a[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    static const char secret_b[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0";
+    static const char *const salts[] = {
+        "signed cookie",
+        "authenticated encrypted cookie",
+        "active_record/signed_id",
+        "signed_global_ids",
+        "turbo/signed_stream_verifier_key",
+        "ActiveStorage",
+    };
+    static const size_t lengths[] = {64, 32};
+    for (size_t s = 0; s < sizeof salts / sizeof salts[0]; s++) {
+        for (size_t l = 0; l < sizeof lengths / sizeof lengths[0]; l++) {
+            unsigned char want_a[64], want_b[64], got[64];
+            direct_pbkdf2(S(secret_a), S(salts[s]), lengths[l], want_a);
+            direct_pbkdf2(S(secret_b), S(salts[s]), lengths[l], want_b);
+            CF_CHECK(memcmp(want_a, want_b, lengths[l]) != 0);
+            CF_REQUIRE(auth_pbkdf2_sha256(S(secret_a), S(salts[s]),
+                                          lengths[l], got) == CF_OK);
+            CF_CHECK(memcmp(got, want_a, lengths[l]) == 0);
+            /* Interleaved: secret_b's call must not return secret_a's entry. */
+            CF_REQUIRE(auth_pbkdf2_sha256(S(secret_b), S(salts[s]),
+                                          lengths[l], got) == CF_OK);
+            CF_CHECK(memcmp(got, want_b, lengths[l]) == 0);
+            /* And back to secret_a, whose entry is still live alongside. */
+            CF_REQUIRE(auth_pbkdf2_sha256(S(secret_a), S(salts[s]),
+                                          lengths[l], got) == CF_OK);
+            CF_CHECK(memcmp(got, want_a, lengths[l]) == 0);
+        }
+    }
+    /* secret_a is a prefix of this secret: the length is part of the key. */
+    static const char secret_extended[] =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdefbeef";
+    unsigned char want[64], got[64];
+    direct_pbkdf2(S(secret_extended), S("signed cookie"), 64, want);
+    CF_REQUIRE(auth_pbkdf2_sha256(S(secret_extended), S("signed cookie"), 64,
+                                  got) == CF_OK);
+    CF_CHECK(memcmp(got, want, 64) == 0);
+}
+
+CF_TEST(key_cache_capacity_overflow_derives_correctly) {
+    /* More distinct secrets than the bounded cache holds: past capacity the
+     * fallback is a direct derivation, never another secret's entry, and
+     * oversized keying material is never truncated into a cache key. */
+    for (int i = 0; i < 40; i++) {
+        char secret[65];
+        snprintf(secret, sizeof secret, "%016x%016x%016x%016x", (unsigned)i,
+                 (unsigned)i ^ 0x55555555u, (unsigned)i * 2654435761u,
+                 (unsigned)~i);
+        CF_REQUIRE(strlen(secret) == 64);
+        unsigned char want[64], got[64];
+        direct_pbkdf2(S(secret), S("signed cookie"), 64, want);
+        CF_REQUIRE(auth_pbkdf2_sha256(S(secret), S("signed cookie"), 64, got) ==
+                   CF_OK);
+        CF_CHECK(memcmp(got, want, 64) == 0);
+    }
+    /* Oversized secret (beyond the cache's storage cap): still byte-identical,
+     * twice in a row (derived, not cached). */
+    char big[600];
+    memset(big, 'a', sizeof big - 1);
+    big[sizeof big - 1] = '\0';
+    unsigned char want[32], got[32];
+    direct_pbkdf2(S(big), S("oversized"), 32, want);
+    for (int i = 0; i < 2; i++) {
+        CF_REQUIRE(auth_pbkdf2_sha256(S(big), S("oversized"), 32, got) ==
+                   CF_OK);
+        CF_CHECK(memcmp(got, want, 32) == 0);
     }
 }
 
