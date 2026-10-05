@@ -18,6 +18,7 @@
 #include "cf.h"
 #include "config.h"
 #include "http/http.h"
+#include "richtext.h"
 
 #include <errno.h>
 #include <netdb.h>
@@ -169,6 +170,16 @@ int main(int argc, char **argv) {
     }
     config = NULL; /* owned by app now */
     const cf_config *cfg = cf_app_config(app);
+
+    /* R02: signed mentions/attachments need the configured secret before any
+     * request is dispatched (cf_richtext_configure; borrowed from config). */
+    {
+        cf_span richtext_secret = {
+            (const unsigned char *)cfg->secret_key_base,
+            cfg->secret_key_base_len,
+        };
+        cf_richtext_configure(richtext_secret);
+    }
 
     if (cf_app_start(app) != CF_OK) {
         fprintf(stderr,

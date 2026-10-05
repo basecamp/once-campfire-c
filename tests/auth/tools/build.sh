@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Build and run the A01 unit tests directly with clang (plain or ASan).
+# Build and run the A01 unit tests directly with clang (plain, ASan or Fil-C).
 #
 # Wiring into the Makefile (src/auth/** and tests/auth/** lists) is the
 # integrator's; this script is the direct-clang evidence path recorded in
 # docs/devel/evidence/A01.md.
 #
-# Usage: tests/auth/tools/build.sh [plain|asan] [test-name ...]
+# The link mirrors the Makefile's current lists: the R02 rich-text production
+# sources (src/richtext/*.c) replace the deleted tests/models/support double,
+# and libgumbo + zlib-ng are linked per mode (MODE_DEP_LIBS).
+#
+# Usage: tests/auth/tools/build.sh [plain|asan|filc] [test-name ...]
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
@@ -16,18 +20,27 @@ case "$MODE" in
 plain)
     SAN=
     OUT=build/a01/plain
-    MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include"
+    GUMBO=vendor/build/gumbo-clang/libgumbo.a
+    ZLIB=vendor/build/zlib-ng-clang/libz.a
+    MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include \
+-Ivendor/src/gumbo/gumbo-parser/src -Ivendor/build/zlib-ng-clang"
     ;;
 asan)
     SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
     OUT=build/a01/asan
-    MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include"
+    GUMBO=vendor/build/gumbo-clang/libgumbo.a
+    ZLIB=vendor/build/zlib-ng-clang/libz.a
+    MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include \
+-Ivendor/src/gumbo/gumbo-parser/src -Ivendor/build/zlib-ng-clang"
     ;;
 filc)
     SAN=
     OUT=build/a01/filc
     CC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc
-    MODE_INCLUDES="-Ivendor/build/libxcrypt-filc -Ivendor/build/openssl-filc/install/include"
+    GUMBO=vendor/build/gumbo-filc/libgumbo.a
+    ZLIB=vendor/build/zlib-ng-filc/libz.a
+    MODE_INCLUDES="-Ivendor/build/libxcrypt-filc -Ivendor/build/openssl-filc/install/include \
+-Ivendor/src/gumbo/gumbo-parser/src -Ivendor/build/zlib-ng-filc"
     DEPS_OVERRIDE="vendor/build/yyjson-filc/libyyjson.a vendor/build/openssl-filc/install/lib/libcrypto.a vendor/build/libxcrypt-filc/.libs/libcrypt.a vendor/build/sqlite-filc/libsqlite3.a"
     ;;
 *)
@@ -46,8 +59,14 @@ src/models/search.c src/models/session.c src/models/sound.c src/models/user.c \
 src/models/webhook.c"
 AUTH="src/auth/crypto.c src/auth/json.c src/auth/message.c src/auth/tokens.c \
 src/auth/password.c src/auth/session.c src/auth/before.c src/auth/rate.c"
+# R02 production rich-text sources (Makefile RICHTEXT_SRCS); the test-only
+# tests/models/support/richtext.c double was deleted when this landed.
+RICHTEXT="src/richtext/rt_attach.c src/richtext/rt_autolink.c src/richtext/rt_content.c \
+src/richtext/rt_dom.c src/richtext/rt_pipeline.c src/richtext/rt_plain.c \
+src/richtext/rt_resolver.c src/richtext/rt_richtext.c src/richtext/rt_sanitize.c \
+src/richtext/rt_uri.c src/richtext/rt_util.c"
 LIB_SRCS="$CORE src/config.c src/app.c src/assets.c src/db/schema.c src/db/reader.c src/db/statements.c src/db/writer.c src/http/params.c src/http/loop.c src/http/request.c src/http/response.c src/http/output.c src/views/escape.c src/context.c"
-SUPPORT="tests/models/support/richtext.c tests/app/support/route_double.c"
+SUPPORT="$RICHTEXT tests/app/support/route_double.c"
 
 CC="${CC:-clang}"
 MODE_INCLUDES="${MODE_INCLUDES:-}"
@@ -99,7 +118,7 @@ for name in "${tests[@]}"; do
     else
         LINK_DEPS="$DEPS"
     fi
-    $CC $CFLAGS "$obj" "${objs[@]}" "$PICO" $LINK_DEPS \
+    $CC $CFLAGS "$obj" "${objs[@]}" "$PICO" $LINK_DEPS $GUMBO $ZLIB \
         -lm -ldl -o "$bin"
     echo "-- $bin"
     "$bin" || failed=1
