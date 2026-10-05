@@ -79,11 +79,18 @@ both arms attributable to the same binary.
 
 ```sh
 # uncached arm (default; identical to CF_CACHE_BYTES=0)
-bench/run-c --reps 3 --out bench/results/<revision>-uncached
+bench/run-c --loops 4 --reps 3 --out bench/results/<revision>-uncached
 
 # cache-enabled arm (64 MiB, 06's benchmark budget)
-bench/run-c --cache-bytes 67108864 --reps 3 --out bench/results/<revision>-cache
+bench/run-c --cache-bytes 67108864 --loops 4 --reps 3 \
+  --out bench/results/<revision>-cache
 ```
+
+`--loops 4` matches the four hardware threads the harness allocates per app
+(the references use them; the C config default is 1).  The B01b diagnostic
+(`docs/devel/evidence/B01b.md` §9) measured only 1.05–1.09× median change
+from loops=1 to loops=4 — dynamic routes are CPU-bound in the 4-CPU
+allocation — but 4 is the methodology-parity setting for published rows.
 
 Both arms use the same seed, image, CPUs and workload flags; the only
 difference is the budget.  Interleave them in separate invocations as 06

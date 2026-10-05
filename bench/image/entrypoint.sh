@@ -25,4 +25,9 @@ export DISABLE_SSL=1
 # CF_CACHE_BYTES forwarding.
 export CF_CACHE_BYTES="${CF_CACHE_BYTES:-0}"
 
+# HTTP loop threads.  The C config default is 1; the published methodology
+# allocates four hardware threads per app, so benchmark arms set CF_LOOPS=4
+# (`bench/run-c --loops 4`) to match the references' worker counts.
+export CF_LOOPS="${CF_LOOPS:-1}"
+
 exec /app/campfire "$@"

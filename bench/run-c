@@ -2,7 +2,7 @@
 # Run the pinned Elixir benchmark harness against the C port.
 #
 #   bench/run-c [bench/run options] [--build-image] [--rebuild-seed]
-#               [--cache-bytes N]
+#               [--cache-bytes N] [--loops N]
 #
 # The pinned harness is vendored byte-for-byte under
 # bench/pinned/once-campfire-elixir/ (see bench/PINNED-MANIFEST.json).  It is
@@ -27,6 +27,12 @@
 #                     a second image tag because the cache budget is runtime
 #                     configuration, not a build input: one image digest keeps
 #                     both arms attributable to the same binary.
+#
+# HTTP loops:
+#   --loops N         export CF_LOOPS=N (C config default 1).  The published
+#                     methodology allocates four hardware threads per app;
+#                     use `--loops 4` for comparable C arms.  Also recorded in
+#                     env.txt (`loops: N`).
 #
 # Prerequisites: docker (running), mise with rust@1.98.1 (the harness pins its
 # load-generator toolchain), python3, patch.  The C binary is built with
@@ -53,6 +59,7 @@ BINARY=$ROOT/build/bench/campfire
 C_IMAGE=${C_IMAGE:-campfire-c:bench}
 BASE_IMAGE=${BASE_IMAGE:-fedora:latest}
 CF_CACHE_BYTES=${CF_CACHE_BYTES:-0}
+CF_LOOPS=${CF_LOOPS:-1}
 BUILD_IMAGE=0
 REBUILD_SEED=0
 PASSTHROUGH=()
@@ -67,10 +74,17 @@ while [ $# -gt 0 ]; do
         ''|*[!0-9]*) echo "run-c: --cache-bytes must be a non-negative integer" >&2; exit 2 ;;
       esac
       CF_CACHE_BYTES=$2; shift 2 ;;
+    --loops)
+      [ $# -ge 2 ] || { echo "run-c: --loops needs a value" >&2; exit 2; }
+      case "$2" in
+        ''|*[!0-9]*) echo "run-c: --loops must be a positive integer" >&2; exit 2 ;;
+        0) echo "run-c: --loops must be a positive integer" >&2; exit 2 ;;
+      esac
+      CF_LOOPS=$2; shift 2 ;;
     *) PASSTHROUGH+=("$1"); shift ;;
   esac
 done
-export CF_CACHE_BYTES
+export CF_CACHE_BYTES CF_LOOPS
 
 log() { echo "[bench/run-c $(date +%T)] $*" >&2; }
 
@@ -169,5 +183,5 @@ avatar workload row must be read with this representation difference in mind.
 - c revision: \`$C_REVISION\` (binary sha256 \`$C_BINARY_SHA256\`)
 EOF
 
-log "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES"
+log "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES loops: $CF_LOOPS"
 exec "$WORK/bench/run" "${ARGS[@]}"

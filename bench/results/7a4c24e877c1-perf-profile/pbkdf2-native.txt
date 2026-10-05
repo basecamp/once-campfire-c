@@ -1,0 +1,2 @@
+native PBKDF2 bench (vendored static OpenSSL, app build):
+native PBKDF2 1000x sha256 64B: 485.8 us/call

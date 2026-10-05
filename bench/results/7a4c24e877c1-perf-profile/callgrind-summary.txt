@@ -1,0 +1,60 @@
+room-hit: requests delta=20, total Ir/req=16,461,823
+  PKCS5_PBKDF2_HMAC: 1.00/req
+       1.00/req <- cf_auth_signed_cookie_verify
+  cf_auth_signed_id_generate: 0.00/req
+  cf_auth_signed_cookie_verify: 1.00/req
+       1.00/req <- cf_before_actions
+  HMAC_Final: 2002.00/req
+     2000.00/req <- kdf_pbkdf2_derive
+       2.00/req <- hmac_final
+  deflate_medium: 0.00/req
+  sqlite3VdbeExec: 4.00/req
+       4.00/req <- sqlite3_step
+  BF_full_crypt: 0.00/req
+
+sidebar-hit: requests delta=20, total Ir/req=16,439,630
+  PKCS5_PBKDF2_HMAC: 1.00/req
+       1.00/req <- cf_auth_signed_cookie_verify
+  cf_auth_signed_id_generate: 0.00/req
+  cf_auth_signed_cookie_verify: 1.00/req
+       1.00/req <- cf_before_actions
+  HMAC_Final: 2002.00/req
+     2000.00/req <- kdf_pbkdf2_derive
+       2.00/req <- hmac_final
+  deflate_medium: 0.00/req
+  sqlite3VdbeExec: 3.00/req
+       3.00/req <- sqlite3_step
+  BF_full_crypt: 0.00/req
+
+avatar: requests delta=20, total Ir/req=32,685,728
+  PKCS5_PBKDF2_HMAC: 2.00/req
+       1.00/req <- cf_auth_signed_cookie_verify
+       1.00/req <- cf_action_users_avatars_show
+  cf_auth_signed_cookie_verify: 1.00/req
+       1.00/req <- cf_before_actions
+  HMAC_Final: 4002.00/req
+     4000.00/req <- kdf_pbkdf2_derive
+       2.00/req <- hmac_final
+  sqlite3VdbeExec: 4.00/req
+       4.00/req <- sqlite3_step
+  BF_full_crypt: 0.00/req
+
+room-miss: requests delta=10, total Ir/req=744,914,084
+  PKCS5_PBKDF2_HMAC: 44.00/req
+      42.00/req <- cf_auth_signed_id_generate
+       1.00/req <- cf_auth_turbo_signed_stream_name
+       1.00/req <- cf_auth_signed_cookie_verify
+  cf_auth_signed_id_generate: 42.00/req
+      41.00/req <- cf_presenter_user_view
+       1.00/req <- user_avatar_url
+  cf_auth_signed_cookie_verify: 1.00/req
+       1.00/req <- cf_before_actions
+  HMAC_Final: 88044.00/req
+     88000.00/req <- kdf_pbkdf2_derive
+      44.00/req <- hmac_final
+  deflate_medium: 2.00/req
+       2.00/req <- deflate
+  sqlite3VdbeExec: 336.00/req
+     336.00/req <- sqlite3_step
+  BF_full_crypt: 0.00/req
+

@@ -113,9 +113,10 @@ def http_table(runs: dict[str, list[dict]], title: str) -> list[str]:
     return lines
 
 
-def med(runs: dict[str, list[dict]], route: str, conc: int, metric: str):
+def med(runs: dict[str, list[dict]], route: str, conc: int, metric: str,
+        app: str = "c"):
     values = []
-    for rep in runs.get("c", []):
+    for rep in runs.get(app, []):
         if valid(rep):
             values.append(metric_values(rep, route, conc, metric))
     values = [v for v in values if v is not None]
@@ -142,13 +143,66 @@ def cache_delta(off: dict, on: dict) -> list[str]:
     return lines
 
 
+def scaling_table(base: dict, new: dict, app: str, base_label: str,
+                  new_label: str) -> list[str]:
+    lines = [f"### {app}: {base_label} vs {new_label} (median of valid reps)", "",
+             f"| Route | conc | {base_label} req/s | {new_label} req/s | rps ratio | "
+             f"{base_label} CPU µs/ok | {new_label} CPU µs/ok | CPU ratio |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|"]
+    ratios = []
+    for route, conc in route_keys(base):
+        b = med(base, route, conc, "rps", app)
+        n = med(new, route, conc, "rps", app)
+        bc = med(base, route, conc, "cpu", app)
+        nc = med(new, route, conc, "cpu", app)
+        ratio = n / b if b and n else None
+        if ratio:
+            ratios.append(ratio)
+        lines.append(
+            f"| {route} | {conc} | "
+            + (f"{b:,.0f}" if b else "-") + " | "
+            + (f"{n:,.0f}" if n else "-") + " | "
+            + (f"{ratio:.2f}×" if ratio else "-") + " | "
+            + (f"{bc:,.0f}" if bc else "-") + " | "
+            + (f"{nc:,.0f}" if nc else "-") + " | "
+            + (f"{bc / nc:.2f}×" if bc and nc else "-") + " |")
+    lines.append("")
+    if ratios:
+        lines.append(f"median rps ratio across routes/concs: "
+                     f"{statistics.median(ratios):.2f}×")
+        lines.append("")
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dirs", nargs="*", help="result directories")
     parser.add_argument("--cache-off")
     parser.add_argument("--cache-on")
+    parser.add_argument("--scale-base", help="baseline result directory")
+    parser.add_argument("--scale-new", help="changed result directory")
+    parser.add_argument("--app", default="c", help="app for --scale-*")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
+
+    if args.scale_base and args.scale_new:
+        base = load_reps(Path(args.scale_base))
+        new = load_reps(Path(args.scale_new))
+        if args.json:
+            digest = {}
+            for route, conc in route_keys(base):
+                digest[f"{route}@{conc}"] = {
+                    "base_rps": med(base, route, conc, "rps", args.app),
+                    "new_rps": med(new, route, conc, "rps", args.app),
+                    "base_cpu": med(base, route, conc, "cpu", args.app),
+                    "new_cpu": med(new, route, conc, "cpu", args.app),
+                }
+            print(json.dumps(digest, indent=2, sort_keys=True))
+        else:
+            print("\n".join(scaling_table(
+                base, new, args.app, Path(args.scale_base).name,
+                Path(args.scale_new).name)))
+        return 0
 
     if args.cache_off and args.cache_on:
         off = load_reps(Path(args.cache_off))

@@ -1,0 +1,59 @@
+{
+  "arm": "fixed-cache",
+  "binary_sha256": "48f93d27594a4c65bdcab845993b31ef0f526d9d646aaf3831d0a6e168b01f6e",
+  "cpu_steal_percent": 0.0,
+  "env": {
+    "c revision": "604f037c0e25+dirty10 binary sha256: 48f93d27594a4c65bdcab845993b31ef0f526d9d646aaf3831d0a6e168b01f6e cache_bytes: 67108864 loops: 4 image: campfire-c:bench",
+    "date": "2026-10-05T18:42:30-04:00",
+    "host": "7.1.0-0.rc7.260611g9716c086c8e8.50.fc45.x86_64, AMD Ryzen 9 9900X 12-Core Processor, 24 threads, 91GB",
+    "quiet wait": "LOAD_MAX=8 LOAD_WAIT_SECS=300",
+    "seed sha256": "a763014643b8e26d38f153e98647500e42ef2c305fdbaf24145fccdbcb9ae030  /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/bench/seed/.seed/default/db/production.sqlite3",
+    "server cpus": "8-11 (nproc 4); loadgen cpus: 12-15; network: host",
+    "workload": "suites=http HTTP_SECS=8 HTTP_CONCS=1 16 64 CABLE_CLIENTS=100 500 1000 CABLE_TPUT_SECS=15 CABLE_POSTERS=4 UPLOAD_REPS=5 REPS=3"
+  },
+  "gate_load1": [
+    4.94,
+    7.95,
+    7.16
+  ],
+  "gate_waits_seconds": [
+    0,
+    20,
+    20
+  ],
+  "image_id": "sha256:ed22cdb399ab9f1c5b9a56b9584f9b20d27938f46ce24f0d1da3ccb325a5cf49",
+  "loops": 4,
+  "reps": [
+    {
+      "app": "c",
+      "cold_start_ms": 112,
+      "file": "c-1.json",
+      "load_end": "9.64 6.72 5.45 5/10056 1731831",
+      "load_start": "4.94 4.34 4.58 3/9985 1717532",
+      "rep": 1,
+      "valid": true
+    },
+    {
+      "app": "c",
+      "cold_start_ms": 138,
+      "file": "c-2.json",
+      "load_end": "8.99 7.85 6.18 3/9879 1747390",
+      "load_start": "7.95 6.53 5.41 8/10060 1732613",
+      "rep": 2,
+      "valid": true
+    },
+    {
+      "app": "c",
+      "cold_start_ms": 112,
+      "file": "c-3.json",
+      "load_end": "7.83 7.30 6.29 3/9999 1758628",
+      "load_start": "7.16 7.50 6.10 4/9918 1748629",
+      "rep": 3,
+      "valid": true
+    }
+  ],
+  "reps_meeting_quiet_gate_1_5": 0,
+  "reps_total": 3,
+  "reps_valid": 3,
+  "revision": "604f037c0e25+dirty10"
+}

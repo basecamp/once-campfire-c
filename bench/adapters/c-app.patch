@@ -1,6 +1,6 @@
 diff -ruN c-orig/bench/report c-work/bench/report
 --- c-orig/bench/report	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/report	2026-10-05 15:05:55.993038075 -0400
++++ c-work/bench/report	2026-10-05 17:54:28.091423113 -0400
 @@ -24,7 +24,7 @@
              assert c["ready"] == c["clients"] and c["failed"] == 0 and c["latency"]["complete"] == c["latency"]["messages"] and c["throughput"]["complete"] == c["throughput"]["posted"], f
          runs.setdefault(r["app"], []).append(r)
@@ -48,7 +48,7 @@ diff -ruN c-orig/bench/report c-work/bench/report
          n = c["clients"]
 diff -ruN c-orig/bench/run c-work/bench/run
 --- c-orig/bench/run	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/run	2026-10-05 15:05:56.006490240 -0400
++++ c-work/bench/run	2026-10-05 17:54:28.105033433 -0400
 @@ -1,7 +1,7 @@
  #!/usr/bin/env bash
 -# Benchmark the Elixir and Rust ports on the same Rails seed and CPUs.
@@ -68,7 +68,7 @@ diff -ruN c-orig/bench/run c-work/bench/run
  LABELS=$SEED/labels.json
  ENV_FILE=$ROOT/parity/reference.env
  
-@@ -43,6 +43,12 @@
+@@ -43,6 +43,16 @@
  RUST_IMAGE=${RUST_IMAGE:-campfire-rust:app}
  ELIXIR_IMAGE=${ELIXIR_IMAGE:-campfire-elixir:release}
  GO_IMAGE=${GO_IMAGE:-once-campfire-go:optimized}
@@ -78,10 +78,14 @@ diff -ruN c-orig/bench/run c-work/bench/run
 +# C-only: complete-body cache budget (bytes). 0 is the deliberate off switch
 +# (uncached arm); 67108864 (64 MiB) is the cache-enabled arm of the ablation.
 +CF_CACHE_BYTES=${CF_CACHE_BYTES:-0}
++# C-only: HTTP loop threads. The C config default is 1; the published
++# methodology allocates four hardware threads per app, so C arms must run
++# CF_LOOPS=4 to match (Rust tokio workers / Rails Puma workers use the set).
++CF_LOOPS=${CF_LOOPS:-1}
  GO_ROOT=${GO_ROOT:-$(dirname "$ROOT")/once-campfire-go}
  SERVER_CPUS=${SERVER_CPUS:-8-11}
  LOADGEN_CPUS=${LOADGEN_CPUS:-12-15}
-@@ -92,7 +98,7 @@
+@@ -92,7 +102,7 @@
  }
  trap teardown EXIT INT TERM
  
@@ -90,7 +94,7 @@ diff -ruN c-orig/bench/run c-work/bench/run
  python3 - "$PORT" "$NETWORK" <<'PYPORT'
  import socket,sys
  ports=[int(sys.argv[1])]
-@@ -112,7 +118,7 @@
+@@ -112,7 +122,7 @@
  EMAIL=$(label emails.david)
  PASSWORD=$(label passwords.all)
  
@@ -99,21 +103,21 @@ diff -ruN c-orig/bench/run c-work/bench/run
  
  # Environment: parity/.env.reference, but with the reference's *default* process model for
  # SERVER_CPUS (config/puma.rb: workers = ceil(nproc * 0.666), JOB_CONCURRENCY the same, 5 threads;
-@@ -120,6 +126,7 @@
+@@ -120,6 +130,7 @@
  # (reader pool) and JOB_CONCURRENCY (job workers) the same way; it is always one process.
  env_args() {
    if [ "${1:-}" = elixir ]; then printf '%s\n' -e "PORT=$PORT"; fi
-+  if [ "${1:-}" = c ]; then printf '%s\n' -e "CF_CACHE_BYTES=$CF_CACHE_BYTES"; fi
++  if [ "${1:-}" = c ]; then printf '%s\n' -e "CF_CACHE_BYTES=$CF_CACHE_BYTES" -e "CF_LOOPS=$CF_LOOPS"; fi
    local ncpu; ncpu=$(taskset -c "$SERVER_CPUS" nproc)
    local workers=$(( (ncpu * 666 + 999) / 1000 ))
    grep -Ev '^(#|$|WEB_CONCURRENCY|JOB_CONCURRENCY|RAILS_MAX_THREADS|RAILS_LOG_LEVEL)' "$ENV_FILE" | sed 's/^/-e\n/'
-@@ -290,14 +297,15 @@
+@@ -290,14 +301,15 @@
    echo "server cpus: $SERVER_CPUS (nproc $(taskset -c "$SERVER_CPUS" nproc)); loadgen cpus: $LOADGEN_CPUS; network: $NETWORK"
    echo "env: $(env_args | grep -E 'WEB_CONC|JOB_CONC|MAX_THREADS' | tr '\n' ' ')"
    echo "seed sha256: $(sha256sum "$SEED/db/production.sqlite3")"
 -  echo "elixir source digest: $(python3 "$BENCH/validate.py" digest)"
 +  if [[ ",$APPS," = *,elixir,* ]]; then echo "elixir source digest: $(python3 "$BENCH/validate.py" digest)"; fi
-+  if [[ ",$APPS," = *,c,* ]]; then echo "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES image: $(image_for c)"; fi
++  if [[ ",$APPS," = *,c,* ]]; then echo "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES loops: $CF_LOOPS image: $(image_for c)"; fi
    echo "rust extra env: $RUST_EXTRA_ENV"
    echo "workload: suites=$SUITES HTTP_SECS=$HTTP_SECS HTTP_CONCS=$HTTP_CONCS CABLE_CLIENTS=$CABLE_CLIENTS CABLE_TPUT_SECS=$CABLE_TPUT_SECS CABLE_POSTERS=$CABLE_POSTERS UPLOAD_REPS=$UPLOAD_REPS REPS=$REPS"
    echo "quiet wait: LOAD_MAX=$LOAD_MAX LOAD_WAIT_SECS=$LOAD_WAIT_SECS"
@@ -127,7 +131,7 @@ diff -ruN c-orig/bench/run c-work/bench/run
  
 diff -ruN c-orig/bench/validate.py c-work/bench/validate.py
 --- c-orig/bench/validate.py	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/validate.py	2026-10-05 15:05:55.993117355 -0400
++++ c-work/bench/validate.py	2026-10-05 17:54:28.091511823 -0400
 @@ -2,9 +2,11 @@
  """Reject incomplete application measurements and preserve preflight response evidence."""
  import gzip,hashlib,http.client,importlib.machinery,json,pathlib,re,sqlite3,sys,urllib.parse

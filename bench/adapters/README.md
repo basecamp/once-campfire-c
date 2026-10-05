@@ -11,7 +11,7 @@ Post-patch SHA-256 (verify after regenerating the patch):
 
 | File | sha256 |
 | --- | --- |
-| `bench/run` | `72d1b271da51c883dc4919e8fa49af4102a8d37898238b99fce4a17983aab793` |
+| `bench/run` | `acf863b35892cf67ac508b1df83d2a7d7529ff35a1ed8fedff2c36dbae29c7fc` |
 | `bench/validate.py` | `cd9b4a262d92ab3a125e6b2d60629693ec504f23cd6355f27f45c1eda758c0d5` |
 | `bench/report` | `e48adb4da2befe36f5ccacc28b81fdb0a976c19aa4bf655116ff42329b57b037` |
 
@@ -28,10 +28,12 @@ preflight assertion.  Its parts:
      only when `elixir` is in `--apps`; the `go HEAD` / `rust HEAD` env lines
      run only for their own apps (the Rust checkout path does not exist on
      this host).  For upstream app selections the behavior is identical.
-   * `env_args()` forwards `-e CF_CACHE_BYTES=$CF_CACHE_BYTES` for the `c`
-     app (default 0, the uncached arm; `run-c --cache-bytes 67108864` runs the
-     cache-enabled arm), and env.txt gains one
-     `c revision: ... binary sha256: ... cache_bytes: ... image: ...` line.
+   * `env_args()` forwards `-e CF_CACHE_BYTES=$CF_CACHE_BYTES` and
+     `-e CF_LOOPS=$CF_LOOPS` for the `c` app (defaults 0 and 1; the flags
+     `--cache-bytes 67108864` and `--loops 4` select the benchmark arms), and
+     env.txt gains one
+     `c revision: ... binary sha256: ... cache_bytes: ... loops: ... image: ...`
+     line.
 2. **`bench/validate.py`** makes the Elixir verification module
    (`bin/verify-parity`) a lazy import, needed only for the `digest` and
    `ledger` subcommands.  The preflight assertions (status 200, non-empty

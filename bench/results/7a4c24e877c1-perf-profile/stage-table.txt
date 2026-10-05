@@ -1,0 +1,15 @@
+== stacks-up-hit.txt: 990 thread-blocks, busy 891, idle 99
+  stage: other=792 (88%), dispatch/http=99 (11%)
+  top frames: __futex_abstimed_wait_cancelable64=693, cf_loop_run_main=99, cf_ctx_process=99
+== stacks-room-hit.txt: 990 thread-blocks, busy 891, idle 99
+  stage: other=594 (66%), crypto/key-derive=297 (33%)
+  top frames: __futex_abstimed_wait_cancelable64=495, sha256_block_data_order=198, cf_loop_run_main=99, EVP_DigestFinal_ex=99
+== stacks-sidebar-hit.txt: 990 thread-blocks, busy 891, idle 99
+  stage: other=495 (55%), crypto/key-derive=396 (44%)
+  top frames: __futex_abstimed_wait_cancelable64=396, sha256_block_data_order=297, cf_loop_run_main=99, EVP_DigestFinal_ex=99
+== stacks-avatar-hit.txt: 990 thread-blocks, busy 891, idle 99
+  stage: other=495 (55%), crypto/key-derive=396 (44%)
+  top frames: __futex_abstimed_wait_cancelable64=396, sha256_block_data_order=396, cf_loop_run_main=99
+== stacks-room-miss.txt: 740 thread-blocks, busy 666, idle 74
+  stage: other=370 (55%), crypto/key-derive=296 (44%)
+  top frames: __futex_abstimed_wait_cancelable64=296, sha256_block_data_order=222, cf_loop_run_main=74, kdf_pbkdf2_derive=74
