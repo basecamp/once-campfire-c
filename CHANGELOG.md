@@ -12,9 +12,36 @@ worktree. New sources and tests are committed; shared wiring (`Makefile`
 `SRCS`/`UNIT_TEST_SRCS` entries, `src/actions/actions.h` declarations,
 `src/routes.c` rebinding, `main.c` startup/consumer registration) is held for
 a serial integrator pass, so the affected routes still answer dev-501 and the
-new objects are not yet linked into the app build. All six suites were
-re-run green by the integrator in the worktree before commit (commands and
-counts below); sanitizer/TSan/Fil-C axes per packet are as noted.
+new objects are not yet linked into the app build.
+
+### Wave 2: remaining controller packets (dispatch level, unwired)
+- **W2-A transfers/users/autocomplete/qr** (9,10,11 / 50,51,74 / 75 / 52):
+  one-use signed transfer tokens, join-code signup, membership-scoped
+  autocomplete JSON, pinned QR format. Tests 10+18+9+6=43 pass.
+- **W2-B accounts family** (44,46,47 / 19,24,25,26 / 37 / 38,39 / 40,41,42):
+  admin-before-lookup gating, permit/require/respond_to matrix, join-code
+  rotation, conditional-GET 304. Tests 62/62 incl. ASan/UBSan. Logo uploads
+  fail loudly pending S02/S03.
+- **W2-C bots/keys** (29-32,34-36 / 27,28): key rotation invalidation,
+  destroy-to-deactivate with DISCONNECT, P12-01 revalidation. Tests 27+5
+  incl. ASan/UBSan.
+- **W2-D profiles/push/avatars-destroy** (60-62 / 66,67,73 / 65 / 54):
+  ownership gates, unconditional redirects, loud-500 render gates where
+  A02 views are missing. Tests 15+19+7+5=46 incl. ASan/UBSan.
+- **W2-E room subclasses** (105-112 / 113-120 / 121-125,128): per-subclass
+  grants/participants, closed two-write update+revise with mandatory
+  DISCONNECT(reconnect=true). Tests 29+24+23; rooms 27/27 unbroken.
+- **W2-F boosts/by_bots/unfurl** (129-131,136 / 84,85 / 86-90 / 148):
+  room-scoped auth then privilege checks, bot-key auth, unfurl
+  400/204/200/500 arms. Tests 8+6+10+3; messages 35/35 unbroken.
+- Known integrator queue: route rebinding for all rows above,
+  `actions.h` declarations, Makefile `SRCS`/test lists, `main.c`/J02
+  consumer wiring, I01 link objects, missing A02 view/presenter symbols
+  (bots, accounts edit/users-stream/custom-styles, ProfileShow,
+  PushSubscriptionsIndex, room new/edit forms, sidebar shared/direct
+  partials, message/boost JSON), record-touch + private-host helpers,
+  qrcodegen-backed `cf_qr_code_svg`, closed-revise control handler in
+  production.
 
 ### J02 model-event job handlers
 - New: `src/jobs/handlers.{c,h}`, `tests/jobs/test_handlers.c` (14/14 x3;
