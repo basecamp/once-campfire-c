@@ -181,6 +181,44 @@ cf_err cf_richtext_to_plain_text(cf_db *db, const cf_richtext *rich_text, cf_spa
     return str_rc == RT_OK ? CF_OK : CF_NOMEM;
 }
 
+cf_err cf_richtext_to_plain_text_outcome(cf_db *db, const cf_richtext *rich_text, cf_span input,
+                                         cf_str *out, cf_richtext_plain_outcome *outcome) {
+    if (out == NULL || outcome == NULL) return CF_INVALID;
+    out->ptr = NULL;
+    out->len = 0;
+    *outcome = CF_RICHTEXT_PLAIN_TEXT;
+    rt_buf text;
+    rt_buf_init(&text);
+    rt_status rc = RT_OK;
+    if (input.ptr != NULL) {
+        rt_db_resolver storage;
+        rt_resolver *resolver = NULL;
+        make_resolver(&storage, rich_text, db, &resolver);
+        rc = rt_to_plain_text(resolver, input.ptr, input.len, &text);
+    }
+    if (rc == RT_UNRENDERABLE) {
+        /* The reference raise's own message is not valid UTF-8, so the
+         * rescue's logging raises again: message_tag's rescue fails and the
+         * whole page fails (Rust Error::Internal, HTTP 500). */
+        rt_buf_dispose(&text);
+        return CF_INTERNAL;
+    }
+    if (rc == RT_NOMEM) {
+        rt_buf_dispose(&text);
+        return CF_NOMEM;
+    }
+    if (rc != RT_OK) {
+        /* Any other raise was rescued by message_tag: the message renders
+         * messages/_unrenderable in place of all of it. */
+        rt_buf_dispose(&text);
+        *outcome = CF_RICHTEXT_PLAIN_UNRENDERABLE;
+        return CF_OK;
+    }
+    rt_status str_rc = rt_buf_to_str(&text, out);
+    rt_buf_dispose(&text);
+    return str_rc == RT_OK ? CF_OK : CF_NOMEM;
+}
+
 cf_err cf_richtext_mentioned_user_ids(cf_db *db, const cf_richtext *rich_text, cf_span input,
                                       cf_int64_vector *out) {
     if (out == NULL) return CF_INVALID;

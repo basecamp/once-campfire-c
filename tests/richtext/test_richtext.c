@@ -463,6 +463,72 @@ CF_TEST(error_fallbacks_match_the_reference) {
     rt_world_close(&world);
 }
 
+/* `message_tag`'s plain-text evaluation: the crate-level to_plain_text the
+ * presenter calls before rendering. An unloggable raise fails the page
+ * (CF_INTERNAL -> HTTP 500); every other raise renders
+ * messages/_unrenderable (CF_RICHTEXT_PLAIN_UNRENDERABLE); a success yields
+ * the text the sound arm then scans. */
+CF_TEST(plain_text_outcome_distinguishes_fail_from_unrenderable) {
+    rt_world world;
+    rt_world_open(&world);
+
+    /* Invalid UTF-8 in the JSON parse error: logging it raises again, so the
+     * whole page fails (the reference error is an unrescued ArgumentError). */
+    const char *fail = "<p>Before <action-text-attachment sgid=\"nope\"></action-text-attachment> after</p>";
+    cf_str text = {0};
+    cf_richtext_plain_outcome outcome = CF_RICHTEXT_PLAIN_TEXT;
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL),
+                                               span_of(fail), &text, &outcome) == CF_INTERNAL);
+    CF_CHECK(text.ptr == NULL);
+
+    /* Any loggable raise is rescued by message_tag: the unrenderable
+     * partial, never the message body. */
+    const char *invalid_base64 = "<p><action-text-attachment sgid=\"!!!\" content-type=\"application/vnd.campfire.mention\"></action-text-attachment></p>";
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL),
+                                               span_of(invalid_base64), &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_UNRENDERABLE);
+    CF_CHECK(text.ptr == NULL);
+
+    /* A JSON::ParserError whose message is valid UTF-8 ("hello" decodes to
+     * valid UTF-8, valid base64, invalid JSON) is loggable: unrenderable. */
+    const char *valid_utf8 = "<p><action-text-attachment sgid=\"aGVsbG8=\"></action-text-attachment></p>";
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL),
+                                               span_of(valid_utf8), &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_UNRENDERABLE);
+    CF_CHECK(text.ptr == NULL);
+
+    /* Parse limits raise Nokogiri errors: loggable, so unrenderable. */
+    char *deep = malloc(401 * 3 + 1);
+    CF_REQUIRE(deep != NULL);
+    for (size_t i = 0; i < 401; i++) memcpy(deep + i * 3, "<b>", 3);
+    deep[401 * 3] = '\0';
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL), span_of(deep),
+                                               &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_UNRENDERABLE);
+    CF_CHECK(text.ptr == NULL);
+    free(deep);
+
+    /* Success: the text, and an empty body is a successful empty string. */
+    const char *ok = "<p>Hello <b>there</b></p>";
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL), span_of(ok),
+                                               &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_TEXT);
+    CF_CHECK(text.ptr != NULL && strcmp(text.ptr, "Hello there") == 0);
+    cf_str_dispose(&text);
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL), span_of(""),
+                                               &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_TEXT);
+    CF_CHECK(text.ptr != NULL && text.len == 0);
+    cf_str_dispose(&text);
+    CF_CHECK(cf_richtext_to_plain_text_outcome(world.reader, cf_tx_rich_text(NULL),
+                                               (cf_span){NULL, 0}, &text, &outcome) == CF_OK);
+    CF_CHECK(outcome == CF_RICHTEXT_PLAIN_TEXT);
+    CF_CHECK(text.ptr != NULL && text.len == 0);
+    cf_str_dispose(&text);
+
+    rt_world_close(&world);
+}
+
 /* ---- stored XSS inertness -------------------------------------------------- */
 
 CF_TEST(stored_xss_stays_inert) {

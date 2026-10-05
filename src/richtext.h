@@ -68,6 +68,30 @@ cf_err cf_richtext_editable(cf_ctx *ctx, cf_span input, bool *found, cf_str *out
 cf_err cf_richtext_to_plain_text(cf_db *db, const cf_richtext *rich_text,
                                  cf_span input, cf_str *out);
 
+/* The message partial's own plain-text evaluation: `message_tag`'s
+ * `message.plain_text_body.all_emoji?`, i.e. the crate-level
+ * `campfire_richtext::to_plain_text`, NOT AppRichText's swallow above.
+ * Presenter::content evaluates it before rendering (presenters.rs) and
+ * branches exactly as Rails's `message_tag` rescue does. On CF_OK:
+ *   outcome CF_RICHTEXT_PLAIN_TEXT: *out holds the plain text; continue to
+ *     the attachment/sound/presentation arms;
+ *   outcome CF_RICHTEXT_PLAIN_UNRENDERABLE: the reference raise was rescued
+ *     (a loggable exception message): render `messages/_unrenderable.html`
+ *     in place of the whole message and do NOT call cf_richtext_render.
+ * CF_INTERNAL (outcome untouched): the raise's own message is not valid
+ * UTF-8, so logging it raised again (Rust `Error::Unrenderable` ->
+ * `Error::Internal`, HTTP 500): the page fails and the caller must propagate
+ * the failure. Resource failures return CF_NOMEM. A NULL or empty input is
+ * the reference's empty body: CF_OK with an empty text. */
+typedef enum {
+    CF_RICHTEXT_PLAIN_TEXT = 0,
+    CF_RICHTEXT_PLAIN_UNRENDERABLE
+} cf_richtext_plain_outcome;
+
+cf_err cf_richtext_to_plain_text_outcome(cf_db *db, const cf_richtext *rich_text,
+                                         cf_span input, cf_str *out,
+                                         cf_richtext_plain_outcome *outcome);
+
 /* Rust RichText::mentioned_user_ids: attached users with a verified SGID,
  * document order, unique. Raises are swallowed to an empty list. */
 cf_err cf_richtext_mentioned_user_ids(cf_db *db, const cf_richtext *rich_text,
