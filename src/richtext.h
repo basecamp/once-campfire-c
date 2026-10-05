@@ -63,6 +63,17 @@ cf_err cf_richtext_body_html(cf_ctx *ctx, cf_span input, cf_safe_html *out);
  * (an attachable without attachable_content_type, or a missing asset). */
 cf_err cf_richtext_editable(cf_ctx *ctx, cf_span input, bool *found, cf_str *out);
 
+/* `canonical_body`: assigning a String to a rich text attribute stores
+ * `ActionText::Content.new(body, canonicalize: true).to_html()` — the
+ * content.rs canonicalizing load (trix figure conversion and the GlobalID /
+ * SGID resolution mentions need) followed by `Content#to_html`
+ * (controllers/messages.rs canonical_body, over `app.read` with the request
+ * Host). As in the reference's
+ * `Content::load(..).map(to_html).unwrap_or_else(|_| body.to_string())`, a
+ * body the pipeline cannot load comes back unchanged, not as an error; only
+ * allocation failure is reported. The caller owns *out (NUL-terminated). */
+cf_err cf_richtext_canonical_body(cf_ctx *ctx, cf_span input, cf_str *out);
+
 /* Rust RichText::to_plain_text (AppRichText): raises are swallowed to an
  * empty string, exactly as the production wiring logs and continues. */
 cf_err cf_richtext_to_plain_text(cf_db *db, const cf_richtext *rich_text,

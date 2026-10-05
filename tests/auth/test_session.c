@@ -140,6 +140,72 @@ static void ctx_with_token(auth_env *env, cf_span raw, cf_request *req,
     ctx_with_cookie_header(env, header, req, resp, ctx);
 }
 
+/* ---- A01 flash persistence (commit_flash) --------------------------------- */
+
+#define SESSION_COOKIE "_campfire_session"
+
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* Undo A00's cookie-value escaping (%XX; the jar escapes every byte outside
+ * alnum *-._) so the value is what a Cookie header would carry. */
+static void cookie_unescape_into(const char *in, size_t len, char *out,
+                                 size_t cap) {
+    size_t w = 0;
+    for (size_t i = 0; i < len && w + 1 < cap; i++) {
+        if (in[i] == '%' && i + 2 < len) {
+            int hi = hex_digit(in[i + 1]);
+            int lo = hex_digit(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out[w++] = (char)((hi << 4) | lo);
+                i += 2;
+                continue;
+            }
+        }
+        out[w++] = in[i];
+    }
+    out[w] = '\0';
+}
+
+/* The raw value of `Set-Cookie: <name>=...` in a serialized response head, or
+ * false when the header is absent. A delete header yields the empty value. */
+static bool head_set_cookie(const cf_str *head, const char *name, char *out,
+                            size_t cap) {
+    if (head->ptr == NULL) return false;
+    char needle[64];
+    int n = snprintf(needle, sizeof needle, "Set-Cookie: %s=", name);
+    if (n < 0 || (size_t)n >= sizeof needle) return false;
+    const char *at = strstr(head->ptr, needle);
+    if (at == NULL) return false;
+    at += n;
+    size_t len = 0;
+    while (at[len] != '\0' && at[len] != ';' && at[len] != '\r' &&
+           at[len] != '\n') {
+        len++;
+    }
+    cookie_unescape_into(at, len, out, cap);
+    return true;
+}
+
+/* Decrypt one raw `_campfire_session` wire value; {NULL,0} when it does not
+ * verify. The configured key is auth_env's AUTH_VEC_SECRET_KEY_BASE. */
+static cf_str decrypt_session_wire(cf_span wire) {
+    cf_str json = {0};
+    bool found = false;
+    cf_err rc = cf_auth_cookie_decrypt(SP(AUTH_VEC_SECRET_KEY_BASE),
+                                       SP(SESSION_COOKIE), wire, T_NOW_US,
+                                       &json, &found);
+    if (rc != CF_OK || !found) {
+        if (json.ptr != NULL) cf_str_dispose(&json);
+        return (cf_str){0};
+    }
+    return json;
+}
+
 CF_TEST(login_matrix) {
     auth_env env;
     CF_REQUIRE(auth_env_open(&env));
@@ -274,6 +340,83 @@ CF_TEST(login_sets_signed_session_token_and_authenticates) {
     cf_str_dispose(&token);
     cf_str_dispose(&wire);
     cf_str_dispose(&cookie);
+    cf_test_clock_clear();
+    auth_env_close(&env);
+}
+
+/* `request.user_agent()` (kit request.rs:215) reads the User-Agent header
+ * through request.header(), so the to_str gate applies: an unreadable value
+ * (obs-text -- which H01 admits -- DEL, another control, NUL) is the
+ * reference's None and the session row stores NULL, not the raw bytes. */
+CF_TEST(session_user_agent_reads_through_the_to_str_gate) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+    int64_t id = auth_seed_user(&env, "Active", "a@example.com", NULL, 0, 0);
+    CF_REQUIRE(id != 0);
+
+    struct {
+        const char *label;
+        const unsigned char *bytes;
+        size_t len;
+        bool present;
+        const char *expected;
+    } cases[] = {
+        {"visible ASCII", (const unsigned char *)"curl/8.4.0",
+         sizeof "curl/8.4.0" - 1, true, "curl/8.4.0"},
+        {"HTAB", (const unsigned char *)"curl/8.4.0\t",
+         sizeof "curl/8.4.0\t" - 1, true, "curl/8.4.0\t"},
+        {"empty value", (const unsigned char *)"", 0, true, ""},
+        {"obs-text UTF-8", (const unsigned char *)"curl/8.4.0\xc3\xa9",
+         sizeof "curl/8.4.0\xc3\xa9" - 1, false, NULL},
+        {"invalid UTF-8", (const unsigned char *)"curl/\xff",
+         sizeof "curl/\xff" - 1, false, NULL},
+        {"DEL", (const unsigned char *)"curl/8.4.0\x7f",
+         sizeof "curl/8.4.0\x7f" - 1, false, NULL},
+        {"control", (const unsigned char *)"curl/8.4.0\x01",
+         sizeof "curl/8.4.0\x01" - 1, false, NULL},
+        {"NUL", (const unsigned char *)"curl/8.4.0\0",
+         sizeof "curl/8.4.0\0" - 1, false, NULL},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        cf_request req;
+        cf_test_req_init(&req);
+        req.method = CF_POST;
+        req.original_method = CF_POST;
+        req.path = SP("/session");
+        CF_REQUIRE(cf_test_req_header(
+                       &req, SP("User-Agent"),
+                       (cf_span){cases[i].bytes, cases[i].len}) == CF_OK);
+        cf_response resp;
+        cf_ctx ctx;
+        make_ctx(&env, &req, &resp, &ctx);
+
+        cf_user user;
+        bool found = false;
+        CF_REQUIRE(cf_user_find_by_id(env.reader, id, &found, &user) == CF_OK);
+        CF_REQUIRE(found);
+        cf_session session;
+        CF_REQUIRE(cf_auth_start_new_session_for(&ctx, &user, &session) ==
+                   CF_OK);
+        bool present_ok = session.user_agent.present == cases[i].present;
+        bool value_ok = true;
+        if (present_ok && cases[i].present) {
+            size_t n = strlen(cases[i].expected);
+            value_ok = session.user_agent.value.len == n &&
+                       (n == 0 || memcmp(session.user_agent.value.ptr,
+                                         cases[i].expected, n) == 0);
+        }
+        if (!present_ok || !value_ok) {
+            printf("    %s: present=%d len=%zu expected present=%d\n",
+                   cases[i].label, (int)session.user_agent.present,
+                   session.user_agent.value.len, (int)cases[i].present);
+            CF_CHECK(0);
+        }
+        cf_session_dispose(&session);
+        cf_user_dispose(&user);
+        cf_ctx_destroy(&ctx);
+        cf_response_dispose(&resp);
+    }
     cf_test_clock_clear();
     auth_env_close(&env);
 }
@@ -900,6 +1043,396 @@ CF_TEST(wrong_user_room_scope_is_denied) {
     CF_CHECK(cf_authorize_room(env.reader, a, 3002) == CF_NOT_FOUND);
     CF_CHECK(cf_authorize_room(env.reader, b, 3001) == CF_NOT_FOUND);
     CF_CHECK(cf_authorize_room(env.reader, a, 3999) == CF_NOT_FOUND);
+    auth_env_close(&env);
+}
+
+/* ---- flash persistence through the dispatcher ---------------------------- */
+
+static int g_flash_reads;
+static bool g_flash_found;
+static char g_flash_text[128];
+
+static cf_err flash_set_redirect_action(cf_ctx *ctx) {
+    cf_err rc = cf_ctx_flash_set(ctx, SP("alert"),
+                                 SP("Room not found or inaccessible"));
+    if (rc != CF_OK) return rc;
+    ctx->response->status = 302;
+    rc = cf_response_header(ctx->response, SP("Location"),
+                            SP("http://127.0.0.1:32123/"));
+    if (rc != CF_OK) return rc;
+    return cf_response_header(ctx->response, SP("Content-Type"),
+                              SP("text/html; charset=utf-8"));
+}
+
+static cf_err flash_read_action(cf_ctx *ctx) {
+    cf_span value = {NULL, 0};
+    g_flash_reads++;
+    g_flash_found = cf_ctx_flash_get(ctx, SP("alert"), &value) == CF_OK;
+    g_flash_text[0] = '\0';
+    if (g_flash_found) {
+        size_t n = value.len < sizeof g_flash_text - 1
+                       ? value.len
+                       : sizeof g_flash_text - 1;
+        memcpy(g_flash_text, value.ptr, n);
+        g_flash_text[n] = '\0';
+    }
+    ctx->response->status = 200;
+    return CF_OK;
+}
+
+/* `redirect_to_with(root, alert:)` on request N must reach request N+1's
+ * flash, be rendered once there, and be gone from request N+2: the encrypted
+ * cookie carries the reference `{"discard":[],"flashes":{...}}` value, the
+ * consumed request rewrites it (nothing survives, so the cookie is deleted),
+ * and the request after that emits no Set-Cookie at all. */
+CF_TEST(flash_round_trip_through_the_dispatcher) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+    cf_test_routes_reset();
+    CF_REQUIRE(cf_test_routes_add("GET", "/flash/set", 40,
+                                  flash_set_redirect_action) == CF_OK);
+    CF_REQUIRE(cf_test_routes_add("GET", "/flash/read", 41, flash_read_action) ==
+               CF_OK);
+
+    /* Request 1 (no cookie): set + redirect. */
+    cf_request req1;
+    cf_response resp1;
+    cf_test_req_init(&req1);
+    req1.path = SP("/flash/set");
+    CF_REQUIRE(cf_ctx_process(env.app, env.reader, &req1, &resp1) == CF_OK);
+    CF_CHECK(resp1.status == 302);
+    cf_str head1 = response_head(&resp1, &req1);
+    char wire1[4096];
+    CF_CHECK(head_set_cookie(&head1, SESSION_COOKIE, wire1, sizeof wire1));
+    cf_str_dispose(&head1);
+    cf_str json1 = decrypt_session_wire(SP(wire1));
+    CF_REQUIRE(json1.ptr != NULL);
+    CF_CHECK(strstr(json1.ptr,
+                    "\"flash\":{\"discard\":[],\"flashes\":"
+                    "{\"alert\":\"Room not found or inaccessible\"}}") !=
+             NULL);
+    cf_str_dispose(&json1);
+    cf_response_dispose(&resp1);
+
+    /* Request 2 carrying the cookie: the alert is read; consuming it leaves
+     * only session_id, so commit deletes the cookie (reference commit()). */
+    char header2[4200];
+    cookie_header(header2, sizeof header2, SESSION_COOKIE, SP(wire1));
+    cf_request req2;
+    cf_response resp2;
+    cf_test_req_init(&req2);
+    req2.path = SP("/flash/read");
+    CF_REQUIRE(cf_test_req_header(&req2, SP("Cookie"), SP(header2)) == CF_OK);
+    CF_REQUIRE(cf_ctx_process(env.app, env.reader, &req2, &resp2) == CF_OK);
+    CF_CHECK(resp2.status == 200);
+    CF_CHECK(g_flash_reads == 1);
+    CF_CHECK(g_flash_found);
+    CF_CHECK(strcmp(g_flash_text, "Room not found or inaccessible") == 0);
+    cf_str head2 = response_head(&resp2, &req2);
+    CF_CHECK(str_has(&head2,
+                     "Set-Cookie: _campfire_session=; path=/; max-age=0; "
+                     "expires=Thu, 01 Jan 1970 00:00:00 GMT; samesite=lax"));
+    cf_str_dispose(&head2);
+    cf_response_dispose(&resp2);
+
+    /* Request 3 (the cookie is gone): nothing repeats, nothing is written. */
+    cf_request req3;
+    cf_response resp3;
+    cf_test_req_init(&req3);
+    req3.path = SP("/flash/read");
+    CF_REQUIRE(cf_ctx_process(env.app, env.reader, &req3, &resp3) == CF_OK);
+    CF_CHECK(g_flash_reads == 2);
+    CF_CHECK(!g_flash_found);
+    cf_str head3 = response_head(&resp3, &req3);
+    CF_CHECK(!str_has(&head3, "Set-Cookie:"));
+    cf_str_dispose(&head3);
+    cf_response_dispose(&resp3);
+    cf_test_clock_clear();
+    auth_env_close(&env);
+}
+
+/* The encrypted cookie bytes change exactly when the session changes: a
+ * consumed alert rewrites the cookie (the other session key survives), an
+ * identical set writes nothing, and a request whose flash was already
+ * consumed emits no Set-Cookie. */
+CF_TEST(flash_consumption_rewrites_the_cookie_once) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+
+    cf_request req1;
+    cf_response resp1;
+    cf_ctx ctx1;
+    cf_test_req_init(&req1);
+    make_ctx(&env, &req1, &resp1, &ctx1);
+    CF_REQUIRE(cf_auth_session_write(&ctx1, SP("k"), SP("\"v\"")) == CF_OK);
+    CF_REQUIRE(cf_ctx_flash_set(&ctx1, SP("alert"), SP("old")) == CF_OK);
+    CF_REQUIRE(cf_finish_cookies(&ctx1) == CF_OK);
+    cf_span wire1;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx1, SP(SESSION_COOKIE), &wire1) == CF_OK);
+    cf_str bytes1 = {0};
+    CF_REQUIRE(auth_str_dup(wire1, &bytes1) == CF_OK);
+    cf_str json1 = decrypt_session_wire(wire1);
+    CF_REQUIRE(json1.ptr != NULL);
+    CF_CHECK(strstr(json1.ptr, "\"alert\":\"old\"") != NULL);
+    CF_CHECK(strstr(json1.ptr, "\"k\":\"v\"") != NULL);
+    cf_str_dispose(&json1);
+    cf_ctx_destroy(&ctx1);
+    cf_response_dispose(&resp1);
+
+    /* Request 2: read the alert (consumed) and set the key again with a new
+     * value; the cookie is rewritten with the new value, not the old. */
+    char header2[4200];
+    cookie_header(header2, sizeof header2, SESSION_COOKIE,
+                  (cf_span){(const unsigned char *)bytes1.ptr, bytes1.len});
+    cf_request req2;
+    cf_response resp2;
+    cf_ctx ctx2;
+    cf_test_req_init(&req2);
+    req2.path = SP("/rooms/1");
+    CF_REQUIRE(cf_test_req_header(&req2, SP("Cookie"), SP(header2)) == CF_OK);
+    make_ctx(&env, &req2, &resp2, &ctx2);
+    cf_span seen;
+    CF_REQUIRE(cf_ctx_flash_get(&ctx2, SP("alert"), &seen) == CF_OK);
+    CF_CHECK(auth_span_is(seen, "old"));
+    CF_REQUIRE(cf_ctx_flash_set(&ctx2, SP("alert"), SP("new")) == CF_OK);
+    CF_REQUIRE(cf_finish_cookies(&ctx2) == CF_OK);
+    cf_span wire2;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx2, SP(SESSION_COOKIE), &wire2) == CF_OK);
+    cf_str bytes2 = {0};
+    CF_REQUIRE(auth_str_dup(wire2, &bytes2) == CF_OK);
+    CF_CHECK(bytes2.len != bytes1.len ||
+             memcmp(bytes2.ptr, bytes1.ptr, bytes1.len) != 0);
+    cf_str json2 = decrypt_session_wire(wire2);
+    CF_REQUIRE(json2.ptr != NULL);
+    CF_CHECK(strstr(json2.ptr, "\"alert\":\"new\"") != NULL);
+    CF_CHECK(strstr(json2.ptr, "\"k\":\"v\"") != NULL);
+    cf_str_dispose(&json2);
+    cf_ctx_destroy(&ctx2);
+    cf_response_dispose(&resp2);
+
+    /* Request 3: an identical set of the same value changes nothing, so no
+     * Set-Cookie is emitted (Session::insert equality). */
+    char header3[4200];
+    cookie_header(header3, sizeof header3, SESSION_COOKIE,
+                  (cf_span){(const unsigned char *)bytes2.ptr, bytes2.len});
+    cf_request req3;
+    cf_response resp3;
+    cf_ctx ctx3;
+    cf_test_req_init(&req3);
+    req3.path = SP("/rooms/1");
+    CF_REQUIRE(cf_test_req_header(&req3, SP("Cookie"), SP(header3)) == CF_OK);
+    make_ctx(&env, &req3, &resp3, &ctx3);
+    CF_REQUIRE(cf_ctx_flash_set(&ctx3, SP("alert"), SP("new")) == CF_OK);
+    CF_REQUIRE(cf_finish_cookies(&ctx3) == CF_OK);
+    cf_str head3 = response_head(&resp3, &req3);
+    CF_CHECK(!str_has(&head3, "Set-Cookie:"));
+    cf_str_dispose(&head3);
+    cf_span kept;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx3, SP(SESSION_COOKIE), &kept) == CF_OK);
+    CF_CHECK(kept.len == bytes2.len &&
+             memcmp(kept.ptr, bytes2.ptr, bytes2.len) == 0);
+    cf_ctx_destroy(&ctx3);
+    cf_response_dispose(&resp3);
+
+    /* Request 4: read+consume the alert. The cookie is rewritten without it
+     * (k survives); a fifth, flash-free request writes nothing. */
+    cf_request req4;
+    cf_response resp4;
+    cf_ctx ctx4;
+    cf_test_req_init(&req4);
+    req4.path = SP("/rooms/1");
+    CF_REQUIRE(cf_test_req_header(&req4, SP("Cookie"), SP(header3)) == CF_OK);
+    make_ctx(&env, &req4, &resp4, &ctx4);
+    CF_REQUIRE(cf_ctx_flash_get(&ctx4, SP("alert"), &seen) == CF_OK);
+    CF_CHECK(auth_span_is(seen, "new"));
+    CF_REQUIRE(cf_finish_cookies(&ctx4) == CF_OK);
+    cf_span wire4;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx4, SP(SESSION_COOKIE), &wire4) == CF_OK);
+    cf_str bytes4 = {0};
+    CF_REQUIRE(auth_str_dup(wire4, &bytes4) == CF_OK);
+    cf_str json4 = decrypt_session_wire(wire4);
+    CF_REQUIRE(json4.ptr != NULL);
+    CF_CHECK(strstr(json4.ptr, "\"flash\"") == NULL);
+    CF_CHECK(strstr(json4.ptr, "\"k\":\"v\"") != NULL);
+    cf_str_dispose(&json4);
+    cf_ctx_destroy(&ctx4);
+    cf_response_dispose(&resp4);
+
+    char header5[4200];
+    cookie_header(header5, sizeof header5, SESSION_COOKIE,
+                  (cf_span){(const unsigned char *)bytes4.ptr, bytes4.len});
+    cf_request req5;
+    cf_response resp5;
+    cf_ctx ctx5;
+    cf_test_req_init(&req5);
+    req5.path = SP("/rooms/1");
+    CF_REQUIRE(cf_test_req_header(&req5, SP("Cookie"), SP(header5)) == CF_OK);
+    make_ctx(&env, &req5, &resp5, &ctx5);
+    CF_CHECK(cf_ctx_flash_get(&ctx5, SP("alert"), &seen) == CF_NOT_FOUND);
+    CF_REQUIRE(cf_finish_cookies(&ctx5) == CF_OK);
+    cf_str head5 = response_head(&resp5, &req5);
+    CF_CHECK(!str_has(&head5, "Set-Cookie:"));
+    cf_str_dispose(&head5);
+    cf_ctx_destroy(&ctx5);
+    cf_response_dispose(&resp5);
+
+    cf_str_dispose(&bytes1);
+    cf_str_dispose(&bytes2);
+    cf_str_dispose(&bytes4);
+    cf_test_clock_clear();
+    auth_env_close(&env);
+}
+
+/* The insertion-order accessors (messages ETag joins cf_ctx_flash_at; the
+ * session commit serializes cf_ctx_flash_pending_at): set appends, an
+ * overwrite keeps the position, delete removes, a consumed (now/loaded) entry
+ * stays visible but not pending, and persist writes the pending entries in
+ * order. */
+CF_TEST(flash_map_accessors_preserve_reference_order) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+    cf_request req;
+    cf_response resp;
+    cf_ctx ctx;
+    cf_test_req_init(&req);
+    make_ctx(&env, &req, &resp, &ctx);
+
+    CF_REQUIRE(cf_ctx_flash_set(&ctx, SP("a"), SP("1")) == CF_OK);
+    CF_REQUIRE(cf_ctx_flash_set(&ctx, SP("b"), SP("2")) == CF_OK);
+    CF_REQUIRE(cf_ctx_flash_set(&ctx, SP("c"), SP("3")) == CF_OK);
+    CF_REQUIRE(cf_ctx_flash_set(&ctx, SP("a"), SP("9")) == CF_OK); /* in place */
+    CF_REQUIRE(cf_ctx_flash_delete(&ctx, SP("b")) == CF_OK);
+    CF_REQUIRE(cf_ctx_flash_delete(&ctx, SP("missing")) == CF_OK); /* no-op */
+
+    cf_span key, value;
+    CF_CHECK(cf_ctx_flash_at(&ctx, 0, &key, &value) &&
+             auth_span_is(key, "a") && auth_span_is(value, "9"));
+    CF_CHECK(cf_ctx_flash_at(&ctx, 1, &key, &value) &&
+             auth_span_is(key, "c") && auth_span_is(value, "3"));
+    CF_CHECK(!cf_ctx_flash_at(&ctx, 2, &key, &value));
+    CF_CHECK(!cf_ctx_flash_at(NULL, 0, &key, &value));
+    CF_CHECK(cf_ctx_flash_at(&ctx, 0, NULL, NULL));
+
+    CF_CHECK(cf_ctx_flash_pending_at(&ctx, 1, &key, &value) &&
+             auth_span_is(key, "c"));
+    CF_CHECK(!cf_ctx_flash_pending_at(&ctx, 2, &key, &value));
+    CF_CHECK(cf_ctx_flash_pending_at(&ctx, 0, NULL, NULL));
+
+    /* now() replaces in place and consumes: still in at(), out of pending. */
+    CF_REQUIRE(cf_ctx_flash_now(&ctx, SP("a"), SP("now")) == CF_OK);
+    CF_CHECK(cf_ctx_flash_at(&ctx, 0, &key, &value) &&
+             auth_span_is(key, "a") && auth_span_is(value, "now"));
+    CF_CHECK(cf_ctx_flash_pending_at(&ctx, 0, &key, &value) &&
+             auth_span_is(key, "c"));
+    CF_CHECK(!cf_ctx_flash_pending_at(&ctx, 1, &key, &value));
+    CF_REQUIRE(cf_ctx_flash_set(&ctx, SP("d"), SP("4")) == CF_OK);
+    CF_CHECK(cf_ctx_flash_pending_at(&ctx, 1, &key, &value) &&
+             auth_span_is(key, "d"));
+
+    /* commit_flash: pending only, in insertion order. */
+    CF_REQUIRE(cf_auth_flash_persist(&ctx) == CF_OK);
+    cf_span wire;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx, SP(SESSION_COOKIE), &wire) == CF_OK);
+    cf_str json = decrypt_session_wire(wire);
+    CF_REQUIRE(json.ptr != NULL);
+    CF_CHECK(strstr(json.ptr, "\"flashes\":{\"c\":\"3\",\"d\":\"4\"}") != NULL);
+    CF_CHECK(strstr(json.ptr, "\"a\"") == NULL);
+    cf_str_dispose(&json);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp);
+    cf_test_clock_clear();
+    auth_env_close(&env);
+}
+
+/* FlashHash.from_session_value: the stored discard list hides already
+ * discarded keys, loaded values are consumed by this request, and non-string
+ * values (which the reference would keep in the hash) are not surfaced by
+ * this port's string map. */
+CF_TEST(flash_loader_reads_discard_and_skips_non_strings) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+
+    cf_request req1;
+    cf_response resp1;
+    cf_ctx ctx1;
+    cf_test_req_init(&req1);
+    make_ctx(&env, &req1, &resp1, &ctx1);
+    CF_REQUIRE(cf_auth_session_write(
+                   &ctx1, SP("flash"),
+                   SP("{\"discard\":[\"alert\"],\"flashes\":"
+                      "{\"alert\":\"gone\",\"notice\":\"hi\",\"n\":1}}")) ==
+               CF_OK);
+    cf_span wire;
+    CF_REQUIRE(cf_ctx_cookie_get(&ctx1, SP(SESSION_COOKIE), &wire) == CF_OK);
+    cf_str bytes = {0};
+    CF_REQUIRE(auth_str_dup(wire, &bytes) == CF_OK);
+    cf_ctx_destroy(&ctx1);
+    cf_response_dispose(&resp1);
+
+    char header[4200];
+    cookie_header(header, sizeof header, SESSION_COOKIE,
+                  (cf_span){(const unsigned char *)bytes.ptr, bytes.len});
+    cf_request req2;
+    cf_response resp2;
+    cf_ctx ctx2;
+    cf_test_req_init(&req2);
+    req2.path = SP("/rooms/1");
+    CF_REQUIRE(cf_test_req_header(&req2, SP("Cookie"), SP(header)) == CF_OK);
+    make_ctx(&env, &req2, &resp2, &ctx2);
+    cf_span key, value;
+    /* pending_at is the commit's view and never loads; at() loads like any
+     * flash read, applies the discard list and skips non-strings. */
+    CF_CHECK(!cf_ctx_flash_pending_at(&ctx2, 0, NULL, NULL));
+    CF_CHECK(cf_ctx_flash_at(&ctx2, 0, &key, &value) &&
+             auth_span_is(key, "notice") && auth_span_is(value, "hi"));
+    CF_CHECK(!cf_ctx_flash_at(&ctx2, 1, &key, &value));
+    CF_CHECK(cf_ctx_flash_get(&ctx2, SP("alert"), &value) == CF_NOT_FOUND);
+    CF_REQUIRE(cf_ctx_flash_get(&ctx2, SP("notice"), &value) == CF_OK);
+    CF_CHECK(auth_span_is(value, "hi"));
+    CF_CHECK(cf_ctx_flash_get(&ctx2, SP("n"), &value) == CF_NOT_FOUND);
+    /* The loaded notice is consumed at commit; the session held nothing else,
+     * so the cookie is deleted. */
+    CF_REQUIRE(cf_finish_cookies(&ctx2) == CF_OK);
+    CF_CHECK(cf_ctx_cookie_get(&ctx2, SP(SESSION_COOKIE), &value) ==
+             CF_NOT_FOUND);
+    cf_ctx_destroy(&ctx2);
+    cf_response_dispose(&resp2);
+    cf_str_dispose(&bytes);
+    cf_test_clock_clear();
+    auth_env_close(&env);
+}
+
+/* flash.now is shown on this request and never serialized. */
+CF_TEST(flash_now_is_not_persisted) {
+    auth_env env;
+    CF_REQUIRE(auth_env_open(&env));
+    cf_test_clock_set_fixed_us(T_NOW_US);
+    cf_request req;
+    cf_response resp;
+    cf_ctx ctx;
+    cf_test_req_init(&req);
+    make_ctx(&env, &req, &resp, &ctx);
+
+    CF_REQUIRE(cf_ctx_flash_now(&ctx, SP("alert"), SP("x")) == CF_OK);
+    cf_span value;
+    CF_REQUIRE(cf_ctx_flash_get(&ctx, SP("alert"), &value) == CF_OK);
+    CF_CHECK(auth_span_is(value, "x"));
+    CF_CHECK(cf_ctx_flash_at(&ctx, 0, NULL, NULL));
+    CF_CHECK(!cf_ctx_flash_pending_at(&ctx, 0, NULL, NULL));
+    CF_REQUIRE(cf_finish_cookies(&ctx) == CF_OK);
+    cf_str head = response_head(&resp, &req);
+    CF_CHECK(!str_has(&head, "Set-Cookie:"));
+    cf_str_dispose(&head);
+    cf_span gone;
+    CF_CHECK(cf_ctx_cookie_get(&ctx, SP(SESSION_COOKIE), &gone) ==
+             CF_NOT_FOUND);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp);
+    cf_test_clock_clear();
     auth_env_close(&env);
 }
 

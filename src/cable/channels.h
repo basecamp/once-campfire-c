@@ -10,13 +10,18 @@
  *
  * Threading model: one `cf_cable_loop` per connection, owned by that
  * connection's owner thread (the C01 socket thread, or a test thread). The
- * loop holds the subscriptions and their stream map; model reads for
- * subscribe validation run on the owner thread with the loop's own reader
- * (never on an HTTP loop thread), and PresenceChannel's membership effects go
- * through cf_write. Cross-loop broadcasts enqueue immutable frame references
- * into each matching loop's bounded pending queue and deliver them to the
- * socket with C01's thread-safe send API. No total ordering between
- * separate broadcasts is invented.
+ * loop holds the subscriptions and their stream map. On the production
+ * reactor path the owner thread performs socket I/O and installs results
+ * only: connection authentication and subscribe validation/model effects run
+ * on the app's bounded request-worker pool (cf_app_submit_worker) with the
+ * worker's own reader, and their results are installed through the C03
+ * install gate/version check (a full worker queue rejects the subscription
+ * and refuses the connection). Standalone sockets/tests keep the synchronous
+ * path with the loop's own reader, and PresenceChannel's membership effects
+ * go through cf_write either way. Cross-loop broadcasts enqueue immutable
+ * frame references into each matching loop's bounded pending queue and
+ * deliver them to the socket with C01's thread-safe send API. No total
+ * ordering between separate broadcasts is invented.
  *
  * Evidence: docs/devel/evidence/C02.md. */
 #ifndef CF_CABLE_CHANNELS_H
@@ -61,7 +66,14 @@ typedef struct {
     /* Bounds overrides; 0 selects the constants above. */
     size_t max_pending_commands;
     size_t max_pending_bytes;
+    /* Number of HTTP loops the transport services (0 selects the bounded
+     * default). Bounds the per-owner-loop shared-slot map: exactly one C03
+     * control slot per owner loop, never one per connection. */
+    size_t loops;
 } cf_cable_config;
+
+/* Upper bound on the owner-loop slot map when the loop count is not given. */
+#define CF_CABLE_MAX_READERS ((size_t)64)
 
 /* Create the application cable. On success *out owns it until
  * cf_cable_destroy; on failure *out stays NULL. */
@@ -252,6 +264,10 @@ cf_cable *cf_cable_loop_cable(cf_cable_loop *loop);
 /* The loop's preallocated revocation slot: non-NULL for a production loop,
  * NULL for a test loop that registers its own (C03). */
 cf_cable_revocation *cf_cable_loop_revocation(cf_cable_loop *loop);
+/* The loop's member of its owner loop's shared C03 control slot (production
+ * reactor loops), or NULL (test loop / standalone legacy slot). */
+cf_cable_revocation_member *cf_cable_loop_revocation_member(
+    const cf_cable_loop *loop);
 /* Borrowed SECRET_KEY_BASE (for Turbo's signed-stream verifier). */
 cf_span cf_cable_secret(cf_cable *cable);
 
@@ -268,6 +284,95 @@ void cf_cable_log(const char *what, const char *detail);
  * written before the broadcasts the handler triggered (reference order). */
 cf_err cf_cable_channels_dispatch(cf_cable_loop *loop, cf_span text);
 cf_err cf_cable_loop_handle_text(cf_cable_loop *loop, cf_span text);
+
+/* ---- the subscribe pipeline split for the worker handoff (P12-02b) --------- */
+
+/* 04 C02: "Subscribe validation runs in a worker; confirmation is emitted only
+ * after its successful model effects." The pipeline is split so the owner
+ * thread never touches a DB statement and a request worker never touches the
+ * loop, socket or subscription: the owner parses and installs the shell, the
+ * worker builds a detached plan with its own reader, the owner installs the
+ * plan through the C03 gate, an optional worker phase runs the deferred model
+ * effect (PresenceChannel's present write), and only then does the owner emit
+ * the confirmation. The synchronous dispatch path runs the same pieces on one
+ * thread (the loop's own reader), so behavior is identical. */
+
+/* A validation result that owns all of its model values (no borrowed loop,
+ * subscription, socket or cable pointers). */
+typedef struct {
+    bool rejected;
+    bool have_room;
+    cf_room room;          /* owned while have_room */
+    char **streams;        /* owned names the subscription reads */
+    size_t stream_count;
+    bool presence_present; /* PresenceChannel#subscribed effect is deferred */
+    int64_t room_id;       /* effect target when presence_present */
+} cf_cable_sub_plan;
+
+void cf_cable_sub_plan_dispose(cf_cable_sub_plan *plan);
+
+/* Owner thread: parse a subscribe command and install its subscription shell
+ * and channel state, with no model reads. CF_OK with *out == NULL means the
+ * command is ignored without a reply (duplicate identifier, bounds, unknown
+ * class, malformed command), exactly as the reference. */
+cf_err cf_cable_subscribe_begin(cf_cable_loop *loop, cf_span text,
+                                cf_cable_subscription **out);
+
+/* Worker (or the owner on the synchronous path): run the channel's subscribed
+ * validation against `reader` and fill a detached plan. `identifier` is the
+ * raw identifier stored on the shell; `secret` is SECRET_KEY_BASE for the
+ * Turbo signed-stream verifier. */
+cf_err cf_cable_subscribe_validate(const char *class_name, cf_db *reader,
+                                   int64_t user_id, cf_span identifier,
+                                   cf_span secret, cf_cable_sub_plan *plan);
+
+/* Owner thread, no database access: install a validated plan onto the
+ * subscription (room state, streams, rejection flag). */
+cf_err cf_cable_subscribe_apply(cf_cable_subscription *sub,
+                                cf_cable_sub_plan *plan);
+
+/* Worker: the deferred model effect of a validated PresenceChannel
+ * subscription (Membership::Connectable present + the read broadcast). Takes
+ * values only; uses cf_write/cf_cable_publish. */
+cf_err cf_cable_subscribe_presence_effect(cf_app *app, cf_cable *cable,
+                                          int64_t user_id, int64_t room_id);
+
+/* Owner thread: the reference reply once the model effects succeeded (or the
+ * gate refused): confirm, reject + remove, or log and keep the subscription
+ * (a raised callback sends neither reply). */
+void cf_cable_subscribe_reply(cf_cable_loop *loop, cf_cable_subscription *sub,
+                              bool refused, cf_err rc);
+
+/* `message` commands: the kind of a raw command text (the production wiring
+ * routes subscribe and a message's "subscribed" action through the worker
+ * pool; every other command dispatches synchronously, no reader involved). */
+typedef enum {
+    CF_CABLE_CMD_OTHER = 0,
+    CF_CABLE_CMD_SUBSCRIBE,
+    CF_CABLE_CMD_MESSAGE_SUBSCRIBED
+} cf_cable_command_kind;
+
+cf_cable_command_kind cf_cable_command_kind_of(cf_span text);
+
+/* Owner thread: the existing subscription a `message` command addresses, or
+ * NULL (the caller logs the reference's "unable to find subscription"). */
+cf_cable_subscription *cf_cable_message_subscription(cf_cable_loop *loop,
+                                                     cf_span text);
+
+/* Worker: the `subscribed` action of a message for an installed subscription.
+ * *handled == false when the channel ignores the action (the caller logs
+ * "unable to process", as channel_perform does); otherwise `plan` is filled
+ * (rejected subscriptions are ignored before any read). `sub` is only read. */
+cf_err cf_cable_message_subscribed_validate(const cf_cable_subscription *sub,
+                                            cf_db *reader, int64_t user_id,
+                                            cf_span secret, bool *handled,
+                                            cf_cable_sub_plan *plan);
+
+/* Owner thread, no reads: channel_perform's gating for a message command's
+ * "subscribed" action (false when the channel ignores the action or the
+ * subscription is already rejected, so the caller logs "unable to process").
+ * The validation itself then runs on a worker with copied inputs. */
+bool cf_cable_message_subscribed_handled(const cf_cable_subscription *sub);
 
 /* Run one subscription's unsubscribed effects (channels.c; PresenceChannel's
  * absent). pubsub.c calls it on unsubscribe and on connection close.

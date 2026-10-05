@@ -14,6 +14,17 @@
  * that handler, which is what keeps a subscribe's confirmation ahead of the
  * broadcast it triggers (reference connection.rs flush order).
  *
+ * Worker seam (04 C02/C03, P12-02b). The production reactor performs socket
+ * I/O only: upgrade authentication and subscribe validation run on the app's
+ * bounded request-worker pool (cf_app_submit_worker) with the worker's own
+ * reader; their results are installed back on the owner thread through the
+ * C03 install gate/version check, the deferred presence effect runs as a
+ * second worker phase, and only then is the confirmation emitted. A full
+ * worker queue rejects the subscription (and refuses the connection on the
+ * auth path). The reactor holds no DB reader. The standalone socket_run
+ * driver (tests, direct callers) keeps the synchronous on-thread path with
+ * its connection's own reader.
+ *
  * Bounds per loop: CF_CABLE_LOOP_MAX_COMMANDS pending commands and
  * CF_CABLE_LOOP_MAX_BYTES of frame references (each command counts its frame
  * length once). On overflow the broadcast is dropped, the loop and cable
@@ -24,6 +35,7 @@
 #include "cable/channels.h"
 
 #include "app.h"
+#include "app_internal.h"
 #include "auth.h"
 #include "cable/revocation.h"
 #include "config.h"
@@ -35,6 +47,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <yyjson.h>
 
 /* ---- the cable and its loops ---------------------------------------------- */
 
@@ -53,7 +67,8 @@ struct cf_cable_loop {
     int64_t user_id;
     char *user_name;       /* owned NUL-terminated copy */
     char *internal_stream; /* owned "action_cable/<user gid param>" */
-    cf_db *reader;         /* owned; opened on the attaching (owner) thread */
+    cf_db *reader;         /* reactor-shared (borrowed) or own */
+    bool reader_owned;     /* close it in detach only when owned */
     bool handling;         /* owner thread is inside handle_text */
     bool test_hold;        /* test-only: defer flushing (never in production) */
     cf_cable_subscription *subs;
@@ -62,12 +77,16 @@ struct cf_cable_loop {
     size_t pending_count, pending_bytes;
     uint64_t dropped;
 
-    /* C03 production wiring. `revocation` is the preallocated control slot
-     * (NULL for a test loop); `revoked` stops new application output and is
-     * only read/written under the loop mutex. A revoke moves the whole
-     * subscription array to `deferred` (O(1), no allocation on the barrier
-     * path) so the presence effects run after the acknowledgment. */
+    /* C03 production wiring. `revocation` is the legacy preallocated control
+     * slot (NULL for a test loop and for a shared-slot member loop);
+     * `member` is this connection's member of its owner loop's one shared C03
+     * control slot (production reactor; NULL otherwise). `revoked` stops new
+     * application output and is only read/written under the loop mutex. A
+     * revoke moves the whole subscription array to `deferred` (O(1), no
+     * allocation on the barrier path) so the presence effects run after the
+     * acknowledgment. */
     cf_cable_revocation *revocation;
+    cf_cable_revocation_member *member;
     bool revoked;
     cf_cable_subscription *deferred;
     size_t deferred_count, deferred_cap;
@@ -83,9 +102,23 @@ struct cf_cable {
     pthread_cond_t idle_cv; /* loops reach zero (shutdown ordering) */
     cf_cable_loop *loops;
     size_t loop_count;
-    size_t refs; /* one per loop plus the creator */
+    size_t refs; /* one per loop, one per live connection context, creator */
     bool stopping;
     uint64_t published, delivered, dropped;
+
+    /* One shared C03 control slot per owner loop (one per cable reactor),
+     * registered by the owner_start hook and unregistered by owner_stop.
+     * `token` is the value cf_cable_socket_transport_token returns. */
+    pthread_mutex_t owners_mutex;
+    struct {
+        void *token;
+        cf_cable_revocation *slot;
+    } *owners;
+    size_t owner_count, owner_cap;
+
+    /* P12-02b measurement: where the last authentication/subscribe model work
+     * executed (test-only accessor). */
+    cf_cable_work_identity ident_auth, ident_subscribe;
 };
 
 void cf_cable_log(const char *what, const char *detail) {
@@ -146,11 +179,34 @@ cf_err cf_cable_create(const cf_cable_config *config, cf_cable **out) {
         free(cable);
         return CF_INTERNAL;
     }
+    if (pthread_mutex_init(&cable->owners_mutex, NULL) != 0) {
+        pthread_cond_destroy(&cable->idle_cv);
+        pthread_mutex_destroy(&cable->mutex);
+        free(cable->db_path);
+        free(cable->secret);
+        free(cable);
+        return CF_INTERNAL;
+    }
+    cable->owner_cap = config->loops != 0 ? config->loops
+                                          : CF_CABLE_MAX_REACTORS;
+    cable->owners = calloc(cable->owner_cap, sizeof *cable->owners);
+    if (cable->owners == NULL) {
+        pthread_mutex_destroy(&cable->owners_mutex);
+        pthread_cond_destroy(&cable->idle_cv);
+        pthread_mutex_destroy(&cable->mutex);
+        free(cable->db_path);
+        free(cable->secret);
+        free(cable);
+        return CF_NOMEM;
+    }
     *out = cable;
     return CF_OK;
 }
 
-/* The cable lock is held; frees the object when the last reference goes. */
+/* The cable lock is held; frees the object when the last reference goes. The
+ * shared slots and loops can only be in use while a loop or a connection
+ * context holds a reference, so nothing can still be reading once refs
+ * reaches zero. */
 static void cable_release_locked(cf_cable *cable) {
     if (cable->refs > 0) cable->refs--;
     if (cable->refs != 0) {
@@ -158,11 +214,29 @@ static void cable_release_locked(cf_cable *cable) {
         return;
     }
     pthread_mutex_unlock(&cable->mutex);
+    free(cable->owners);
+    pthread_mutex_destroy(&cable->owners_mutex);
     pthread_cond_destroy(&cable->idle_cv);
     pthread_mutex_destroy(&cable->mutex);
     free(cable->db_path);
     free(cable->secret);
     free(cable);
+}
+
+/* One reference for an in-flight connection context (its worker jobs may
+ * outlive the socket, so the cable must outlive them). */
+static cf_cable *cable_retain(cf_cable *cable) {
+    if (cable == NULL) return NULL;
+    pthread_mutex_lock(&cable->mutex);
+    cable->refs++;
+    pthread_mutex_unlock(&cable->mutex);
+    return cable;
+}
+
+static void cable_release(cf_cable *cable) {
+    if (cable == NULL) return;
+    pthread_mutex_lock(&cable->mutex);
+    cable_release_locked(cable);
 }
 
 void cf_cable_destroy(cf_cable *cable) {
@@ -187,7 +261,10 @@ static void loop_revocation_cleanup(void *user);
 
 static cf_err loop_open(cf_cable *cable, int64_t user_id, const char *user_name,
                         cf_cable_loop_send_fn send, void *send_user,
-                        bool with_revocation, cf_cable_loop **out) {
+                        cf_db *reader, bool open_reader_if_null,
+                        bool with_revocation,
+                        cf_cable_revocation *owner_slot,
+                        cf_cable_loop **out) {
     *out = NULL;
     if (cable == NULL || user_name == NULL) return CF_INVALID;
     cf_cable_loop *loop = calloc(1, sizeof *loop);
@@ -230,21 +307,52 @@ static cf_err loop_open(cf_cable *cable, int64_t user_id, const char *user_name,
         free(loop);
         return rc;
     }
-    /* The owner thread reads through its own connection (02: a reader belongs
-     * to the thread that opened it). */
-    rc = cf_db_open(cable->db_path, true, &loop->reader);
-    if (rc != CF_OK) {
-        pthread_mutex_destroy(&loop->mutex);
-        free(loop->user_name);
-        free(loop->internal_stream);
-        free(loop);
-        return rc;
+    /* The owner reads through its reader on the synchronous paths: the
+     * production reactor hands a connection no reader at all (all model work
+     * runs on the request-worker pool and the loop's reader stays NULL), a
+     * standalone production socket hands its private reader, and a test loop
+     * opens one on this thread (a reader belongs to the thread that opened
+     * it). */
+    if (reader != NULL) {
+        loop->reader = reader;
+        loop->reader_owned = false;
+    } else if (open_reader_if_null) {
+        rc = cf_db_open(cable->db_path, true, &loop->reader);
+        if (rc != CF_OK) {
+            pthread_mutex_destroy(&loop->mutex);
+            free(loop->user_name);
+            free(loop->internal_stream);
+            free(loop);
+            return rc;
+        }
+        loop->reader_owned = true;
+    } else {
+        loop->reader = NULL;
+        loop->reader_owned = false;
     }
 
-    /* Register the control slot before the loop is linked into the cable, so
-     * a barrier can never see an attached loop without its slot (C03). Test
-     * loops stay unregistered and drive their own slots. */
-    if (with_revocation) {
+    /* Register the C03 control membership before the loop is linked into the
+     * cable, so a barrier can never see an attached loop without its slot (a
+     * legacy per-loop slot for standalone/test loops; one member of the owner
+     * loop's shared slot for the production reactor). */
+    if (owner_slot != NULL) {
+        cf_cable_revocation_ops ops;
+        memset(&ops, 0, sizeof ops);
+        ops.frame_partial = loop_revocation_frame_partial;
+        ops.revoke = loop_revocation_revoke;
+        ops.cleanup = loop_revocation_cleanup;
+        ops.user = loop;
+        rc = cf_cable_revocation_member_add(owner_slot, user_id, &ops,
+                                            &loop->member);
+        if (rc != CF_OK) {
+            if (loop->reader_owned) cf_db_close(loop->reader);
+            pthread_mutex_destroy(&loop->mutex);
+            free(loop->user_name);
+            free(loop->internal_stream);
+            free(loop);
+            return rc;
+        }
+    } else if (with_revocation) {
         cf_cable_revocation_ops ops;
         memset(&ops, 0, sizeof ops);
         ops.wake = loop_revocation_wake;
@@ -255,7 +363,7 @@ static cf_err loop_open(cf_cable *cable, int64_t user_id, const char *user_name,
         rc = cf_cable_revocation_register(cable, cable->app, user_id, &ops,
                                           &loop->revocation);
         if (rc != CF_OK) {
-            cf_db_close(loop->reader);
+            if (loop->reader_owned) cf_db_close(loop->reader);
             pthread_mutex_destroy(&loop->mutex);
             free(loop->user_name);
             free(loop->internal_stream);
@@ -267,13 +375,17 @@ static cf_err loop_open(cf_cable *cable, int64_t user_id, const char *user_name,
     pthread_mutex_lock(&cable->mutex);
     if (cable->stopping) {
         pthread_mutex_unlock(&cable->mutex);
-        /* The slot is already registered; remove it before the loop memory
-         * goes away so no barrier can wake a freed loop. */
+        /* The slot/member is already registered; remove it before the loop
+         * memory goes away so no barrier can wake a freed loop. */
         if (loop->revocation != NULL) {
             cf_cable_revocation_unregister(loop->revocation);
             loop->revocation = NULL;
         }
-        cf_db_close(loop->reader);
+        if (loop->member != NULL) {
+            cf_cable_revocation_member_remove(loop->member);
+            loop->member = NULL;
+        }
+        if (loop->reader_owned) cf_db_close(loop->reader);
         pthread_mutex_destroy(&loop->mutex);
         free(loop->user_name);
         free(loop->internal_stream);
@@ -390,12 +502,18 @@ void cf_cable_loop_detach(cf_cable_loop *loop) {
     pthread_cond_broadcast(&cable->idle_cv);
     pthread_mutex_unlock(&cable->mutex);
 
-    /* Acknowledge any pending barrier control and remove the slot before the
-     * loop memory is released; the owner thread unregisters after its last
-     * service call. */
+    /* Acknowledge any pending barrier control and remove the slot/member
+     * before the loop memory is released; the owner thread unregisters after
+     * its last service call. Removing the member also acknowledges a pending
+     * shared-slot control when it was the last match (revocation.c), so a
+     * closing session cannot stall the writer. */
     if (loop->revocation != NULL) {
         cf_cable_revocation_unregister(loop->revocation);
         loop->revocation = NULL;
+    }
+    if (loop->member != NULL) {
+        cf_cable_revocation_member_remove(loop->member);
+        loop->member = NULL;
     }
 
     /* A revoke that never reached cleanup (the loop detached while its control
@@ -431,7 +549,7 @@ void cf_cable_loop_detach(cf_cable_loop *loop) {
     loop->pending_head = loop->pending_tail = NULL;
     loop->pending_count = loop->pending_bytes = 0;
 
-    if (loop->reader != NULL) cf_db_close(loop->reader);
+    if (loop->reader_owned && loop->reader != NULL) cf_db_close(loop->reader);
     pthread_mutex_destroy(&loop->mutex);
     free(loop->user_name);
     free(loop->internal_stream);
@@ -441,11 +559,23 @@ void cf_cable_loop_detach(cf_cable_loop *loop) {
     cable_release_locked(cable);
 }
 
+/* Attach a connection's loop. The production reactor path passes `async` with
+ * a NULL reader (the loop holds no DB reader; model work runs on the pool)
+ * and the owner loop's shared C03 slot; the standalone/test path passes its
+ * own reader (or NULL to open one here) and registers a legacy per-loop
+ * slot. */
 cf_err cf_cable_loop_attach_socket(cf_cable *cable, cf_cable_socket *socket,
                                    int64_t user_id, const char *user_name,
+                                   cf_db *reader, bool async,
+                                   cf_cable_revocation *owner_slot,
                                    cf_cable_loop **out) {
-    return loop_open(cable, user_id, user_name, loop_send_socket, socket, true,
-                     out);
+    return loop_open(cable, user_id, user_name, loop_send_socket, socket,
+                     reader, false, !async, async ? owner_slot : NULL, out);
+}
+
+cf_cable_revocation_member *cf_cable_loop_revocation_member(
+    const cf_cable_loop *loop) {
+    return loop != NULL ? loop->member : NULL;
 }
 
 cf_cable_revocation *cf_cable_loop_revocation(cf_cable_loop *loop) {
@@ -962,66 +1092,89 @@ cf_err cf_cable_publish(cf_cable *cable, cf_span stream, cf_buf *payload) {
 
 /* ---- production hooks ----------------------------------------------------------- */
 
-/* One connection thread's identity and reader. Authenticate runs on the
- * connection owner thread before the welcome frame; on_text runs on the same
- * thread. The destructor detaches the loop (running unsubscribe effects,
- * closing the loop reader) and closes the authentication reader when the
- * thread exits, which is where C01's connection thread ends. */
-typedef struct {
-    cf_db *reader; /* per-thread authentication reader */
-    cf_cable_loop *loop;
-    cf_cable_socket *socket;
-    cf_cable *cable;
-    const cf_cable_request *request; /* valid for the connection's run */
-    cf_cable_auth_ticket ticket;     /* captured before the identity reads */
-    bool have_identity;
-    bool refused; /* the connection install gate refused this connection */
+/* One connection's identity and application loop, attached to the socket at
+ * authenticate and released by on_close. This replaces the old per-thread
+ * identity: one reactor thread services every upgraded socket of an HTTP
+ * loop, so per-connection state must live on the connection, never on the
+ * thread. */
+typedef enum {
+    CONN_AUTH_NONE = 0,
+    CONN_AUTH_QUEUED,   /* auth closure submitted to the worker pool */
+    CONN_AUTH_READY,    /* worker result stored; owner must install it */
+    CONN_AUTH_INSTALLING, /* owner is inside the install step */
+    CONN_AUTH_REFUSED,  /* pool full, worker failure, or gate refusal */
+    CONN_AUTH_DONE
+} conn_auth_phase;
+
+typedef enum {
+    CMD_NONE = 0,
+    CMD_VALIDATE_QUEUED,
+    CMD_VALIDATED,      /* validation plan stored; owner must gate/apply */
+    CMD_GATING,
+    CMD_EFFECTS_QUEUED, /* deferred presence effect submitted */
+    CMD_EFFECTS_DONE
+} conn_cmd_phase;
+
+typedef struct cf_cable_conn {
+    cf_cable *cable;         /* retained for this context's lifetime */
+    cf_cable_socket *socket; /* NULL once on_close ran (under mutex) */
+    cf_cable_loop *loop;     /* owner thread only; NULL until/after attach */
+    cf_cable_revocation_member *member; /* the loop's shared-slot member */
+    bool async;              /* production reactor transport */
+    cf_db *reader;           /* standalone/test path only */
+    bool reader_owned;
+    const cf_cable_request *borrowed_request; /* sync path: socket lifetime */
+    bool have_identity;      /* sync path resolved an identity */
+    bool refused;            /* the install gate refused this connection */
     int64_t user_id;
     char user_name[256];
-} cf_cable_thread;
+    cf_cable_auth_ticket ticket;
 
-static pthread_key_t cable_tls_key;
-static pthread_once_t cable_tls_once = PTHREAD_ONCE_INIT;
+    /* Worker handoff. A submitted closure holds one reference; the owner
+     * holds one until on_close; the last reference frees. `closed` and the
+     * phase/result fields are guarded by `mutex`, which also makes waking the
+     * socket safe against a concurrent free (on_close runs under it before
+     * the socket is released). */
+    pthread_mutex_t mutex;
+    int refs;
+    bool closed;
+    uintptr_t submit_thread;    /* owner loop that submitted the last job */
+    bool submit_owner_reader;   /* owner loop still had a reader (false) */
 
-static void cable_thread_dispose(void *ptr) {
-    cf_cable_thread *tls = ptr;
-    if (tls->loop != NULL) cf_cable_loop_detach(tls->loop);
-    if (tls->reader != NULL) cf_db_close(tls->reader);
-    free(tls);
-}
+    /* Async connection authentication. */
+    conn_auth_phase auth_phase;
+    cf_err auth_rc;
+    bool auth_ok;
+    int64_t auth_user_id;
+    char auth_name[256];
+    cf_cable_request request;   /* owned copy for the worker */
+    unsigned char *req_strings;
+    cf_header *req_headers;
 
-static void cable_tls_init(void) {
-    (void)pthread_key_create(&cable_tls_key, cable_thread_dispose);
-}
-
-static cf_cable_thread *cable_thread_get(void) {
-    (void)pthread_once(&cable_tls_once, cable_tls_init);
-    cf_cable_thread *tls = pthread_getspecific(cable_tls_key);
-    if (tls == NULL) {
-        tls = calloc(1, sizeof *tls);
-        if (tls == NULL) return NULL;
-        if (pthread_setspecific(cable_tls_key, tls) != 0) {
-            free(tls);
-            return NULL;
-        }
-    }
-    return tls;
-}
+    /* Async subscribe/message command. */
+    conn_cmd_phase cmd_phase;
+    bool cmd_subscribe;             /* subscribe (reply) vs message */
+    cf_cable_subscription *cmd_sub; /* owner-side shell/target */
+    const char *cmd_class;          /* static class-table string */
+    char *cmd_identifier;           /* owned copy the worker reads */
+    size_t cmd_identifier_len;
+    cf_cable_auth_ticket cmd_ticket;
+    cf_cable_sub_plan plan;
+    cf_err cmd_rc;
+} cf_cable_conn;
 
 /* The session/user reads behind one connection identity. Reconnect and the
  * stale-version resubmission both re-run it, so it always reads the database
- * fresh. */
-static cf_err cable_thread_read_identity(cf_cable_thread *tls, cf_cable *cable,
-                                         const cf_cable_request *request,
-                                         bool *authenticated, int64_t *user_id) {
+ * fresh. reader belongs to the calling (owner) thread. */
+static cf_err cable_read_identity(cf_db *reader, cf_cable *cable,
+                                  const cf_cable_request *request,
+                                  bool *authenticated, int64_t *user_id,
+                                  char *user_name, size_t user_name_cap) {
     *authenticated = false;
     *user_id = 0;
-    if (tls->reader == NULL) {
-        cf_err rc = cf_db_open(cable->db_path, true, &tls->reader);
-        if (rc != CF_OK) return rc;
-    }
+    if (reader == NULL) return CF_IO;
     cf_cable_session_auth auth = {
-        .reader = tls->reader,
+        .reader = reader,
         .secret_key_base = (cf_span){(const unsigned char *)cable->secret,
                                      cable->secret_len},
     };
@@ -1030,142 +1183,794 @@ static cf_err cable_thread_read_identity(cf_cable_thread *tls, cf_cable *cable,
     if (rc != CF_OK || !*authenticated) return rc;
     cf_user row;
     bool found = false;
-    rc = cf_user_find_by_id(tls->reader, *user_id, &found, &row);
+    rc = cf_user_find_by_id(reader, *user_id, &found, &row);
     if (rc != CF_OK || !found) {
         if (rc == CF_OK) rc = CF_NOT_FOUND;
         *authenticated = false;
         return rc;
     }
     size_t name_len = row.name.len;
-    if (name_len >= sizeof tls->user_name) name_len = sizeof tls->user_name - 1;
-    if (name_len != 0) memcpy(tls->user_name, row.name.ptr, name_len);
-    tls->user_name[name_len] = '\0';
+    if (name_len >= user_name_cap) name_len = user_name_cap - 1;
+    if (name_len != 0) memcpy(user_name, row.name.ptr, name_len);
+    user_name[name_len] = '\0';
     cf_user_dispose(&row);
-    tls->have_identity = true;
-    tls->user_id = *user_id;
-    tls->cable = cable;
     return CF_OK;
 }
 
-static cf_err cf_cable_authenticate(void *user,
+/* ---- one shared C03 control slot per owner loop ----------------------------- */
+
+/* The reactor's owner_start hook: register the loop's one preallocated
+ * control slot before it enrolls any connection (P12-02b). */
+static cf_err cable_owner_start(void *user, void *token,
+                                void (*wake_owner)(void *token)) {
+    cf_cable *cable = user;
+    if (cable == NULL || token == NULL || wake_owner == NULL) return CF_INVALID;
+    cf_cable_revocation_loop_ops ops;
+    memset(&ops, 0, sizeof ops);
+    ops.wake = wake_owner;
+    ops.user = token;
+    cf_cable_revocation *slot = NULL;
+    cf_err rc = cf_cable_revocation_loop_register(cable, cable->app, &ops,
+                                                  &slot);
+    if (rc != CF_OK) return rc;
+    pthread_mutex_lock(&cable->mutex);
+    bool stopping = cable->stopping;
+    pthread_mutex_unlock(&cable->mutex);
+    if (stopping) {
+        cf_cable_revocation_loop_unregister(slot);
+        return CF_BUSY;
+    }
+    pthread_mutex_lock(&cable->owners_mutex);
+    if (cable->owner_count == cable->owner_cap) {
+        size_t cap = cable->owner_cap != 0 ? cable->owner_cap * 2 : 8;
+        void *grown = realloc(cable->owners, cap * sizeof *cable->owners);
+        if (grown == NULL) {
+            pthread_mutex_unlock(&cable->owners_mutex);
+            cf_cable_revocation_loop_unregister(slot);
+            return CF_NOMEM;
+        }
+        cable->owners = grown;
+        cable->owner_cap = cap;
+    }
+    cable->owners[cable->owner_count].token = token;
+    cable->owners[cable->owner_count].slot = slot;
+    cable->owner_count++;
+    pthread_mutex_unlock(&cable->owners_mutex);
+    return CF_OK;
+}
+
+/* The reactor's owner_stop hook: remove the loop's slot after its last
+ * socket finished (a pending control is acknowledged by the unregister). */
+static void cable_owner_stop(void *user, void *token) {
+    cf_cable *cable = user;
+    if (cable == NULL || token == NULL) return;
+    cf_cable_revocation *slot = NULL;
+    pthread_mutex_lock(&cable->owners_mutex);
+    for (size_t i = 0; i < cable->owner_count; i++) {
+        if (cable->owners[i].token != token) continue;
+        slot = cable->owners[i].slot;
+        cable->owners[i] = cable->owners[cable->owner_count - 1];
+        cable->owner_count--;
+        break;
+    }
+    pthread_mutex_unlock(&cable->owners_mutex);
+    if (slot != NULL) cf_cable_revocation_loop_unregister(slot);
+}
+
+/* The socket's owner-loop slot (NULL for a standalone socket, which has no
+ * reactor token and uses its loop's legacy slot). */
+static cf_cable_revocation *cable_slot_for(cf_cable *cable, void *token) {
+    if (cable == NULL || token == NULL) return NULL;
+    cf_cable_revocation *slot = NULL;
+    pthread_mutex_lock(&cable->owners_mutex);
+    for (size_t i = 0; i < cable->owner_count; i++) {
+        if (cable->owners[i].token == token) {
+            slot = cable->owners[i].slot;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&cable->owners_mutex);
+    return slot;
+}
+
+/* ---- connection context lifetime and worker handoff ------------------------ */
+
+static void conn_free(cf_cable_conn *ctx) {
+    cf_cable_sub_plan_dispose(&ctx->plan);
+    free(ctx->cmd_identifier);
+    free(ctx->req_strings);
+    free(ctx->req_headers);
+    if (ctx->reader_owned && ctx->reader != NULL) cf_db_close(ctx->reader);
+    pthread_mutex_destroy(&ctx->mutex);
+    cable_release(ctx->cable);
+    free(ctx);
+}
+
+static void conn_ref(cf_cable_conn *ctx) {
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->refs++;
+    pthread_mutex_unlock(&ctx->mutex);
+}
+
+static void conn_unref(cf_cable_conn *ctx) {
+    bool last = false;
+    pthread_mutex_lock(&ctx->mutex);
+    if (--ctx->refs == 0) last = true;
+    pthread_mutex_unlock(&ctx->mutex);
+    if (last) conn_free(ctx);
+}
+
+/* The worker's completion signal. The socket wake happens under the context
+ * mutex: on_close (which runs before the socket memory is released) takes the
+ * same mutex to clear `socket`, so a wake can never touch a freed socket. */
+static void conn_wake_locked(cf_cable_conn *ctx) {
+    if (!ctx->closed && ctx->socket != NULL) cf_cable_socket_wake(ctx->socket);
+}
+
+/* Owned copy of the upgrade request for worker reads: the socket's request
+ * spans die with the connection, the worker may outlive it. */
+static cf_err conn_copy_request(cf_cable_conn *ctx,
+                                const cf_cable_request *src) {
+    ctx->request = *src;
+    size_t len = src->target.len + src->path.len + src->query.len +
+                 src->peer_ip.len;
+    for (size_t i = 0; i < src->header_count; i++) {
+        len += src->headers[i].name.len + src->headers[i].value.len;
+    }
+    ctx->req_strings = malloc(len != 0 ? len : 1);
+    ctx->req_headers = calloc(src->header_count != 0 ? src->header_count : 1,
+                              sizeof *ctx->req_headers);
+    if (ctx->req_strings == NULL || ctx->req_headers == NULL) return CF_NOMEM;
+    size_t off = 0;
+#define CONN_COPY_SPAN(dst, s)                          \
+    do {                                                \
+        (dst) = (cf_span){ctx->req_strings + off, (s).len}; \
+        if ((s).len != 0) {                             \
+            memcpy(ctx->req_strings + off, (s).ptr, (s).len); \
+            off += (s).len;                             \
+        }                                               \
+    } while (0)
+    CONN_COPY_SPAN(ctx->request.target, src->target);
+    CONN_COPY_SPAN(ctx->request.path, src->path);
+    CONN_COPY_SPAN(ctx->request.query, src->query);
+    CONN_COPY_SPAN(ctx->request.peer_ip, src->peer_ip);
+#undef CONN_COPY_SPAN
+    for (size_t i = 0; i < src->header_count; i++) {
+        cf_span name = {ctx->req_strings + off, src->headers[i].name.len};
+        if (name.len != 0) {
+            memcpy(ctx->req_strings + off, src->headers[i].name.ptr, name.len);
+            off += name.len;
+        }
+        cf_span value = {ctx->req_strings + off, src->headers[i].value.len};
+        if (value.len != 0) {
+            memcpy(ctx->req_strings + off, src->headers[i].value.ptr,
+                   value.len);
+            off += value.len;
+        }
+        ctx->req_headers[i].name = name;
+        ctx->req_headers[i].value = value;
+    }
+    ctx->request.headers = ctx->req_headers;
+    return CF_OK;
+}
+
+/* P12-02b measurement: where the model work ran. */
+static void cable_note_work(cf_cable *cable, bool subscribe, uintptr_t thread,
+                            bool on_worker, uintptr_t owner_thread,
+                            bool owner_has_reader) {
+    cf_cable_work_identity ident = {
+        .ran = true,
+        .on_worker = on_worker,
+        .thread = thread,
+        .owner_thread = owner_thread,
+        .owner_has_reader = owner_has_reader,
+    };
+    pthread_mutex_lock(&cable->mutex);
+    if (subscribe) {
+        cable->ident_subscribe = ident;
+    } else {
+        cable->ident_auth = ident;
+    }
+    pthread_mutex_unlock(&cable->mutex);
+}
+
+void cf_cable_test_work_identity(const cf_cable *cable, bool subscribe,
+                                 cf_cable_work_identity *out) {
+    if (out == NULL) return;
+    memset(out, 0, sizeof *out);
+    if (cable == NULL) return;
+    cf_cable *mutable_cable = (cf_cable *)cable;
+    pthread_mutex_lock(&mutable_cable->mutex);
+    *out = subscribe ? cable->ident_subscribe : cable->ident_auth;
+    pthread_mutex_unlock(&mutable_cable->mutex);
+}
+
+void cf_cable_test_reset_work_identity(cf_cable *cable) {
+    if (cable == NULL) return;
+    pthread_mutex_lock(&cable->mutex);
+    memset(&cable->ident_auth, 0, sizeof cable->ident_auth);
+    memset(&cable->ident_subscribe, 0, sizeof cable->ident_subscribe);
+    pthread_mutex_unlock(&cable->mutex);
+}
+
+/* Worker: resolve the connection identity with this worker's reader. */
+static void conn_auth_work(void *user) {
+    cf_cable_conn *ctx = user;
+    cf_db *reader = cf_app_worker_reader();
+    bool on_worker = reader != NULL;
+    bool authenticated = false;
+    int64_t uid = 0;
+    char name[256];
+    memset(name, 0, sizeof name);
+    cf_err rc;
+    if (reader == NULL) {
+        rc = CF_IO;
+    } else {
+        rc = cable_read_identity(reader, ctx->cable, &ctx->request,
+                                 &authenticated, &uid, name, sizeof name);
+    }
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->auth_rc = rc;
+    ctx->auth_ok = rc == CF_OK && authenticated;
+    ctx->auth_user_id = uid;
+    memcpy(ctx->auth_name, name, sizeof ctx->auth_name);
+    ctx->auth_phase = CONN_AUTH_READY;
+    conn_wake_locked(ctx);
+    pthread_mutex_unlock(&ctx->mutex);
+    cable_note_work(ctx->cable, false, (uintptr_t)pthread_self(), on_worker,
+                    ctx->submit_thread, ctx->submit_owner_reader);
+    conn_unref(ctx);
+}
+
+/* Owner: submit (or resubmit) the connection authentication. The ticket is
+ * captured here, before the worker's database read (C03). */
+static cf_err conn_submit_auth(cf_cable_conn *ctx) {
+    ctx->ticket = cf_cable_auth_capture(ctx->cable->app);
+    ctx->submit_thread = (uintptr_t)pthread_self();
+    ctx->submit_owner_reader = ctx->loop != NULL && ctx->loop->reader != NULL;
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->auth_phase = CONN_AUTH_QUEUED;
+    pthread_mutex_unlock(&ctx->mutex);
+    conn_ref(ctx);
+    cf_err rc = cf_app_submit_worker(ctx->cable->app, conn_auth_work, ctx);
+    if (rc != CF_OK) {
+        /* Bounded-pool overload (or stopping): the connection is refused. */
+        conn_unref(ctx);
+        pthread_mutex_lock(&ctx->mutex);
+        ctx->auth_phase = CONN_AUTH_REFUSED;
+        pthread_mutex_unlock(&ctx->mutex);
+    }
+    return rc;
+}
+
+/* Owner: attach the connection's loop and install the worker's identity
+ * through the C03 member gate. Returns CF_BUSY when a bounded resubmission
+ * was queued, otherwise CF_OK or a refusal. */
+static cf_err conn_install_auth(cf_cable_conn *ctx, cf_cable_socket *socket,
+                                bool ok, int64_t uid, const char *name) {
+    if (!ok) return CF_NOT_FOUND;
+    if (ctx->loop == NULL) {
+        cf_cable_revocation *slot = cable_slot_for(
+            ctx->cable, cf_cable_socket_transport_token(socket));
+        if (slot == NULL) {
+            /* No owner-loop slot: fail closed rather than serve a connection
+             * a committed revocation cannot reach (revocation.h). */
+            return CF_INTERNAL;
+        }
+        ctx->user_id = uid;
+        size_t n = strlen(name);
+        if (n >= sizeof ctx->user_name) n = sizeof ctx->user_name - 1;
+        memcpy(ctx->user_name, name, n);
+        ctx->user_name[n] = '\0';
+        cf_err rc = cf_cable_loop_attach_socket(
+            ctx->cable, socket, uid, ctx->user_name, NULL, true, slot,
+            &ctx->loop);
+        if (rc != CF_OK) return rc;
+        ctx->member = cf_cable_loop_revocation_member(ctx->loop);
+    }
+    bool resubmit = false;
+    cf_err gate = cf_cable_revocation_member_install(ctx->member, ctx->ticket,
+                                                     &resubmit);
+    if (gate == CF_BUSY && resubmit && conn_submit_auth(ctx) == CF_OK) {
+        return CF_BUSY; /* the loop stays attached for the fresh result */
+    }
+    if (gate != CF_OK) {
+        if (ctx->loop != NULL) {
+            cf_cable_loop_detach(ctx->loop);
+            ctx->loop = NULL;
+            ctx->member = NULL;
+        }
+        return CF_FORBIDDEN;
+    }
+    ctx->have_identity = true;
+    return CF_OK;
+}
+
+/* Worker: validate a subscribe (or message/subscribed) command against this
+ * worker's reader. Only the copied identifier, the static class name, the
+ * retained cable secret and the plan in the context are touched: never the
+ * loop, socket or subscription (a concurrent revocation may free them). */
+static void conn_validate_work(void *user) {
+    cf_cable_conn *ctx = user;
+    cf_db *reader = cf_app_worker_reader();
+    bool on_worker = reader != NULL;
+    cf_err rc;
+    if (reader == NULL) {
+        rc = CF_IO;
+    } else {
+        rc = cf_cable_subscribe_validate(
+            ctx->cmd_class, reader, ctx->user_id,
+            (cf_span){(const unsigned char *)ctx->cmd_identifier,
+                      ctx->cmd_identifier_len},
+            cf_cable_secret(ctx->cable), &ctx->plan);
+    }
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->cmd_rc = rc;
+    ctx->cmd_phase = CMD_VALIDATED;
+    conn_wake_locked(ctx);
+    pthread_mutex_unlock(&ctx->mutex);
+    cable_note_work(ctx->cable, true, (uintptr_t)pthread_self(), on_worker,
+                    ctx->submit_thread, ctx->submit_owner_reader);
+    conn_unref(ctx);
+}
+
+/* Worker: the deferred model effect (PresenceChannel's present write and the
+ * read broadcast). Values only; cf_write/cf_cable_publish are thread-safe. */
+static void conn_effect_work(void *user) {
+    cf_cable_conn *ctx = user;
+    bool on_worker = cf_app_worker_reader() != NULL;
+    cf_err rc = cf_cable_subscribe_presence_effect(
+        ctx->cable->app, ctx->cable, ctx->user_id, ctx->plan.room_id);
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->cmd_rc = rc;
+    ctx->cmd_phase = CMD_EFFECTS_DONE;
+    conn_wake_locked(ctx);
+    pthread_mutex_unlock(&ctx->mutex);
+    cable_note_work(ctx->cable, true, (uintptr_t)pthread_self(), on_worker,
+                    ctx->submit_thread, ctx->submit_owner_reader);
+    conn_unref(ctx);
+}
+
+static cf_err conn_submit_validate(cf_cable_conn *ctx) {
+    ctx->submit_thread = (uintptr_t)pthread_self();
+    ctx->submit_owner_reader = ctx->loop != NULL && ctx->loop->reader != NULL;
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->cmd_phase = CMD_VALIDATE_QUEUED;
+    pthread_mutex_unlock(&ctx->mutex);
+    conn_ref(ctx);
+    cf_err rc = cf_app_submit_worker(ctx->cable->app, conn_validate_work, ctx);
+    if (rc != CF_OK) conn_unref(ctx);
+    return rc;
+}
+
+static cf_err conn_submit_effect(cf_cable_conn *ctx) {
+    ctx->submit_thread = (uintptr_t)pthread_self();
+    ctx->submit_owner_reader = ctx->loop != NULL && ctx->loop->reader != NULL;
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->cmd_phase = CMD_EFFECTS_QUEUED;
+    pthread_mutex_unlock(&ctx->mutex);
+    conn_ref(ctx);
+    cf_err rc = cf_app_submit_worker(ctx->cable->app, conn_effect_work, ctx);
+    if (rc != CF_OK) conn_unref(ctx);
+    return rc;
+}
+
+/* Owner: forget the finished command's worker-owned state. */
+static void conn_clear_command(cf_cable_conn *ctx) {
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->cmd_phase = CMD_NONE;
+    ctx->cmd_subscribe = false;
+    ctx->cmd_sub = NULL;
+    ctx->cmd_class = NULL;
+    ctx->cmd_rc = CF_OK;
+    pthread_mutex_unlock(&ctx->mutex);
+    free(ctx->cmd_identifier);
+    ctx->cmd_identifier = NULL;
+    ctx->cmd_identifier_len = 0;
+    cf_cable_sub_plan_dispose(&ctx->plan);
+}
+
+static void conn_finish_command(cf_cable_conn *ctx, cf_cable_socket *socket,
+                                bool refused, cf_err rc, bool already_logged) {
+    cf_cable_loop *loop = ctx->loop;
+    if (loop != NULL) {
+        if (ctx->cmd_subscribe && ctx->cmd_sub != NULL) {
+            cf_cable_subscribe_reply(loop, ctx->cmd_sub, refused, rc);
+        } else if (!already_logged && !refused && rc != CF_OK) {
+            cf_cable_log("could not execute command", "perform");
+        }
+        pthread_mutex_lock(&loop->mutex);
+        loop->handling = false;
+        loop_flush_locked(loop);
+        pthread_mutex_unlock(&loop->mutex);
+    }
+    conn_clear_command(ctx);
+    if (socket != NULL) cf_cable_socket_resume(socket);
+}
+
+/* Owner: discard a command whose connection was revoked or detached; no
+ * subscription state can be touched (a revoke may already have freed it). */
+static void conn_discard_command(cf_cable_conn *ctx, cf_cable_socket *socket) {
+    cf_cable_loop *loop = ctx->loop;
+    if (loop != NULL) {
+        pthread_mutex_lock(&loop->mutex);
+        loop->handling = false;
+        loop_flush_locked(loop);
+        pthread_mutex_unlock(&loop->mutex);
+    }
+    conn_clear_command(ctx);
+    if (socket != NULL) cf_cable_socket_resume(socket);
+}
+
+/* Owner: start a command whose validation needs model reads. The subscription
+ * shell (subscribe) or target (message) is resolved here; the worker gets
+ * only copies. Returns CF_BUSY so the socket pauses parsing until the
+ * completion reply (ordering), CF_OK when the command was ignored/dropped. */
+static cf_err conn_begin_command(cf_cable_conn *ctx, cf_span text,
+                                 cf_cable_command_kind kind) {
+    /* A revoking/revoked connection accepts no new command (its subscription
+     * array may already be gone). */
+    if (ctx->member != NULL &&
+        cf_cable_revocation_member_revoked(ctx->member)) {
+        return CF_OK;
+    }
+    cf_cable_loop *loop = ctx->loop;
+    cf_cable_subscription *sub = NULL;
+    const char *class_name = NULL;
+    bool respond = false;
+    if (kind == CF_CABLE_CMD_SUBSCRIBE) {
+        cf_err rc = cf_cable_subscribe_begin(loop, text, &sub);
+        if (rc != CF_OK || sub == NULL) return CF_OK; /* ignored */
+        class_name = sub->class_name;
+        respond = true;
+    } else {
+        sub = cf_cable_message_subscription(loop, text);
+        if (sub == NULL) {
+            cf_cable_log("unable to find subscription", "identifier");
+            return CF_OK;
+        }
+        if (!cf_cable_message_subscribed_handled(sub)) {
+            cf_cable_log("unable to process", "subscribed");
+            return CF_OK;
+        }
+        class_name = sub->class_name;
+    }
+    size_t identifier_len = sub->identifier_len;
+    char *identifier = malloc(identifier_len + 1);
+    if (identifier == NULL) {
+        if (respond) {
+            cf_cable_subscribe_reply(loop, sub, true, CF_OK);
+        } else {
+            cf_cable_log("could not execute command", "perform");
+        }
+        return CF_OK;
+    }
+    memcpy(identifier, sub->identifier, identifier_len);
+    identifier[identifier_len] = '\0';
+
+    ctx->cmd_sub = sub;
+    ctx->cmd_class = class_name;
+    ctx->cmd_identifier = identifier;
+    ctx->cmd_identifier_len = identifier_len;
+    ctx->cmd_subscribe = respond;
+    ctx->cmd_ticket = cf_cable_auth_capture(ctx->cable->app);
+
+    /* The reference flushes a command's broadcasts after its reply: holding
+     * delivery until the worker result is installed keeps the confirmation
+     * ahead of anything the command triggers. */
+    pthread_mutex_lock(&loop->mutex);
+    loop->handling = true;
+    pthread_mutex_unlock(&loop->mutex);
+
+    if (conn_submit_validate(ctx) != CF_OK) {
+        /* The bounded worker queue is full or stopping: C02/C03 reject the
+         * subscription (or drop the command) instead of confirming early. */
+        pthread_mutex_lock(&loop->mutex);
+        loop->handling = false;
+        loop_flush_locked(loop);
+        pthread_mutex_unlock(&loop->mutex);
+        if (respond) {
+            cf_cable_subscribe_reply(loop, sub, true, CF_OK);
+        } else {
+            cf_cable_log("dropped command", "worker queue full");
+        }
+        conn_clear_command(ctx);
+        return CF_OK;
+    }
+    return CF_BUSY;
+}
+
+/* Owner: install a validated plan, run the deferred effect on a worker when
+ * there is one, then reply. */
+static void conn_finish_validate(cf_cable_conn *ctx, cf_cable_socket *socket) {
+    cf_err rc = ctx->cmd_rc;
+    bool rejected = ctx->plan.rejected;
+    bool refused = false;
+    if (ctx->loop == NULL) {
+        conn_discard_command(ctx, socket);
+        return;
+    }
+    if (ctx->member != NULL &&
+        cf_cable_revocation_member_revoked(ctx->member)) {
+        conn_discard_command(ctx, socket);
+        return;
+    }
+    if (rc == CF_OK && !rejected && ctx->member != NULL) {
+        bool resubmit = false;
+        cf_err gate = cf_cable_revocation_member_install(
+            ctx->member, ctx->cmd_ticket, &resubmit);
+        if (gate == CF_BUSY && resubmit) {
+            /* One bounded resubmission: fresh ticket before the fresh read;
+             * nothing was applied yet. A full worker queue rejects instead. */
+            ctx->cmd_ticket = cf_cable_auth_capture(ctx->cable->app);
+            if (conn_submit_validate(ctx) == CF_OK) return;
+        }
+        if (gate != CF_OK) refused = true;
+    }
+    if (rc == CF_OK && !refused) {
+        cf_err arc = cf_cable_subscribe_apply(ctx->cmd_sub, &ctx->plan);
+        if (arc != CF_OK) rc = arc;
+    }
+    if (rc == CF_OK && !refused && !rejected && ctx->plan.presence_present) {
+        if (conn_submit_effect(ctx) == CF_OK) return;
+        /* The bounded pool could not take the model effect: the C02/C03
+         * overload arm rejects the subscription rather than confirming
+         * before its effects. */
+        if (ctx->cmd_subscribe) {
+            refused = true;
+        } else {
+            cf_cable_log("could not execute command", "perform");
+            conn_finish_command(ctx, socket, false, CF_OK, true);
+            return;
+        }
+    }
+    conn_finish_command(ctx, socket, refused, rc, false);
+}
+
+static void conn_service_auth(cf_cable_conn *ctx, cf_cable_socket *socket) {
+    for (;;) {
+        pthread_mutex_lock(&ctx->mutex);
+        conn_auth_phase phase = ctx->auth_phase;
+        bool ok = ctx->auth_ok;
+        int64_t uid = ctx->auth_user_id;
+        char name[256];
+        memcpy(name, ctx->auth_name, sizeof name);
+        bool closed = ctx->closed;
+        if (phase == CONN_AUTH_READY) {
+            ctx->auth_phase = CONN_AUTH_INSTALLING;
+        } else if (phase == CONN_AUTH_REFUSED) {
+            ctx->auth_phase = CONN_AUTH_DONE;
+        }
+        pthread_mutex_unlock(&ctx->mutex);
+        if (closed) return;
+        if (phase == CONN_AUTH_READY) {
+            cf_err irc = conn_install_auth(ctx, socket, ok, uid, name);
+            if (irc == CF_BUSY) return; /* resubmission queued */
+            pthread_mutex_lock(&ctx->mutex);
+            ctx->auth_phase = CONN_AUTH_DONE;
+            pthread_mutex_unlock(&ctx->mutex);
+            if (irc == CF_OK) {
+                cf_cable_socket_complete_auth(socket, true, ctx->user_id);
+            } else {
+                ctx->refused = true;
+                cf_cable_socket_complete_auth(socket, false, 0);
+            }
+            return;
+        }
+        if (phase == CONN_AUTH_REFUSED) {
+            ctx->refused = true;
+            cf_cable_socket_complete_auth(socket, false, 0);
+            return;
+        }
+        return; /* NONE/QUEUED/INSTALLING/DONE: nothing to do */
+    }
+}
+
+static void conn_service_commands(cf_cable_conn *ctx, cf_cable_socket *socket) {
+    for (;;) {
+        pthread_mutex_lock(&ctx->mutex);
+        conn_cmd_phase phase = ctx->cmd_phase;
+        bool closed = ctx->closed;
+        if (phase == CMD_VALIDATED) ctx->cmd_phase = CMD_GATING;
+        pthread_mutex_unlock(&ctx->mutex);
+        if (closed) return;
+        if (phase == CMD_VALIDATED) {
+            conn_finish_validate(ctx, socket);
+            continue; /* a resubmission/effect may already have completed */
+        }
+        if (phase == CMD_EFFECTS_DONE) {
+            /* A revocation may have freed the subscription while the effect
+             * ran on a worker: never reply to a revoked connection. */
+            if (ctx->member != NULL &&
+                cf_cable_revocation_member_revoked(ctx->member)) {
+                conn_discard_command(ctx, socket);
+            } else {
+                conn_finish_command(ctx, socket, false, ctx->cmd_rc, false);
+            }
+        }
+        return;
+    }
+}
+
+static cf_err cf_cable_authenticate(void *user, cf_cable_socket *socket,
                                     const cf_cable_request *request,
                                     bool *authenticated, int64_t *user_id) {
-    if (user == NULL || request == NULL || authenticated == NULL ||
-        user_id == NULL) {
+    if (user == NULL || socket == NULL || request == NULL ||
+        authenticated == NULL || user_id == NULL) {
         return CF_INVALID;
     }
     cf_cable *cable = user;
     *authenticated = false;
     *user_id = 0;
-    cf_cable_thread *tls = cable_thread_get();
-    if (tls == NULL) return CF_NOMEM;
-    /* A new connection on this thread: the previous loop (if any) is done. */
-    if (tls->loop != NULL) {
-        cf_cable_loop_detach(tls->loop);
-        tls->loop = NULL;
+    cf_cable_conn *ctx = calloc(1, sizeof *ctx);
+    if (ctx == NULL) return CF_NOMEM;
+    if (pthread_mutex_init(&ctx->mutex, NULL) != 0) {
+        free(ctx);
+        return CF_INTERNAL;
     }
-    tls->socket = NULL;
-    tls->cable = NULL;
-    tls->request = request;
-    tls->have_identity = false;
-    tls->refused = false;
-    /* The data version is captured before the session/user reads; the
-     * connection install gate compares it when the loop attaches (C03). */
-    tls->ticket = cf_cable_auth_capture(cable->app);
-    return cable_thread_read_identity(tls, cable, request, authenticated,
-                                      user_id);
+    ctx->cable = cable_retain(cable);
+    ctx->socket = socket;
+    ctx->refs = 1;
+    ctx->ticket = cf_cable_auth_capture(cable->app);
+    ctx->async = cf_cable_socket_transport_token(socket) != NULL;
+    cf_cable_socket_set_app_user(socket, ctx);
+
+    if (!ctx->async) {
+        /* Standalone/direct socket (tests, direct callers): the owner thread
+         * resolves the identity with its own reader, P12-02 behavior. */
+        cf_err rc = cf_db_open(cable->db_path, true, &ctx->reader);
+        if (rc != CF_OK) return rc;
+        ctx->reader_owned = true;
+        ctx->borrowed_request = request;
+        rc = cable_read_identity(ctx->reader, cable, request, authenticated,
+                                 user_id, ctx->user_name,
+                                 sizeof ctx->user_name);
+        if (rc == CF_OK && *authenticated) {
+            ctx->user_id = *user_id;
+            ctx->have_identity = true;
+        }
+        return rc;
+    }
+
+    /* Production reactor: the model work runs on the app's bounded worker
+     * pool; the owner installs the result through the C03 gate. */
+    cf_err rc = conn_copy_request(ctx, request);
+    if (rc != CF_OK) {
+        ctx->auth_phase = CONN_AUTH_REFUSED;
+        return CF_BUSY;
+    }
+    (void)conn_submit_auth(ctx); /* QUEUED, or REFUSED when the pool is full */
+    return CF_BUSY;
 }
 
-/* C01 on_open (owner thread, before the welcome frame): attach the connection
- * loop and install the identity's authorization result. A stale version
- * re-runs the identity reads once (fresh DB auth, bounded); a revoked or
- * still-stale result refuses the connection, never a pretend success. */
+/* C01 on_open (owner thread, before the welcome frame): the synchronous
+ * (standalone/test) path attaches the connection loop and installs the
+ * identity's authorization result. A stale version re-runs the identity reads
+ * once (fresh DB auth, bounded); a revoked or still-stale result refuses the
+ * connection, never a pretend success. The production reactor path installs
+ * from the service hook instead (see conn_install_auth). */
 static cf_err cf_cable_open(void *user, cf_cable_socket *socket) {
     if (user == NULL || socket == NULL) return CF_INVALID;
     cf_cable *cable = user;
-    cf_cable_thread *tls = cable_thread_get();
-    if (tls == NULL) return CF_NOMEM;
-    if (!tls->have_identity || tls->cable != cable) return CF_OK;
-    if (tls->loop != NULL) {
-        cf_cable_loop_detach(tls->loop);
-        tls->loop = NULL;
+    cf_cable_conn *ctx = cf_cable_socket_app_user(socket);
+    if (ctx == NULL || ctx->async || !ctx->have_identity ||
+        ctx->cable != cable) {
+        return CF_OK;
     }
-    tls->socket = socket;
-    cf_err rc = cf_cable_loop_attach_socket(cable, socket, tls->user_id,
-                                            tls->user_name, &tls->loop);
+    if (ctx->loop != NULL) {
+        cf_cable_loop_detach(ctx->loop);
+        ctx->loop = NULL;
+    }
+    cf_err rc = cf_cable_loop_attach_socket(
+        cable, socket, ctx->user_id, ctx->user_name, ctx->reader, false, NULL,
+        &ctx->loop);
     if (rc != CF_OK) return rc;
 
     bool resubmit = false;
-    rc = cf_cable_auth_install(tls->loop->revocation, tls->ticket, &resubmit);
-    if (rc == CF_BUSY && resubmit && tls->request != NULL) {
+    rc = cf_cable_auth_install(ctx->loop->revocation, ctx->ticket, &resubmit);
+    if (rc == CF_BUSY && resubmit && ctx->borrowed_request != NULL) {
         bool authenticated = false;
         int64_t user_id = 0;
-        tls->ticket = cf_cable_auth_capture(cable->app);
-        cf_err fresh = cable_thread_read_identity(tls, cable, tls->request,
-                                                  &authenticated, &user_id);
+        ctx->ticket = cf_cable_auth_capture(cable->app);
+        cf_err fresh =
+            cable_read_identity(ctx->reader, cable, ctx->borrowed_request,
+                                &authenticated, &user_id, ctx->user_name,
+                                sizeof ctx->user_name);
         if (fresh == CF_OK && authenticated) {
-            rc = cf_cable_auth_install(tls->loop->revocation, tls->ticket,
+            ctx->user_id = user_id;
+            ctx->have_identity = true;
+            rc = cf_cable_auth_install(ctx->loop->revocation, ctx->ticket,
                                        &resubmit);
         } else {
             rc = fresh != CF_OK ? fresh : CF_NOT_FOUND;
         }
     }
     if (rc != CF_OK) {
-        cf_cable_loop_detach(tls->loop);
-        tls->loop = NULL;
-        tls->refused = true;
+        cf_cable_loop_detach(ctx->loop);
+        ctx->loop = NULL;
+        ctx->refused = true;
         return rc;
     }
     return CF_OK;
 }
 
-/* C01 service hook (owner thread, each poll iteration): consume any pending
- * revocation control for this connection's loop. */
-static void cf_cable_service(void *user) {
-    if (user == NULL) return;
+/* C01 service hook (owner thread, each pass): install finished worker results
+ * (authentication, subscribe validation/effects) through the C03 gate, and
+ * consume any pending revocation control for this socket's owner loop. */
+static void cf_cable_service(void *user, cf_cable_socket *socket) {
+    if (user == NULL || socket == NULL) return;
     cf_cable *cable = user;
-    cf_cable_thread *tls = cable_thread_get();
-    if (tls == NULL || tls->loop == NULL || tls->cable != cable) return;
-    (void)cf_cable_revocation_service(tls->loop->revocation);
+    cf_cable_conn *ctx = cf_cable_socket_app_user(socket);
+    if (ctx == NULL || ctx->cable != cable) return;
+    /* C03 control first: a consumed control marks the loop's matching members
+     * revoked, so anything installed afterwards is refused by the gate. The
+     * production reactor loop has one shared slot per owner; a standalone
+     * socket services its loop's legacy slot. */
+    cf_cable_revocation *slot =
+        cable_slot_for(cable, cf_cable_socket_transport_token(socket));
+    if (slot == NULL && ctx->loop != NULL) slot = ctx->loop->revocation;
+    if (slot != NULL) (void)cf_cable_revocation_service(slot);
+    conn_service_auth(ctx, socket);
+    conn_service_commands(ctx, socket);
 }
 
 /* C01 on_close (owner thread, before the socket releases itself): detach the
- * loop so its slot is unregistered and no foreign barrier or publisher can
- * touch the socket after it is freed. */
+ * loop so its slot/member is unregistered and no foreign barrier or publisher
+ * can touch the socket after it is freed, then release the connection
+ * context. Worker jobs hold their own references; the last one frees. */
 static void cf_cable_close(void *user, cf_cable_socket *socket) {
-    (void)socket;
-    if (user == NULL) return;
-    cf_cable_thread *tls = cable_thread_get();
-    if (tls == NULL) return;
-    if (tls->loop != NULL) {
-        cf_cable_loop_detach(tls->loop);
-        tls->loop = NULL;
-    }
-    tls->socket = NULL;
-    tls->cable = NULL;
-    tls->have_identity = false;
-    tls->request = NULL;
+    if (user == NULL || socket == NULL) return;
+    cf_cable_conn *ctx = cf_cable_socket_app_user(socket);
+    if (ctx == NULL) return;
+    /* Claim the loop under the mutex before dropping the owner reference: a
+     * worker may hold the last reference and free the context as soon as it
+     * observes `closed`, so no field may be read outside the lock afterwards
+     * (detach only needs the claimed pointer). */
+    pthread_mutex_lock(&ctx->mutex);
+    ctx->closed = true;
+    ctx->socket = NULL;
+    cf_cable_loop *loop = ctx->loop;
+    ctx->loop = NULL;
+    ctx->member = NULL;
+    ctx->refs--;
+    bool last = ctx->refs == 0;
+    pthread_mutex_unlock(&ctx->mutex);
+    if (loop != NULL) cf_cable_loop_detach(loop);
+    cf_cable_socket_set_app_user(socket, NULL);
+    if (last) conn_free(ctx);
 }
 
 static cf_err cf_cable_on_text(void *user, cf_cable_socket *socket,
                                cf_span text) {
     if (user == NULL || socket == NULL) return CF_INVALID;
     cf_cable *cable = user;
-    cf_cable_thread *tls = cable_thread_get();
-    if (tls == NULL) return CF_NOMEM;
+    cf_cable_conn *ctx = cf_cable_socket_app_user(socket);
+    if (ctx == NULL) return CF_OK;
     /* The connection install gate refused this connection: it is closing. */
-    if (tls->refused) return CF_OK;
-    if (tls->loop == NULL) {
-        if (!tls->have_identity || tls->cable != cable) {
+    if (ctx->refused) return CF_OK;
+
+    if (ctx->async) {
+        if (ctx->loop == NULL) return CF_OK; /* refused/closing: no dispatch */
+        cf_cable_command_kind kind = cf_cable_command_kind_of(text);
+        if (kind == CF_CABLE_CMD_OTHER) {
+            /* No model read: dispatch synchronously on the owner thread. */
+            return cf_cable_loop_handle_text(ctx->loop, text);
+        }
+        return conn_begin_command(ctx, text, kind);
+    }
+
+    if (ctx->loop == NULL) {
+        if (!ctx->have_identity || ctx->cable != cable) {
             /* No authenticated identity for this connection: C01 closes it;
              * anything the reader assembled before that is ignored. */
             return CF_OK;
         }
-        cf_err rc = cf_cable_loop_attach_socket(cable, socket, tls->user_id,
-                                                tls->user_name, &tls->loop);
+        cf_err rc = cf_cable_loop_attach_socket(
+            cable, socket, ctx->user_id, ctx->user_name, ctx->reader, false,
+            NULL, &ctx->loop);
         if (rc != CF_OK) return rc;
     }
-    return cf_cable_loop_handle_text(tls->loop, text);
+    return cf_cable_loop_handle_text(ctx->loop, text);
 }
 
 void cf_cable_server_hooks(cf_cable *cable, cf_cable_hooks *out) {
@@ -1181,15 +1986,29 @@ void cf_cable_server_hooks(cf_cable *cable, cf_cable_hooks *out) {
     out->service_user = cable;
     out->on_close = cf_cable_close;
     out->on_close_user = cable;
+    out->owner_start = cable_owner_start;
+    out->owner_start_user = cable;
+    out->owner_stop = cable_owner_stop;
+    out->owner_stop_user = cable;
 }
 
 /* ---- dispatch wrapper (keeps confirmation-before-broadcast ordering) ---------- */
+
+/* A loop is revoked through its shared-slot member (production reactor) or
+ * its legacy per-loop slot (standalone/test). */
+static bool loop_revoked(const cf_cable_loop *loop) {
+    if (loop == NULL) return false;
+    if (loop->member != NULL) {
+        return cf_cable_revocation_member_revoked(loop->member);
+    }
+    return cf_cable_revocation_revoked(loop->revocation);
+}
 
 cf_err cf_cable_loop_handle_text(cf_cable_loop *loop, cf_span text) {
     if (loop == NULL) return CF_INVALID;
     /* A revoking/revoked loop ignores every command (C03: no access may be
      * installed after the acknowledgment, and no new output is accepted). */
-    if (cf_cable_revocation_revoked(loop->revocation)) return CF_OK;
+    if (loop_revoked(loop)) return CF_OK;
     pthread_mutex_lock(&loop->mutex);
     loop->handling = true;
     pthread_mutex_unlock(&loop->mutex);
@@ -1206,7 +2025,10 @@ cf_err cf_cable_loop_handle_text(cf_cable_loop *loop, cf_span text) {
 cf_err cf_cable_test_attach(cf_cable *cable, int64_t user_id,
                             const char *user_name, cf_cable_loop_send_fn send,
                             void *send_user, cf_cable_loop **out) {
-    return loop_open(cable, user_id, user_name, send, send_user, false, out);
+    /* Test loops open their own reader, register no control slot, and stay on
+     * the synchronous dispatch path. */
+    return loop_open(cable, user_id, user_name, send, send_user, NULL, true,
+                     false, NULL, out);
 }
 
 cf_err cf_cable_test_feed(cf_cable_loop *loop, cf_span text) {

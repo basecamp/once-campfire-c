@@ -18,8 +18,8 @@
 
 #include <yyjson.h>
 
-#define RECOGNITION_JSON "docs/devel/implementation/contracts/route-recognition.json"
-#define ROUTES_JSON "docs/devel/implementation/contracts/routes.json"
+#define RECOGNITION_JSON "tests/fixtures/contracts/route-recognition.json"
+#define ROUTES_JSON "tests/fixtures/contracts/routes.json"
 
 static const char *recognition_method_name(cf_method method) {
     switch (method) {

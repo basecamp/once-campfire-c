@@ -7,7 +7,7 @@
     "spdx": "MIT",
     "file": "tests/fixtures/LICENSE.rust-ref"
   },
-  "note": "Reference fixtures copied by tests/fixtures/tools/copy_fixtures.py; tests never read tmp/ at runtime. Required route/schema contract inputs are committed byte-identical under tests/fixtures/contracts/ (role=contract-input entries), so tests/fixtures/tools/verify_manifest.py succeeds in a clean checkout without docs/devel or tmp/. sha256 is over the copied bytes.",
+  "note": "Reference fixtures copied by tests/fixtures/tools/copy_fixtures.py; tests never read tmp/ at runtime. Required route/schema contract inputs are committed byte-identical under tests/fixtures/contracts/ (role=contract-input entries), so tests/fixtures/tools/verify_manifest.py succeeds in a clean checkout without docs/devel or tmp/. sha256 is over the copied bytes. The asset tree is listed by delegation: its role=delegated-subtree entry pins tests/fixtures/assets/MANIFEST.json (a hashed entry like any other), whose per-file sha256/bytes records are checked against every file under tests/fixtures/assets/, so adding, removing or altering an asset file fails until the delegated inventory and this pin are updated.",
   "entries": [
     {
       "fixture": "tests/fixtures/crates/kit/tests/params_vectors.json",
@@ -5527,6 +5527,37 @@
       "pinned_revision": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
       "captured_from_revision": "b57cf39a11fafc4de148e727cdc3edf16c89db59",
       "note": "docs/devel is gitignored, so no repository revision pins these bytes; sha256 is the authoritative pin. pinned_revision is the reference revision the contract encodes; captured_from_revision is the checkout HEAD the copy was taken from."
+    },
+    {
+      "fixture": "tests/fixtures/ua/campfire_user_agents.json",
+      "source_repo": "https://github.com/basecamp/once-campfire-rust.git",
+      "source_revision": "64f86353021145b63849fb1cd93adeb08f3b8dbb",
+      "source_path": "tmp/rust-ref/vectors/campfire_user_agents.json",
+      "surface": "browser",
+      "role": "fixture-data",
+      "bytes": 301897,
+      "sha256": "2eea58cd75ef6112d1d468d1904787e04411317dc20a90ece54b58486c314522",
+      "source_sha256": "2eea58cd75ef6112d1d468d1904787e04411317dc20a90ece54b58486c314522",
+      "license": "MIT",
+      "frozen_in_reference_files": true,
+      "purpose": "A01 platform layer differential corpus: 385 user agents, 44 version pairs and 352 version comparisons produced by the reference's useragent/platform_agent gems; consumed by tests/auth/test_platform.c"
+    },
+    {
+      "fixture": "tests/fixtures/assets/MANIFEST.json",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "90b330024dec3e757c79b6a7e6568f93da8e3148",
+      "source_path": null,
+      "surface": "assets",
+      "role": "delegated-subtree",
+      "subtree": "tests/fixtures/assets",
+      "delegated_manifest": "tests/fixtures/assets/MANIFEST.json",
+      "bytes": 239015,
+      "sha256": "4b7125aeee5b581682542d6d8e81580168ebdc4123f60e6ab4df677e52ac2e6f",
+      "source_sha256": "4b7125aeee5b581682542d6d8e81580168ebdc4123f60e6ab4df677e52ac2e6f",
+      "license": null,
+      "license_note": "Asset bodies come from the MIT-licensed once-campfire reference and its vendored gems; per-file provenance is in tests/fixtures/assets/MANIFEST.json and its VENDOR-MANIFEST.md.",
+      "frozen_in_reference_files": false,
+      "purpose": "delegated inventory: tests/fixtures/assets/MANIFEST.json records every file under tests/fixtures/assets (315 assets plus reference/auxiliary/importmap inputs) with per-file sha256/bytes; this entry pins the inventory bytes and verify_manifest.py checks each subtree file against it instead of duplicating 331 entries here"
     }
   ],
   "seed": [
@@ -5737,8 +5768,8 @@
     }
   ],
   "totals": {
-    "fixture_files": 199,
-    "fixture_bytes": 11779581,
+    "fixture_files": 201,
+    "fixture_bytes": 12320493,
     "seed_files": 11,
     "seed_bytes": 49607
   }

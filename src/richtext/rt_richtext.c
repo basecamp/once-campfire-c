@@ -28,35 +28,61 @@ const cf_richtext *cf_tx_rich_text(cf_tx *tx) {
     return &rt_singleton;
 }
 
-/* Kit's request.host(): the Host header with a numeric port stripped. */
-static bool request_host(const cf_ctx *ctx, char *out, size_t cap) {
-    out[0] = '\0';
-    if (ctx == NULL || ctx->request == NULL) return false;
-    const cf_request *request = ctx->request;
-    for (size_t i = 0; i < request->header_count; i++) {
-        const cf_header *header = &request->headers[i];
-        if (header->name.len != 4 ||
-            !(header->name.ptr[0] == 'h' || header->name.ptr[0] == 'H') ||
-            !(header->name.ptr[1] == 'o' || header->name.ptr[1] == 'O') ||
-            !(header->name.ptr[2] == 's' || header->name.ptr[2] == 'S') ||
-            !(header->name.ptr[3] == 't' || header->name.ptr[3] == 'T')) {
-            continue;
-        }
-        size_t len = header->value.len;
-        if (len >= cap) len = cap - 1;
-        memcpy(out, header->value.ptr, len);
-        out[len] = '\0';
-        char *colon = strrchr(out, ':');
-        if (colon != NULL && colon[1] != '\0') {
-            bool digits = true;
-            for (const char *p = colon + 1; *p != '\0'; p++) {
-                if (*p < '0' || *p > '9') digits = false;
-            }
-            if (digits) *colon = '\0';
-        }
-        return true;
+/* http 1.5.0 HeaderValue::to_str: HTAB or visible ASCII; obs-text (which H01
+ * admits), DEL and the other controls make the header read as absent. */
+static bool rt_host_readable(cf_span value) {
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (c != '\t' && (c < 0x20 || c > 0x7E)) return false;
     }
-    return false;
+    return true;
+}
+
+/* Kit's request.host() (request.rs:160-166): the first readable Host header
+ * (HeaderValue::to_str, so an obs-text value reads as absent) with a numeric
+ * port stripped.  When it is absent or unreadable -- and when there is no
+ * request at all -- the pin falls back to `uri.authority()`, which is always
+ * None here because H01 admits origin-form targets only, and then to
+ * "localhost".  Controllers pass `Some(c.request.host())` to the renderer, so
+ * callers always receive a real, non-NULL host string. */
+static void request_host(const cf_ctx *ctx, char *out, size_t cap) {
+    out[0] = '\0';
+    const cf_request *request = ctx != NULL ? ctx->request : NULL;
+    if (request != NULL) {
+        for (size_t i = 0; i < request->header_count; i++) {
+            const cf_header *header = &request->headers[i];
+            if (header->name.len != 4 ||
+                !(header->name.ptr[0] == 'h' || header->name.ptr[0] == 'H') ||
+                !(header->name.ptr[1] == 'o' || header->name.ptr[1] == 'O') ||
+                !(header->name.ptr[2] == 's' || header->name.ptr[2] == 'S') ||
+                !(header->name.ptr[3] == 't' || header->name.ptr[3] == 'T')) {
+                continue;
+            }
+            /* `HeaderMap::get` returns the first Host; when it is unreadable
+             * the read is None and no later Host header is consulted. */
+            if (!rt_host_readable(header->value)) break;
+            size_t len = header->value.len;
+            if (len >= cap) len = cap - 1;
+            memcpy(out, header->value.ptr, len);
+            out[len] = '\0';
+            char *colon = strrchr(out, ':');
+            if (colon != NULL && colon[1] != '\0') {
+                bool digits = true;
+                for (const char *p = colon + 1; *p != '\0'; p++) {
+                    if (*p < '0' || *p > '9') digits = false;
+                }
+                if (digits) *colon = '\0';
+            }
+            return;
+        }
+    }
+    /* uri.authority() is always None here (H01 admits origin-form targets
+     * only); request.rs falls back to "localhost". */
+    static const char fallback[] = "localhost";
+    size_t len = sizeof fallback - 1;
+    if (len >= cap) len = cap - 1;
+    memcpy(out, fallback, len);
+    out[len] = '\0';
 }
 
 static rt_status make_resolver(rt_db_resolver *storage, const cf_richtext *rich_text, cf_db *db,
@@ -67,6 +93,11 @@ static rt_status make_resolver(rt_db_resolver *storage, const cf_richtext *rich_
     return RT_OK;
 }
 
+/* src/richtext/rt_content.c: the canonicalizing load followed by
+ * `Content#to_html` (module-internal; see the definition's comment). */
+rt_status rt_content_canonical(const unsigned char *html, size_t len, const rt_render_ctx *ctx,
+                               rt_buf *out);
+
 /* ---- cf_ surface --------------------------------------------------------- */
 
 cf_err cf_richtext_render(cf_ctx *ctx, cf_span input, cf_safe_html *out) {
@@ -74,14 +105,14 @@ cf_err cf_richtext_render(cf_ctx *ctx, cf_span input, cf_safe_html *out) {
     out->bytes = NULL;
     if (ctx == NULL || input.ptr == NULL) return CF_INVALID;
     char host[256];
-    bool have_host = request_host(ctx, host, sizeof host);
+    request_host(ctx, host, sizeof host);
     rt_db_resolver storage;
     rt_resolver *resolver = NULL;
     make_resolver(&storage, cf_tx_rich_text(NULL), ctx->reader, &resolver);
     rt_buf rendered;
     rt_buf_init(&rendered);
     rt_presentation kind = RT_PRESENTATION_HTML;
-    rt_status rc = rt_present_message(resolver, have_host ? host : NULL, input.ptr, input.len, &kind,
+    rt_status rc = rt_present_message(resolver, host, input.ptr, input.len, &kind,
                                       &rendered);
     if (rc == RT_NOMEM) {
         rt_buf_dispose(&rendered);
@@ -110,13 +141,13 @@ cf_err cf_richtext_body_html(cf_ctx *ctx, cf_span input, cf_safe_html *out) {
     out->bytes = NULL;
     if (ctx == NULL || input.ptr == NULL) return CF_INVALID;
     char host[256];
-    bool have_host = request_host(ctx, host, sizeof host);
+    request_host(ctx, host, sizeof host);
     rt_db_resolver storage;
     rt_resolver *resolver = NULL;
     make_resolver(&storage, cf_tx_rich_text(NULL), ctx->reader, &resolver);
     rt_buf rendered;
     rt_buf_init(&rendered);
-    rt_status rc = rt_body_html(resolver, have_host ? host : NULL, input.ptr, input.len, &rendered);
+    rt_status rc = rt_body_html(resolver, host, input.ptr, input.len, &rendered);
     if (rc == RT_NOMEM) {
         rt_buf_dispose(&rendered);
         return CF_NOMEM;
@@ -136,14 +167,14 @@ cf_err cf_richtext_editable(cf_ctx *ctx, cf_span input, bool *found, cf_str *out
     out->ptr = NULL;
     out->len = 0;
     char host[256];
-    bool have_host = request_host(ctx, host, sizeof host);
+    request_host(ctx, host, sizeof host);
     rt_db_resolver storage;
     rt_resolver *resolver = NULL;
     make_resolver(&storage, cf_tx_rich_text(NULL), ctx->reader, &resolver);
     rt_buf value;
     rt_buf_init(&value);
     rt_status rc =
-        rt_editable_value(resolver, have_host ? host : NULL, input.ptr, input.len, found, &value);
+        rt_editable_value(resolver, host, input.ptr, input.len, found, &value);
     if (rc == RT_OK && *found) {
         rt_status str_rc = rt_buf_to_str(&value, out);
         rt_buf_dispose(&value);
@@ -153,6 +184,43 @@ cf_err cf_richtext_editable(cf_ctx *ctx, cf_span input, bool *found, cf_str *out
     if (rc == RT_NOMEM) return CF_NOMEM;
     if (rc != RT_OK) return CF_INVALID; /* the edit page raises */
     return CF_OK;
+}
+
+cf_err cf_richtext_canonical_body(cf_ctx *ctx, cf_span input, cf_str *out) {
+    if (out == NULL) return CF_INVALID;
+    out->ptr = NULL;
+    out->len = 0;
+    /* A present-but-empty body param is {NULL, 0} (params.c's
+     * param_string_copy); it is the reference's empty String, not an error. */
+    if (ctx == NULL || (input.ptr == NULL && input.len != 0)) return CF_INVALID;
+    static const unsigned char empty_html[1] = {0};
+    const unsigned char *html = input.ptr != NULL ? input.ptr : empty_html;
+    char host[256];
+    request_host(ctx, host, sizeof host);
+    rt_db_resolver storage;
+    rt_resolver *resolver = NULL;
+    make_resolver(&storage, cf_tx_rich_text(NULL), ctx->reader, &resolver);
+    rt_render_ctx render_ctx = {resolver, host};
+    rt_buf canonical;
+    rt_buf_init(&canonical);
+    rt_status rc = rt_content_canonical(html, input.len, &render_ctx, &canonical);
+    if (rc == RT_NOMEM) {
+        rt_buf_dispose(&canonical);
+        return CF_NOMEM;
+    }
+    if (rc != RT_OK) {
+        /* `unwrap_or_else(|_| body.to_string())`: a body the pipeline cannot
+         * load (a raise, a parse failure) is stored exactly as given. */
+        rt_buf_clear(&canonical);
+        rc = rt_buf_append(&canonical, html, input.len);
+        if (rc != RT_OK) {
+            rt_buf_dispose(&canonical);
+            return CF_NOMEM;
+        }
+    }
+    rt_status str_rc = rt_buf_to_str(&canonical, out);
+    rt_buf_dispose(&canonical);
+    return str_rc == RT_OK ? CF_OK : CF_NOMEM;
 }
 
 cf_err cf_richtext_to_plain_text(cf_db *db, const cf_richtext *rich_text, cf_span input,

@@ -42,4 +42,13 @@ size_t cf_app_admitted_count(const cf_app *app);
 /* Requests whose response was submitted or abandoned (worker completions). */
 uint64_t cf_app_completed_requests(const cf_app *app);
 
+/* The calling request worker's read-only SQLite connection (the one opened on
+ * its own thread in cf_app_start), or NULL when the caller is not one of the
+ * app's request workers. A cf_app_submit_worker closure runs on such a worker,
+ * so model work in a closure reads through this borrowed handle; it must not
+ * retain or use it after returning. Added for the P12-02b cable worker seam
+ * (04-cable-jobs.md: workers perform auth/model work; the cable reactor holds
+ * no DB reader). */
+cf_db *cf_app_worker_reader(void);
+
 #endif /* CF_APP_INTERNAL_H */

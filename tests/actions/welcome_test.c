@@ -386,6 +386,31 @@ static void authenticated_request(welcome_env *env, const char *cookie_extra,
     CF_REQUIRE(run_request(env, req, resp));
 }
 
+/* The session in a readable first Cookie header, the extra cookie in a
+ * second one.  kit/src/adapter.rs builds the jar from
+ * `headers.get_all(COOKIE).iter().filter_map(|v| v.to_str().ok())`: an
+ * unreadable (obs-text) extra header is dropped whole, while the readable
+ * session header still resolves, so the request stays authenticated and
+ * `last_room` reads as absent. */
+static void authenticated_request_split_cookie(welcome_env *env,
+                                               const char *cookie_extra,
+                                               cf_request *req,
+                                               cf_response *resp) {
+    static unsigned counter;
+    char token[64];
+    char header[4096];
+    snprintf(token, sizeof token, "welcome-room-split-token-%u", counter++);
+    make_session_cookie(env->config, env->scratch.db, header, sizeof header,
+                        token, 1);
+    cf_test_req_init(req);
+    CF_REQUIRE(cf_test_req_header(req, SP("Cookie"), SP(header)) == CF_OK);
+    if (cookie_extra != NULL) {
+        CF_REQUIRE(cf_test_req_header(req, SP("Cookie"), SP(cookie_extra)) ==
+                   CF_OK);
+    }
+    CF_REQUIRE(run_request(env, req, resp));
+}
+
 CF_TEST(welcome_authenticated_redirects_to_the_original_room) {
     welcome_env env;
     CF_REQUIRE(env_open(&env));
@@ -465,36 +490,52 @@ CF_TEST(welcome_last_room_cookie_matches_the_pinned_integer_cast) {
     struct cast_case {
         const char *cookie;
         const char *path;
+        /* true: send `cookie` as its own (second) Cookie header.  Used for
+         * the obs-text NBSP vector, which the kit drops whole, so the
+         * readable session header must stay in a header of its own. */
+        bool split_cookie;
     };
     static const struct cast_case cases[] = {
-        {"last_room=2", "/rooms/2"},
-        {"last_room=+2", "/rooms/2"},
-        {"last_room=0002", "/rooms/2"},
-        {"last_room=2abc", "/rooms/2"},
-        {"last_room=0_2", "/rooms/2"},      /* '_' between two digits */
-        {"last_room=0d2", "/rooms/2"},      /* String#to_i 0d prefix */
-        {"last_room=0D2", "/rooms/2"},
-        {"last_room=\x0b" "2", "/rooms/2"}, /* VT is Ruby ISSPACE */
-        {"last_room=\x0c" "2", "/rooms/2"}, /* FF is Ruby ISSPACE */
-        {"last_room=0_5", "/rooms/5"},
-        {"last_room=0d5", "/rooms/5"},
-        {"last_room=0d0_5", "/rooms/5"}, /* 0d prefix, then 0_5 -> 5 */
-        {"last_room=5__6", "/rooms/5"},  /* a second '_' ends the number */
-        {"last_room=2_5", "/rooms/9"},   /* parses 25 -> not a member */
-        {"last_room=0x5", "/rooms/9"},   /* parses 0 -> not a member */
-        {"last_room=abc", "/rooms/9"},
-        {"last_room=", "/rooms/9"},
-        {"last_room=9223372036854775808", "/rooms/9"},  /* i64 overflow -> nil */
-        {"last_room=99999999999999999999", "/rooms/9"},
-        {"last_room=-9223372036854775809", "/rooms/9"},
-        {"last_room=\xc2\xa0" "2", "/rooms/9"}, /* NBSP is not ISSPACE */
-        {"last_room=--2", "/rooms/9"},
-        {"last_room=_2", "/rooms/9"},
+        {"last_room=2", "/rooms/2", false},
+        {"last_room=+2", "/rooms/2", false},
+        {"last_room=0002", "/rooms/2", false},
+        {"last_room=2abc", "/rooms/2", false},
+        {"last_room=0_2", "/rooms/2", false}, /* '_' between two digits */
+        {"last_room=0d2", "/rooms/2", false}, /* String#to_i 0d prefix */
+        {"last_room=0D2", "/rooms/2", false},
+        {"last_room=\x0b" "2", "/rooms/2", false}, /* VT is Ruby ISSPACE */
+        {"last_room=\x0c" "2", "/rooms/2", false}, /* FF is Ruby ISSPACE */
+        {"last_room=0_5", "/rooms/5", false},
+        {"last_room=0d5", "/rooms/5", false},
+        {"last_room=0d0_5", "/rooms/5", false}, /* 0d prefix, then 0_5 -> 5 */
+        {"last_room=5__6", "/rooms/5", false},  /* a second '_' ends it */
+        {"last_room=2_5", "/rooms/9", false},   /* parses 25 -> not a member */
+        {"last_room=0x5", "/rooms/9", false},   /* parses 0 -> not a member */
+        {"last_room=abc", "/rooms/9", false},
+        {"last_room=", "/rooms/9", false},
+        {"last_room=9223372036854775808", "/rooms/9", false}, /* overflow */
+        {"last_room=99999999999999999999", "/rooms/9", false},
+        {"last_room=-9223372036854775809", "/rooms/9", false},
+        /* NBSP is obs-text: the whole header is unreadable and dropped
+         * (adapter.rs filter_map(to_str)), so last_room reads as absent and
+         * the action falls back to the original room. */
+        {"last_room=\xc2\xa0" "2", "/rooms/9", true},
+        /* Trailing NBSP is the falsifying shape: String#to_i would parse 2
+         * and select room 2, but the obs-text header is dropped whole, so
+         * last_room is absent and the original room wins. */
+        {"last_room=2\xc2\xa0", "/rooms/9", true},
+        {"last_room=--2", "/rooms/9", false},
+        {"last_room=_2", "/rooms/9", false},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         cf_request req;
         cf_response resp;
-        authenticated_request(&env, cases[i].cookie, &req, &resp);
+        if (cases[i].split_cookie) {
+            authenticated_request_split_cookie(&env, cases[i].cookie, &req,
+                                               &resp);
+        } else {
+            authenticated_request(&env, cases[i].cookie, &req, &resp);
+        }
         CF_CHECK(resp.status == 302);
         char expected[64];
         snprintf(expected, sizeof expected, "Location: " ORIGIN "%s\r\n",
@@ -610,6 +651,34 @@ CF_TEST(welcome_turbo_frame_request_renders_the_frame_layout) {
     cf_view_layout_model_dispose(&layout);
     cf_ctx_destroy(&control);
     cf_response_dispose(&control_resp);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* A non-ASCII `Turbo-Frame` value (reachable through the HTTP parser, which
+ * accepts obs-text) fails http 1.5.0's `HeaderValue::to_str`, so the pin
+ * reads the header as absent: the application layout renders. */
+CF_TEST(welcome_turbo_frame_non_ascii_is_page) {
+    welcome_env env;
+    CF_REQUIRE(env_open(&env));
+    CF_REQUIRE(welcome_assets_setup());
+    seed_golden_account(env.scratch.db);
+    seed_user(env.scratch.db, GOLDEN_USER_ID, GOLDEN_USER_NAME, 0, 0);
+
+    char header[4096];
+    make_session_cookie(env.config, env.scratch.db, header, sizeof header,
+                        "welcome-nonascii-token", GOLDEN_USER_ID);
+    cf_request req;
+    cf_test_req_init(&req);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Cookie"), SP(header)) == CF_OK);
+    CF_REQUIRE(cf_test_req_header(
+                   &req, SP("Turbo-Frame"),
+                   (cf_span){(const unsigned char *)"\xC3\xA9", 2}) == CF_OK);
+    cf_response resp;
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    CF_CHECK(head_contains(resp.body, "<!DOCTYPE html>"));
+    CF_CHECK(head_contains(resp.body, "<title>"));
     cf_response_dispose(&resp);
     env_close(&env);
 }

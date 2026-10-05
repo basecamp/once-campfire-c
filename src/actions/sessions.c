@@ -69,7 +69,10 @@ static bool sessions_param_str(cf_ctx *ctx, const char *name, cf_span *out) {
     return cf_param_string(param, out) == CF_OK;
 }
 
-/* `c.is_turbo_frame_request()`: a non-blank `Turbo-Frame` header. */
+/* `c.is_turbo_frame_request()`: the first `Turbo-Frame` header, whose bytes
+ * must pass http 1.5.0's `HeaderValue::to_str` (HTAB or visible ASCII only;
+ * any other byte makes the header read as absent) and be nonempty after
+ * `str::trim()` (only spaces and tabs). */
 static unsigned char sessions_lower(unsigned char c) {
     return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
 }
@@ -97,11 +100,14 @@ static bool sessions_turbo_frame_request(const cf_request *request) {
         }
     }
     if (!found) return false;
+    bool blank = true;
     for (size_t i = 0; i < value.len; i++) {
         unsigned char c = value.ptr[i];
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return true;
+        /* Not through `HeaderValue::to_str` -> the header reads as absent. */
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
     }
-    return false;
+    return !blank;
 }
 
 /* `redirect_to location` (Rails default 302, the absolute location, the
@@ -189,7 +195,7 @@ static cf_err sessions_render_new(cf_ctx *ctx, unsigned status) {
     if (rc != CF_OK) return rc;
 
     cf_view_layout_model layout = {0};
-    rc = cf_presenter_layout_load(ctx, NULL, &layout);
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
     if (rc != CF_OK) {
         cf_view_help_contact_dispose(&contact);
         return rc;
@@ -224,9 +230,10 @@ static cf_err sessions_render_new(cf_ctx *ctx, unsigned status) {
     return rc;
 }
 
-/* `flash.now[:alert] = REJECTION; render :new, status:`. */
+/* `flash.now[:alert] = REJECTION; render :new, status:`.  `.now` renders
+ * without persisting: no flash cookie is emitted for the rejection. */
 static cf_err sessions_render_rejection(cf_ctx *ctx, unsigned status) {
-    cf_err rc = cf_ctx_flash_set(
+    cf_err rc = cf_ctx_flash_now(
         ctx, sessions_span("alert"),
         sessions_span(CF_AUTH_SIGN_IN_REJECTION));
     if (rc != CF_OK) return rc;

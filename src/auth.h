@@ -54,12 +54,6 @@ typedef enum {
     CF_AUTH_SERIALIZER_JSON_FALLBACK
 } cf_auth_serializer;
 
-/* Rails.application.key_generator.generate_key(salt, length):
- * PBKDF2-HMAC-SHA256(secret_key_base, salt, 1000 iterations).  length must be
- * 1..512. */
-cf_err cf_auth_key_derive(cf_span secret_key_base, cf_span salt,
-                          size_t length, unsigned char *out);
-
 typedef struct {
     cf_auth_digest digest;
     cf_auth_encoding encoding;
@@ -195,12 +189,88 @@ cf_err cf_auth_turbo_verified_stream_name(cf_span secret_key_base, cf_span messa
 /* BCrypt::Password.new(digest).is_password?(password): false for a malformed
  * digest; libxcrypt's bcrypt counts only the first 72 password bytes.  Also
  * the ratified A01 boundary used by cf_user_authenticate/authenticated
- * (declared locally in src/models/user.c). */
+ * (declared locally in src/models/user.c).
+ *
+ * Bounded by the crypto queue once one has been started (P12-06): a job that
+ * cannot be prepared, a refusal while stopping, and a discard at shutdown all
+ * return false without running bcrypt on the calling thread (the bool
+ * boundary has no error channel; false is a fail-closed non-match, and the
+ * counts are in cf_crypto_queue_stats).  Only a process that never starts a
+ * queue (unit tests, tools) verifies inline. */
 bool cf_password_verify(cf_str password, cf_str digest);
 
 /* BCrypt::Password.create(password, cost:) in the `$2a$` format bcrypt-ruby
- * writes; the salt comes from cf_random_bytes (OS entropy).  cost is 4..31. */
+ * writes; the salt comes from cf_random_bytes (OS entropy).  cost is 4..31.
+ * Same bound: once a queue has been started, an unprepared job returns its
+ * CF_NOMEM/CF_INTERNAL and a refusal/discard returns CF_BUSY, with *out
+ * cleared and no inline hash; only the never-started-queue mode hashes on the
+ * calling thread. */
 cf_err cf_auth_password_digest(cf_str password, int cost, cf_str *out);
+
+/* ---- bounded crypto queue (00-contracts execution/waiting; P12-04) ------- */
+
+/* `CF_CRYPTO_WORKERS` worker threads run every bcrypt job; the pending queue
+ * is the fixed 32 of 01-foundation-http.md.  A request worker submits an
+ * owned-input job and waits for its completion, with its reader idle and no
+ * continuation scheduling (00-contracts).  Sign-in verification, the constant
+ * dummy verification for unknown accounts and setup hashing all pass through
+ * here while the queue runs.
+ *
+ * The bound is unconditional once a queue has been started (P12-06): the
+ * requirement is sticky for the process, and nothing (a stop, a refusal, a
+ * discarded job, or a job that cannot be prepared) runs bcrypt on the calling
+ * thread afterwards.  Only a process that never started the queue at all
+ * (unit tests, tools) has an inline mode, counted in inline_fallbacks.  The
+ * application wires start/stop through cf_app_start/cf_app_stop/
+ * cf_app_destroy. */
+typedef struct {
+    size_t workers;            /* configured worker threads */
+    size_t pending_capacity;   /* fixed pending bound (32) */
+    uint64_t submitted;        /* jobs accepted for asynchronous execution */
+    uint64_t completed;        /* accepted jobs executed by a worker */
+    uint64_t refused;          /* jobs the queue declined because it was stopping or already stopped; the caller got the documented failure and no bcrypt ran */
+    uint64_t saturated;        /* wait events: a submit found the queue full and slept (one submission can wait more than once, so this is not a per-submission count) */
+    uint64_t discarded;        /* queued jobs discarded by a stop; each waiter got CF_BUSY (documented failure), no bcrypt ran */
+    uint64_t inline_fallbacks; /* bcrypt-boundary executions on the calling thread because no queue was ever started in this process (the unit-test/tool mode); never incremented once a queue has been started */
+    uint64_t unprepared;       /* submissions that could not be prepared for the queue (owned-input copy or job sync init failed); the caller got CF_NOMEM/CF_INTERNAL (digest) or false (verify), and no bcrypt ran */
+    size_t pending_max;        /* high-water queued jobs */
+    size_t running_max;        /* high-water concurrent executions */
+    bool running;              /* started and not stopping */
+} cf_crypto_queue_stats;
+
+/* Starts `workers` bcrypt worker threads and resets the counters.  The queue
+ * is one per process: concurrent app instances (test fixtures, embedders)
+ * share it, so a start while it runs is reference-counted and CF_OK when
+ * `workers` matches the first start (CF_BUSY otherwise, CF_INVALID for 0).
+ * A successful start makes queue-or-fail sticky for the process (P12-06):
+ * after it, and after the stop below, no caller runs bcrypt inline. */
+cf_err cf_crypto_queue_start(size_t workers);
+/* Release this instance's reference.  The last release stops accepting, wakes
+ * every waiting submitter (a queued job is discarded and counted; its caller
+ * receives CF_BUSY, the documented failure, and never hashes inline) and
+ * joins the workers.  Idempotent per started instance; counters survive for
+ * inspection. */
+void cf_crypto_queue_stop(void);
+/* Snapshot of the counters, including the last run's values after a stop. */
+bool cf_crypto_queue_stats_get(cf_crypto_queue_stats *out);
+
+/* Test-only execution observer (same injection style as
+ * cf_auth_rate_limit_test_reset): invoked on the worker while the job holds
+ * its concurrency slot, before bcrypt runs.  NULL by default. */
+typedef void (*cf_crypto_queue_observer)(void *ctx);
+void cf_crypto_queue_set_test_observer(cf_crypto_queue_observer fn, void *ctx);
+
+/* Test-only allocation-failure injection: makes the next `count` job
+ * owned-input copies fail (job preparation returns CF_NOMEM as if the copy
+ * allocation had failed), so the failure arms above can be exercised
+ * deterministically.  0 disarms; default 0. */
+void cf_crypto_queue_set_test_copy_failure(unsigned count);
+
+/* Test-only: clears the sticky queue-or-fail requirement, restoring the
+ * never-started-queue inline mode so a case can exercise it after another
+ * case started a queue in the same process.  The production requirement is
+ * never cleared. */
+void cf_crypto_queue_test_reset_required(void);
 
 /* ---- sign-in rate limit (sessions.rs) ------------------------------------ */
 
@@ -219,15 +289,13 @@ cf_err cf_auth_sign_in_rate_limit(cf_ctx *ctx, bool *limited);
 
 /* ---- before-action chain (concerns.rs) ----------------------------------- */
 
-/* ApplicationController's chain in the pinned order: version headers, current
- * request, banned IP on unsafe methods (429), the controller's auth policy,
- * bot restrictions (403), CSRF (422), browser check, then the
- * require-unauthenticated restore/redirect.  See the halt convention above.
- *
- * Deferred steps reported to the integrator: version headers need
- * cf_config.app_version/git_revision (not in F03's config), and the browser
- * check (allow_browser) needs the platform_agent UA parser plus A02's
- * sessions/incompatible_browser view. */
+/* ApplicationController's chain in the pinned order: version headers
+ * (X-Version/X-Rev from the build-time CF_APP_VERSION/CF_GIT_REVISION
+ * defines), current request, banned IP on unsafe methods (429), the
+ * controller's auth policy, bot restrictions (403), CSRF (422), browser check
+ * (allow_browser; parses the UA into ctx->platform and renders the
+ * incompatible-browser page), then the require-unauthenticated
+ * restore/redirect.  See the halt convention above. */
 cf_err cf_before_actions(cf_ctx *ctx, cf_before policy);
 
 /* require_authentication: restore the session, else bot-key authentication,

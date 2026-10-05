@@ -325,6 +325,20 @@ rt_status rt_content_wrap(const unsigned char *html, size_t len, rt_content *out
     return rt_dom_parse_fragment(&out->dom, stripped, stripped_len, &out->root);
 }
 
+/* `Content#to_html` over the canonicalizing load: exactly what
+ * `ActionText::Content.new(body, canonicalize: true).to_html()` stores
+ * (content.rs `Content::load(html, ctx)?.to_html()`). The reference's
+ * `unwrap_or_else(|_| body.to_string())` rescue is the public wrapper's.
+ * rt_richtext.c declares this module-internal function where it is used. */
+rt_status rt_content_canonical(const unsigned char *html, size_t len, const rt_render_ctx *ctx,
+                               rt_buf *out) {
+    rt_content content;
+    rt_status rc = rt_content_load(html, len, ctx, &content);
+    if (rc == RT_OK) rc = rt_dom_serialize(&content.dom, content.root, false, out);
+    rt_content_dispose(&content);
+    return rc;
+}
+
 /* ---- rendering ----------------------------------------------------------- */
 
 static rt_status sanitize_content_attribute(rt_dom *dom, rt_node node) {

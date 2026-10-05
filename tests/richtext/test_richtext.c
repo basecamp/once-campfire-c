@@ -779,6 +779,59 @@ CF_TEST(opengraph_embeds_use_the_request_host) {
     rt_world_close(&world);
 }
 
+/* request_host reads the Host header through HeaderValue::to_str, so an
+ * obs-text Host reads as absent; the pin's host() then falls back to
+ * uri.authority() -- always None here, H01 admits origin-form targets only --
+ * and then "localhost" (request.rs:160-166).  An absent Host takes the same
+ * fallback, and the value is never NULL (controllers pass
+ * Some(c.request.host())).  The probe URL is `https://localhost./page`, whose
+ * canonical host is "localhost": after the gate both shapes drop the embed as
+ * a self link; before the gate the obs-text shape compared against the raw
+ * header bytes and the absent shape against NULL, so both rendered it as a
+ * web embed. */
+CF_TEST(request_host_gate_and_localhost_fallback) {
+    rt_world world;
+    rt_world_open(&world);
+    const char *body =
+        "<action-text-attachment content-type=\"application/vnd.actiontext.opengraph-embed\" "
+        "href=\"https://localhost./page\" filename=\"Local\" "
+        "url=\"https://localhost./i.png\"></action-text-attachment>";
+
+    /* Obs-text Host: unreadable -> "localhost" -> the localhost. URL is a
+     * self link and web_url drops the embed. */
+    cf_request request;
+    cf_ctx ctx = rt_ctx(world.reader, &request, "once.campfire.test\xc3\xa9");
+    cf_safe_html raw = {0};
+    CF_REQUIRE(cf_richtext_render(&ctx, span_of(body), &raw) == CF_OK);
+    CF_CHECK(!html_contains(&raw, "https://localhost./page"));
+    CF_CHECK(html_contains(&raw, "Local"));
+    cf_safe_html_dispose(&raw);
+
+    /* Absent Host: the same "localhost" fallback, same self-link outcome. */
+    cf_request no_host_request;
+    memset(&no_host_request, 0, sizeof no_host_request);
+    cf_ctx no_host_ctx;
+    memset(&no_host_ctx, 0, sizeof no_host_ctx);
+    no_host_ctx.reader = world.reader;
+    no_host_ctx.request = &no_host_request;
+    cf_safe_html absent = {0};
+    CF_REQUIRE(cf_richtext_render(&no_host_ctx, span_of(body), &absent) ==
+               CF_OK);
+    CF_CHECK(!html_contains(&absent, "https://localhost./page"));
+    CF_CHECK(html_contains(&absent, "Local"));
+    cf_safe_html_dispose(&absent);
+
+    /* A readable non-self Host still renders the same URL: the fallback did
+     * not swallow ordinary embeds. */
+    cf_ctx other = rt_ctx(world.reader, &request, "once.campfire.test");
+    cf_safe_html rendered = {0};
+    CF_REQUIRE(cf_richtext_render(&other, span_of(body), &rendered) == CF_OK);
+    CF_CHECK(html_contains(&rendered, "https://localhost./page"));
+    cf_safe_html_dispose(&rendered);
+
+    rt_world_close(&world);
+}
+
 CF_TEST(unconfigured_pipeline_resolves_no_verified_mentions) {
     cf_test_clock_set_fixed_us(RT_TEST_NOW_US);
     rt_world world;
@@ -840,6 +893,138 @@ CF_TEST(webhook_plain_text_drops_recipient_mentions) {
     CF_CHECK(buf_contains(&out, "hello"));
     CF_CHECK(!buf_contains(&out, "@David"));
     cf_str_dispose(&out);
+}
+
+/* ---- canonical body (ActionText::Content.new(body, canonicalize: true)) --- */
+
+/* `cf_richtext_canonical_body` is `canonical_body` (messages.rs): the expected
+ * strings are the pinned reference's own output for these inputs
+ * (Content::load(body, ctx).to_html(), derived with a read-only oracle built
+ * from tmp/rust-ref's campfire_richtext over the corpus users/host), and every
+ * canonical body is checked to be a fixed point of the round trip. */
+static void expect_canonical(cf_ctx *ctx, cf_span input, const char *expected) {
+    cf_str out = {0};
+    cf_err rc = cf_richtext_canonical_body(ctx, input, &out);
+    if (rc != CF_OK || out.ptr == NULL || strcmp(out.ptr, expected) != 0) {
+        fprintf(stderr, "  canonical body mismatch\n    in : %.*s\n    got: %s\n    want: %s\n",
+                (int)input.len, input.ptr != NULL ? (const char *)input.ptr : "",
+                out.ptr != NULL ? out.ptr : "(null)", expected);
+    }
+    CF_CHECK(rc == CF_OK);
+    CF_CHECK(out.ptr != NULL && strcmp(out.ptr, expected) == 0);
+    cf_str again = {0};
+    cf_span canonical = {(const unsigned char *)(out.ptr != NULL ? out.ptr : ""), out.len};
+    CF_REQUIRE(cf_richtext_canonical_body(ctx, canonical, &again) == CF_OK);
+    CF_CHECK(again.ptr != NULL && out.ptr != NULL && strcmp(again.ptr, out.ptr) == 0);
+    cf_str_dispose(&again);
+    cf_str_dispose(&out);
+}
+
+CF_TEST(canonical_body_round_trips_like_the_reference) {
+    cf_test_clock_set_fixed_us(RT_TEST_NOW_US);
+    rt_world world;
+    rt_world_open(&world);
+    cf_request request;
+    cf_ctx ctx = rt_ctx(world.reader, &request, "once.campfire.test:3000");
+
+    /* Whitespace, empty bodies and Ruby String#strip (NUL bytes included). */
+    expect_canonical(&ctx, span_of("Hello world"), "Hello world");
+    expect_canonical(&ctx, span_of("  hi  \n"), "hi");
+    {
+        static const unsigned char nul_body[] = {'\0', 'h', 'i', '\0'};
+        expect_canonical(&ctx, (cf_span){nul_body, sizeof nul_body}, "hi");
+    }
+    expect_canonical(&ctx, span_of(""), "");
+    expect_canonical(&ctx, span_of("   "), "");
+    /* A present-but-empty body param arrives as {NULL, 0}. */
+    expect_canonical(&ctx, (cf_span){NULL, 0}, "");
+
+    /* Entities: the parse decodes them and the canonical serialization
+     * re-escapes markup-significant ones; &nbsp; stays a named entity. */
+    expect_canonical(&ctx, span_of("a &amp; b"), "a &amp; b");
+    expect_canonical(&ctx, span_of("&hellip; &#x27; &nbsp;"), "\xE2\x80\xA6 ' &nbsp;");
+    expect_canonical(&ctx, span_of("&lt;script&gt;alert(1)&lt;/script&gt;"),
+                     "&lt;script&gt;alert(1)&lt;/script&gt;");
+
+    /* Nested, unclosed and misnested markup takes the HTML5 fragment's
+     * canonical shape (unquoted attributes quoted, tags closed/repaired). */
+    expect_canonical(&ctx, span_of("<b>bold"), "<b>bold</b>");
+    expect_canonical(&ctx, span_of("<b><i>x</b></i>"), "<b><i>x</i></b>");
+    expect_canonical(&ctx, span_of("<p>a<p>b"), "<p>a</p><p>b</p>");
+    expect_canonical(&ctx, span_of("<a href=foo>link</a>"), "<a href=\"foo\">link</a>");
+    expect_canonical(&ctx, span_of("<div><p>One</p><p>Two</p></div>"),
+                     "<div><p>One</p><p>Two</p></div>");
+
+    /* Trix figures convert to action-text-attachment nodes; an empty or
+     * unattributable figure disappears, and a body the conversion raises on
+     * is stored as given (the reference's unwrap_or_else rescue). */
+    expect_canonical(&ctx, span_of("<div>a<figure data-trix-attachment=\"{}\">x</figure>b</div>"),
+                     "<div>ab</div>");
+    expect_canonical(&ctx,
+                     span_of("<div><figure data-trix-attachment=\""
+                             "{&quot;contentType&quot;:&quot;image/png&quot;,"
+                             "&quot;url&quot;:&quot;https://example.com/a.png&quot;,"
+                             "&quot;width&quot;:100,&quot;height&quot;:50.5,"
+                             "&quot;previewable&quot;:true,&quot;filesize&quot;:null}"
+                             "\"></figure></div>"),
+                     "<div><action-text-attachment content-type=\"image/png\" "
+                     "url=\"https://example.com/a.png\" filesize=\"\" width=\"100\" "
+                     "height=\"50.5\" previewable=\"true\"></action-text-attachment></div>");
+    expect_canonical(&ctx,
+                     span_of("<div><figure data-trix-attachment=\"&quot;str&quot;\">x</figure></div>"),
+                     "<div><figure data-trix-attachment=\"&quot;str&quot;\">x</figure></div>");
+
+    /* Mentions resolve through the request's reader: the trix sgid becomes the
+     * mention attachment with the merged caption, and a plain attachment's
+     * inner HTML is cleared. */
+    char *jason = sgid_for("gid://campfire/User/2");
+    size_t need = strlen(jason) * 2 + 512;
+    char *mention_body = malloc(need);
+    char *mention_expected = malloc(need);
+    CF_REQUIRE(mention_body != NULL && mention_expected != NULL);
+    snprintf(mention_body, need,
+             "<div>Before<figure data-trix-attachment=\""
+             "{&quot;sgid&quot;:&quot;%s&quot;,"
+             "&quot;contentType&quot;:&quot;application/vnd.campfire.mention&quot;}\" "
+             "data-trix-attributes=\"{&quot;caption&quot;:&quot;cap&quot;}\">"
+             "<figcaption>Jason</figcaption></figure>After</div>",
+             jason);
+    snprintf(mention_expected, need,
+             "<div>Before<action-text-attachment sgid=\"%s\" "
+             "content-type=\"application/vnd.campfire.mention\" caption=\"cap\">"
+             "</action-text-attachment>After</div>",
+             jason);
+    expect_canonical(&ctx, span_of(mention_body), mention_expected);
+
+    snprintf(mention_body, need,
+             "<action-text-attachment sgid=\"%s\" "
+             "content-type=\"application/vnd.campfire.mention\">"
+             "<b>inner</b></action-text-attachment>",
+             jason);
+    snprintf(mention_expected, need,
+             "<action-text-attachment sgid=\"%s\" "
+             "content-type=\"application/vnd.campfire.mention\">"
+             "</action-text-attachment>",
+             jason);
+    expect_canonical(&ctx, span_of(mention_body), mention_expected);
+    free(mention_body);
+    free(mention_expected);
+    free(jason);
+
+    /* An unresolvable sgid raises during conversion: the body is stored as
+     * given, unchanged. */
+    expect_canonical(&ctx,
+                     span_of("<div><figure data-trix-attachment=\""
+                             "{&quot;sgid&quot;:&quot;bogus&quot;,"
+                             "&quot;contentType&quot;:&quot;application/vnd.campfire.mention&quot;}"
+                             "\"></figure></div>"),
+                     "<div><figure data-trix-attachment=\""
+                     "{&quot;sgid&quot;:&quot;bogus&quot;,"
+                     "&quot;contentType&quot;:&quot;application/vnd.campfire.mention&quot;}"
+                     "\"></figure></div>");
+
+    rt_world_close(&world);
+    cf_test_clock_clear();
 }
 
 CF_TEST_MAIN()

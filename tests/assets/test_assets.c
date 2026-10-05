@@ -373,6 +373,60 @@ CF_TEST(identity_and_compressed_sibling_negotiation) {
     }
     cf_response_dispose(&resp);
 
+    /* Accept-Encoding is read through HeaderValue::to_str (campfire app.rs
+     * `headers.get(ACCEPT_ENCODING).and_then(to_str)`), so obs-text, DEL and
+     * the C0 controls make the read absent and static serving falls back to
+     * the identity file.  The raw parser used before the gate selected the
+     * .gz sibling for every row below. */
+    struct {
+        const char *label;
+        const unsigned char *bytes;
+        size_t len;
+    } unreadable[] = {
+        {"obs-text UTF-8", (const unsigned char *)"gzip\xc3\xa9",
+         sizeof "gzip\xc3\xa9" - 1},
+        {"invalid UTF-8", (const unsigned char *)"gzip\xff",
+         sizeof "gzip\xff" - 1},
+        {"DEL", (const unsigned char *)"gzip\x7f",
+         sizeof "gzip\x7f" - 1},
+        {"control", (const unsigned char *)"gzip\x01",
+         sizeof "gzip\x01" - 1},
+        {"NUL", (const unsigned char *)"gzip\0", sizeof "gzip\0" - 1},
+    };
+    for (size_t i = 0; i < sizeof unreadable / sizeof unreadable[0]; i++) {
+        h03_req_init(&req);
+        req.path = (cf_span){(const unsigned char *)"/assets/app-11111111.css",
+                             sizeof "/assets/app-11111111.css" - 1};
+        CF_REQUIRE(h03_req_header(
+                       &req, CF_TEST_SPAN("Accept-Encoding"),
+                       (cf_span){unreadable[i].bytes,
+                                 unreadable[i].len}) == CF_OK);
+        CF_REQUIRE(serve(&req, &resp, &handled) == CF_OK);
+        if (!handled || !body_is(&resp, "IDENTITY-CSS")) {
+            printf("    %s: expected IDENTITY-CSS\n", unreadable[i].label);
+            CF_CHECK(0);
+        }
+        char *h = h03_serialize_headers(&resp, &req);
+        CF_REQUIRE(h != NULL);
+        CF_CHECK(strstr(h, "Content-Encoding: ") == NULL);
+        /* The twin still exists, so the reference sets Vary regardless. */
+        CF_CHECK(h03_header_is(h, "Vary", "accept-encoding"));
+        free(h);
+        cf_response_dispose(&resp);
+    }
+    /* HTAB is readable (to_str, not ASCII-only): the trailing tab is trimmed
+     * by the token scan, so gzip still selects the sibling. */
+    req_get_ae(&req, "/assets/app-11111111.css", "gzip\t");
+    CF_REQUIRE(serve(&req, &resp, &handled) == CF_OK);
+    CF_CHECK(body_is(&resp, "GZIP-CSS"));
+    {
+        char *h = h03_serialize_headers(&resp, &req);
+        CF_REQUIRE(h != NULL);
+        CF_CHECK(h03_header_is(h, "Content-Encoding", "gzip"));
+        free(h);
+    }
+    cf_response_dispose(&resp);
+
     CF_REQUIRE(cf_static_set_root(FIXTURE_ROOT) == CF_OK);
     remove_tree(dir);
 }

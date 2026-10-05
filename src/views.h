@@ -31,6 +31,7 @@
 #ifndef CF_VIEWS_H
 #define CF_VIEWS_H
 
+#include "auth/platform.h" /* cf_platform (the cf_view_platform definition) */
 #include "cf.h"
 #include "context.h"
 #include "models/types.h"
@@ -85,18 +86,19 @@ cf_err cf_views_assets_default_path(void *user, cf_span logical,
 
 /* `ApplicationPlatform` facts from the user agent (the foundation views read
  * apple_messages; the rooms bell's notification help reads browser and
- * operating_system).  A01's UA parser fills this; a zeroed value is "no
- * platform facts" (empty strings).  The string spans are borrowed. */
-typedef struct {
-    bool ios, android, mac, windows;
-    bool chrome, firefox, safari, edge;
-    bool mobile, desktop;
-    bool apple_messages;
-    /* Platform#browser / #operating_system ("Chrome", "macOS"); the pwa
-     * notification-help partials capitalize / print them.  Borrowed. */
-    cf_span browser;
-    cf_span operating_system;
-} cf_view_platform;
+ * operating_system).  A01's UA parser fills them (cf_platform_parse); a zeroed
+ * value is "no platform facts" (empty strings).
+ *
+ * The type is cf_platform (src/auth/platform.h): the parse result carries the
+ * parser's browser_version/bot/blocked fields and its two small synthesized-
+ * text buffers alongside the view facts, so `cf_ctx_platform(ctx)` can be
+ * passed to cf_presenter_layout_load without adaptation.  View code only reads
+ * the fact fields; see platform.h for the span lifetimes.
+ *
+ * The action path always fills this from the request's User-Agent value
+ * (cf_ctx_platform; the reference `platform` helper's parse, "" when the
+ * header is absent), so no rendered page observes zeroed facts. */
+typedef cf_platform cf_view_platform;
 
 /* `Current.user` as the layout's meta tags and body classes read it
  * (crates/views/src/lib.rs CurrentUser). */

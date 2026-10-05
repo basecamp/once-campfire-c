@@ -473,6 +473,53 @@ CF_TEST(form_body_content_type_dispatch) {
     cf_params_destroy(params);
 }
 
+CF_TEST(content_type_htab_is_readable_like_to_str) {
+    struct reqb b;
+    cf_params *params = NULL;
+
+    /* Trailing HTAB: HeaderValue::to_str admits HTAB, so the content type is
+     * present and media_type trims the tab to the form type (body.rs:59).
+     * The visible-ASCII-only probe treated the header as unusable, which only
+     * happened to agree for POST because the no-content-type default is the
+     * form path. */
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "application/x-www-form-urlencoded\t");
+    reqb_body(&b, "a=1&b=2");
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(str_is(pget(params, "a"), "1"));
+    CF_CHECK(str_is(pget(params, "b"), "2"));
+    cf_params_destroy(params);
+
+    /* The falsifying shape: a trailing HTAB on a JSON type must select the
+     * JSON body parse, not the POST default form parse. */
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "application/json\t");
+    reqb_body(&b, "{\"a\":1}");
+    params = NULL;
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(i64_is(pget(params, "a"), 1));
+    cf_params_destroy(params);
+
+    /* Leading HTAB trims the same way. */
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "\tapplication/json");
+    reqb_body(&b, "{\"a\":2}");
+    params = NULL;
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(i64_is(pget(params, "a"), 2));
+    cf_params_destroy(params);
+
+    /* Obs-text is still unreadable (to_str): the header reads as absent, the
+     * POST default form parse runs, and the JSON key is not a parameter. */
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "application/json\xc3\xa9");
+    reqb_body(&b, "{\"a\":1}");
+    params = NULL;
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(absent(params, "a"));
+    cf_params_destroy(params);
+}
+
 CF_TEST(form_decoding_and_malformed) {
     struct reqb b;
     reqb_init(&b, CF_POST, CF_POST);

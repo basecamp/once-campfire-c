@@ -9,7 +9,7 @@
 # sources (src/richtext/*.c) replace the deleted tests/models/support double,
 # and libgumbo + zlib-ng are linked per mode (MODE_DEP_LIBS).
 #
-# Usage: tests/auth/tools/build.sh [plain|asan|filc] [test-name ...]
+# Usage: tests/auth/tools/build.sh [plain|asan|tsan|filc] [test-name ...]
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 
@@ -28,6 +28,14 @@ plain)
 asan)
     SAN="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
     OUT=build/a01/asan
+    GUMBO=vendor/build/gumbo-clang/libgumbo.a
+    ZLIB=vendor/build/zlib-ng-clang/libz.a
+    MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include \
+-Ivendor/src/gumbo/gumbo-parser/src -Ivendor/build/zlib-ng-clang"
+    ;;
+tsan)
+    SAN="-fsanitize=thread -fno-omit-frame-pointer -g"
+    OUT=build/a01/tsan
     GUMBO=vendor/build/gumbo-clang/libgumbo.a
     ZLIB=vendor/build/zlib-ng-clang/libz.a
     MODE_INCLUDES="-Ivendor/build/libxcrypt-clang -Ivendor/build/openssl-clang/install/include \
@@ -58,24 +66,36 @@ src/models/push_subscription.c src/models/rich_text_record.c src/models/room.c \
 src/models/search.c src/models/session.c src/models/sound.c src/models/user.c \
 src/models/webhook.c"
 AUTH="src/auth/crypto.c src/auth/json.c src/auth/message.c src/auth/tokens.c \
-src/auth/password.c src/auth/session.c src/auth/before.c src/auth/rate.c"
+src/auth/password.c src/auth/session.c src/auth/before.c src/auth/rate.c \
+src/auth/platform.c src/auth/user_agent.c"
 # R02 production rich-text sources (Makefile RICHTEXT_SRCS); the test-only
 # tests/models/support/richtext.c double was deleted when this landed.
 RICHTEXT="src/richtext/rt_attach.c src/richtext/rt_autolink.c src/richtext/rt_content.c \
 src/richtext/rt_dom.c src/richtext/rt_pipeline.c src/richtext/rt_plain.c \
 src/richtext/rt_resolver.c src/richtext/rt_richtext.c src/richtext/rt_sanitize.c \
 src/richtext/rt_uri.c src/richtext/rt_util.c"
+# A02 view/presenter sources: the before-chain allow_browser tests render
+# sessions/incompatible_browser through cf_presenter_layout_load.
+VIEWS="src/views/ctx.c src/views/render.c src/views/translations.c src/views/view_assets.c \
+src/views/layout.c src/views/session.c src/views/first_run.c src/views/welcome.c \
+src/views/rooms.c src/views/messages.c src/views/pwa.c src/views/model.c"
+PRESENTERS="src/presenters/accounts.c src/presenters/layout.c src/presenters/messages.c \
+src/presenters/rooms.c"
 LIB_SRCS="$CORE src/config.c src/app.c src/assets.c src/db/schema.c src/db/reader.c src/db/statements.c src/db/writer.c src/http/params.c src/http/loop.c src/http/request.c src/http/response.c src/http/output.c src/views/escape.c src/context.c"
-SUPPORT="$RICHTEXT tests/app/support/route_double.c"
+SUPPORT="$RICHTEXT $VIEWS $PRESENTERS tests/app/support/route_double.c"
 
 CC="${CC:-clang}"
 MODE_INCLUDES="${MODE_INCLUDES:-}"
 DEPS_OVERRIDE="${DEPS_OVERRIDE:-}"
+# Extra compile defines, e.g. EXTRA_CFLAGS='-DCF_GIT_REVISION="rev1"' to
+# exercise the X-Rev branch of the before-action chain.  The object cache does
+# not track them: remove $OUT first when changing the flags.
+EXTRA_CFLAGS="${EXTRA_CFLAGS:-}"
 
 CFLAGS="-std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread \
 -Isrc -Itests -Ivendor/src/yyjson/src -Ivendor/src/sqlite/sqlite-amalgamation-3530400 \
--Ivendor/src/picohttpparser \
-$MODE_INCLUDES -O1 -g $SAN"
+-Ivendor/src/picohttpparser -DCF_APP_VERSION=\"0.1.0\" -DCF_VIEWS_APP_VERSION=\"0.1.0\" \
+$MODE_INCLUDES -O1 -g $SAN $EXTRA_CFLAGS"
 
 mkdir -p "$OUT/obj"
 objs=()
@@ -104,7 +124,7 @@ fi
 
 tests=("$@")
 if [ ${#tests[@]} -eq 0 ]; then
-    tests=(test_crypto test_tokens test_password test_session test_before test_rate)
+    tests=(test_crypto test_tokens test_password test_session test_before test_rate test_platform)
 fi
 
 failed=0

@@ -657,6 +657,29 @@ CF_TEST(sessions_new_turbo_frame_renders_the_frame_layout) {
     env_close(&env);
 }
 
+/* A non-ASCII `Turbo-Frame` value fails http 1.5.0's `HeaderValue::to_str`,
+ * so the pin reads the header as absent: the page layout renders. */
+CF_TEST(sessions_new_turbo_frame_non_ascii_is_page) {
+    sess_env env;
+    CF_REQUIRE(env_open(&env));
+    CF_REQUIRE(sessions_assets_setup());
+    seed_golden_login_state(&env);
+
+    cf_request req;
+    cf_response resp;
+    get_session_new(&req, (cf_span){NULL, 0}, NULL);
+    CF_REQUIRE(cf_test_req_header(
+                   &req, SP("Turbo-Frame"),
+                   (cf_span){(const unsigned char *)"\xC3\xA9", 2}) == CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    cf_span body = cf_buf_span(resp.body);
+    CF_CHECK(body.len > 15 && memcmp(body.ptr, "<!DOCTYPE html>", 15) == 0);
+    CF_CHECK(span_contains(body, "<body class="));
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
 /* Forged cross-site POST: the chain's CSRF check answers 422 (before the
  * action body and before any rate-limit counting). */
 CF_TEST(sessions_create_cross_site_post_is_422) {
@@ -946,6 +969,115 @@ CF_TEST(sessions_destroy_logs_out_and_redirects_root) {
     CF_CHECK(env.events[0].reconnect);
     cf_response_dispose(&resp);
     env_close(&env);
+}
+
+/* --- Rack method override (V01's logout form shape) ----------------------- */
+
+/* Value after "Location: " in the serialized response headers. */
+static bool location_value(cf_response *resp, cf_request *req, char *out,
+                           size_t cap) {
+    if (resp->status == 0) resp->status = 200;
+    cf_http_serialized ser = {0};
+    CF_REQUIRE(cf_http_response_serialize(resp, req, &ser) == CF_OK);
+    cf_span head = cf_buf_span(ser.headers);
+    static const char needle[] = "Location: ";
+    bool found = false;
+    for (size_t i = 0; i + sizeof needle - 1 <= head.len; i++) {
+        if (memcmp(head.ptr + i, needle, sizeof needle - 1) != 0) continue;
+        size_t at = i + sizeof needle - 1, end = at;
+        while (end < head.len && head.ptr[end] != '\r') end++;
+        size_t n = end - at < cap - 1 ? end - at : cap - 1;
+        memcpy(out, head.ptr + at, n);
+        out[n] = '\0';
+        found = true;
+        break;
+    }
+    cf_buf_release(ser.headers);
+    return found;
+}
+
+/* V01's logout form: POST /session + `_method=delete` must reach
+ * sessions#destroy with the direct DELETE's response shape and side effects
+ * (before the fix the POST row's create action answered the 401 page). */
+CF_TEST(sessions_destroy_reached_via_post_method_override) {
+    /* Direct DELETE /session?push_subscription_endpoint=... */
+    sess_env direct_env;
+    CF_REQUIRE(env_open(&direct_env));
+    seed_user(direct_env.scratch.db, 1, "Active", "a@example.com", NULL, 0, 0);
+    seed_push_subscription(direct_env.scratch.db, 11, 1,
+                           "https://push.example/ep1");
+    char direct_cookie[4096];
+    make_session_cookie(direct_env.config, direct_env.scratch.db,
+                        direct_cookie, sizeof direct_cookie,
+                        "sessions-override-direct", 1);
+    cf_request direct_req;
+    cf_response direct_resp;
+    delete_session(&direct_req, "https://push.example/ep1", direct_cookie);
+    CF_REQUIRE(run_request(&direct_env, &direct_req, &direct_resp));
+    CF_CHECK(direct_resp.status == 302);
+    char direct_location[512];
+    CF_REQUIRE(location_value(&direct_resp, &direct_req, direct_location,
+                              sizeof direct_location));
+    cf_span direct_body = {NULL, 0};
+    if (direct_resp.body != NULL) {
+        direct_body = cf_buf_span(direct_resp.body);
+    }
+
+    /* The form's shape: POST /session with the hidden `_method` field and
+     * the same query string. */
+    sess_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_user(env.scratch.db, 1, "Active", "a@example.com", NULL, 0, 0);
+    seed_push_subscription(env.scratch.db, 11, 1, "https://push.example/ep1");
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                        "sessions-override-form", 1);
+    cf_request req;
+    static char target[2048];
+    char encoded[1024];
+    query_encode(encoded, sizeof encoded, "https://push.example/ep1");
+    snprintf(target, sizeof target,
+             "/session?push_subscription_endpoint=%s", encoded);
+    cf_test_req_init(&req);
+    req.method = CF_POST;
+    req.original_method = CF_POST;
+    req.path = SP("/session");
+    req.target = SP(target);
+    req.query = SP(target + strlen("/session?"));
+    req.body = SP("_method=delete");
+    CF_REQUIRE(cf_test_req_header(&req, SP("Content-Type"),
+                                  SP("application/x-www-form-urlencoded")) ==
+               CF_OK);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Sec-Fetch-Site"),
+                                  SP("same-origin")) == CF_OK);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Cookie"), SP(cookie)) == CF_OK);
+    cf_response resp;
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == direct_resp.status);
+    char location[512];
+    CF_REQUIRE(location_value(&resp, &req, location, sizeof location));
+    CF_CHECK(strcmp(location, direct_location) == 0);
+    cf_span body = {NULL, 0};
+    if (resp.body != NULL) body = cf_buf_span(resp.body);
+    CF_CHECK(body.len == direct_body.len);
+    CF_CHECK(body.len == 0 || memcmp(body.ptr, direct_body.ptr, body.len) == 0);
+
+    /* Same side effects: the session row, both cookies and this user's push
+     * subscription go, and the mandatory disconnect is emitted. */
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM sessions") == 0);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM push_subscriptions WHERE id=11") ==
+             0);
+    CF_REQUIRE(env.event_count == 1);
+    CF_CHECK(env.events[0].kind == CF_EVENT_DISCONNECT_USER);
+    CF_CHECK(env.events[0].user_id == 1);
+    CF_CHECK(env.events[0].reconnect);
+
+    cf_response_dispose(&resp);
+    cf_response_dispose(&direct_resp);
+    env_close(&env);
+    env_close(&direct_env);
 }
 
 /* Logout without a session: the chain redirects to sign-in and nothing is

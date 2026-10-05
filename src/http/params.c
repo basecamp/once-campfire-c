@@ -74,6 +74,20 @@ static bool span_is_ascii_visible(cf_span s) {
     return true;
 }
 
+/* The Content-Type read follows http 1.5.0's HeaderValue::to_str (kit
+ * body.rs:59 / adapter.rs:277 use `headers.get(CONTENT_TYPE)
+ * .and_then(|v| v.to_str().ok())`), which admits HTAB as well as visible
+ * ASCII: a trailing/leading tab is readable and `media_type`'s trim removes
+ * it.  span_is_ascii_visible above stays the stricter probe for the method
+ * override, whose pin path upper-cases without trimming. */
+static bool span_is_visible_or_htab(cf_span s) {
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char c = s.ptr[i];
+        if (c != '\t' && (c < 0x20 || c > 0x7E)) return false;
+    }
+    return true;
+}
+
 /* Strict UTF-8 (RFC 3629): rejects overlongs, surrogates and > U+10FFFF. */
 static bool utf8_valid(const unsigned char *s, size_t n) {
     size_t i = 0;
@@ -1432,7 +1446,7 @@ static void content_scope_of(const cf_request *req, struct content_scope *out) {
             break;
         }
     }
-    if (!found || !span_is_ascii_visible(ct)) return; /* absent / unusable */
+    if (!found || !span_is_visible_or_htab(ct)) return; /* absent / unusable */
     if (ct.len == 0) return;
     out->present = true;
     out->ct = ct;

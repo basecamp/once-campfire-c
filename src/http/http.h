@@ -56,9 +56,15 @@ typedef cf_err (*cf_http_admit_fn)(void *user, cf_http_task *task);
  *    the bytes to the socket (close_after forces Connection: close). The
  *    connection stays an ordinary HTTP connection.
  *  - CF_HTTP_UPGRADE_TAKEN: the hook copied request->pending (if any) and
- *    takes ownership of request->fd. The HTTP connection is retired without
- *    closing the descriptor; no response bytes are written by HTTP. The hook
- *    must not use fd after returning until it owns it, and must close it.
+ *    receives request->fd with a lifetime lease. The connection leaves the
+ *    HTTP read/write state machine (removed from epoll, no response bytes
+ *    written by HTTP) but keeps occupying its connection-slot reservation
+ *    counted against the loop's connections_per_loop budget: while the
+ *    upgrade lives, the loop admits no replacement connection. The lease
+ *    passed to the TAKEN continuation is the hook's proof of that
+ *    reservation; the hook calls cf_http_upgrade_release() exactly once when
+ *    it is done with the descriptor, and only then does the loop close the
+ *    fd and release the slot (on the loop thread).
  *
  * All spans are borrowed for the call only. The hook must not block the loop
  * on another thread. */
@@ -68,13 +74,41 @@ typedef enum {
     CF_HTTP_UPGRADE_TAKEN
 } cf_http_upgrade_result;
 
+/* Opaque lifetime-admission reservation created by the loop for a TAKEN
+ * upgrade. Release it from any thread, exactly once; the release is
+ * processed on the loop thread, which closes the descriptor and frees the
+ * connection slot exactly once. */
+typedef struct cf_http_upgrade_lease cf_http_upgrade_lease;
+
+/* TAKEN continuation sentinel: the loop could not reserve the connection
+ * (lease allocation failure), so the upgrade did not happen. The loop has
+ * already closed the descriptor and freed the slot; the hook must not use or
+ * close fd, only release its own state. */
+#define CF_HTTP_UPGRADE_REJECTED ((cf_http_upgrade_lease *)(uintptr_t)1)
+
 /* TAKEN continuation: called on the loop thread after the connection has
- * left HTTP (the fd was removed from epoll and the HTTP slot was retired
- * without closing it), so the hook may close or hand off the fd freely. */
-typedef cf_err (*cf_http_upgrade_taken_fn)(void *user);
+ * left HTTP's read/write state machine, so the hook may use the fd freely.
+ *
+ * lease a valid pointer: HTTP keeps the connection-slot reservation and owns
+ * the descriptor's close; the hook must stop using the fd and call
+ * cf_http_upgrade_release(lease) exactly once (normal close, reset, timeout
+ * or shutdown of the upgraded transport).
+ * lease == NULL: a direct hook call outside the HTTP loop (tests): the fd is
+ * open and the hook owns it completely, including its close.
+ * lease == CF_HTTP_UPGRADE_REJECTED: no reservation was possible and the
+ * upgrade was refused; the fd is already closed and the hook only releases
+ * its own state. */
+typedef cf_err (*cf_http_upgrade_taken_fn)(void *user,
+                                           cf_http_upgrade_lease *lease);
+
+/* Release a TAKEN upgrade's lifetime reservation. Any thread; exactly once
+ * per lease (a second call is a harmless no-op). The loop closes the
+ * descriptor and releases the slot when it processes the release. */
+void cf_http_upgrade_release(cf_http_upgrade_lease *lease);
 
 typedef struct {
     int fd;               /* nonblocking socket, borrowed unless TAKEN */
+    uint32_t loop_index;  /* the owning loop's cf_http_loop_config.loop_index */
     cf_method method;
     cf_span target, path, query, peer_ip;
     const cf_header *headers; /* request headers, in received order */
@@ -84,8 +118,7 @@ typedef struct {
     cf_builder reply;     /* REPLY: full HTTP response bytes to send */
     bool close_after;     /* REPLY: close after the response */
     /* TAKEN: the hook stores its continuation here; the loop calls it after
-     * the detach, on the loop thread, and would only fail to serve the
-     * connection (the fd is already the hook's). */
+     * the detach, on the loop thread, with the lifetime lease. */
     cf_http_upgrade_taken_fn taken;
     void *taken_user;
 } cf_http_upgrade_request;

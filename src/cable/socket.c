@@ -2,14 +2,24 @@
  * mount (04-cable-jobs.md C01; socket.rs, server.rs and the Authenticate
  * trait of tmp/rust-ref/crates/cable/src).
  *
- * One owner thread per accepted connection (the reference's one task per
- * socket): no other thread sends, closes or mutates it. Writers may enqueue
- * frames from anywhere (mutex + eventfd). The reader is the translation of
+ * Ownership. A live socket has exactly one owner thread and only that thread
+ * sends, closes or mutates it. The production server services every upgraded
+ * socket of one HTTP loop on that loop's single bounded cable reactor thread
+ * (never a thread per connection); cf_cable_socket_run remains the
+ * standalone one-socket driver for direct users. Writers may enqueue frames
+ * from anywhere (mutex + wake eventfd). The reader is the translation of
  * Reader::next: masked client frames, variable lengths, fragmentation,
  * control frames interleaved with fragments, UTF-8 text validation, the
  * close handshake, and the reference close codes. permessage-deflate is
  * negotiated without context takeover; the writer sends the reference raw
  * deflate framing (RFC 7692) and the same FrameDeflate cache as socket.rs.
+ *
+ * Admission. The server's upgraded sockets keep the HTTP connection-slot
+ * reservation for their whole lifetime (cf_http_upgrade_lease): a live
+ * upgrade prevents a replacement connection until its socket ends, and the
+ * reactor releases the lease exactly once on every ending (normal close,
+ * reset, timeout, shutdown). Each reactor also enforces aggregate
+ * input/output byte budgets across all of its sockets.
  */
 #include "cable.h"
 
@@ -27,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -49,6 +60,10 @@ static const unsigned char DEFLATE_TAIL[4] = {0x00, 0x00, 0xff, 0xff};
 /* One recv() unit. The parser consumes payloads as they arrive, so the
  * persistent input buffer never holds more than this plus a frame header. */
 #define CF_CABLE_READ_CHUNK ((size_t)16384)
+/* Reactor fairness: most bytes one socket may read in a single serviced
+ * event before the reactor moves on (level-triggered epoll reports the
+ * rest). */
+#define CF_CABLE_REACTOR_READ_CHUNK ((size_t)256 << 10)
 
 /* ------------------------------------------------------------ small helpers */
 
@@ -216,10 +231,37 @@ static bool cable_sha1(cf_span data, unsigned char out[20]) {
 
 /* ---- request header helpers ----------------------------------------------- */
 
+/* HeaderValue::to_str (http 1.5.0 src/header/value.rs:558-560, the pin the
+ * cable crate reads through): readable means every byte is HTAB or visible
+ * ASCII (0x20..=0x7E).  Obs-text (>= 0x80, valid UTF-8 included), DEL and the
+ * other controls make the reference's read answer `None` -- the header reads
+ * as ABSENT, never as raw bytes.  The sites (cable crate):
+ *   server.rs:240,241  Origin, Host          (get -> first value only)
+ *   server.rs:288      Connection            (get_all -> every value)
+ *   server.rs:289      Upgrade               (get -> first value only)
+ *   server.rs:307      Sec-WebSocket-Protocol (get_all)
+ *   socket.rs:141      Sec-WebSocket-Extensions (get_all)
+ *   socket.rs:129,130  Sec-WebSocket-Version/Key (`get` then raw byte compare /
+ *                      base64 of the raw bytes; an unreadable value can never
+ *                      equal "13" nor decode, so the gate is outcome-equal)
+ *   campfire/src/channels/connection.rs:26 Cookie (get_all -> every value)
+ * A later value of the same name is consulted only at the get_all sites. */
+static bool cable_header_readable(cf_span value) {
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (c != '\t' && (c < 0x20 || c > 0x7E)) return false;
+    }
+    return true;
+}
+
+/* First value of a header, or false when absent.  The pin's `HeaderMap::get`
+ * returns the first value for the name: an unreadable first value reads as
+ * absent and a later duplicate is not consulted. */
 static bool request_header_first(const cf_cable_request *request,
                                  const char *name, cf_span *out) {
     for (size_t i = 0; i < request->header_count; i++) {
         if (bytes_ieq_lit(request->headers[i].name, name)) {
+            if (!cable_header_readable(request->headers[i].value)) return false;
             *out = request->headers[i].value;
             return true;
         }
@@ -240,6 +282,9 @@ static bool websocket_request(const cf_cable_request *request) {
     for (size_t i = 0; i < request->header_count && !connection_upgrade; i++) {
         if (!bytes_ieq_lit(request->headers[i].name, "connection")) continue;
         cf_span v = request->headers[i].value;
+        /* get_all(CONNECTION).iter().any(to_str): an unreadable value is
+         * skipped whole, a later readable duplicate still counts. */
+        if (!cable_header_readable(v)) continue;
         size_t pos = 0;
         while (pos <= v.len) {
             size_t end = pos;
@@ -330,6 +375,9 @@ static bool deflate_acceptable(const cf_cable_request *request) {
             continue;
         }
         cf_span v = request->headers[i].value;
+        /* socket.rs:138-143 get_all(EXTENSIONS).filter_map(to_str): an
+         * unreadable value is dropped whole, a later readable one counts. */
+        if (!cable_header_readable(v)) continue;
         size_t pos = 0;
         while (pos <= v.len) {
             size_t end = pos;
@@ -352,6 +400,10 @@ static const char *negotiate_protocol(const cf_cable_request *request) {
             continue;
         }
         cf_span v = request->headers[i].value;
+        /* server.rs:303-311 get_all(PROTOCOL).filter_map(to_str): an
+         * unreadable value is dropped whole (its readable-looking tokens
+         * included), a later readable duplicate still counts. */
+        if (!cable_header_readable(v)) continue;
         size_t pos = 0;
         while (pos <= v.len) {
             size_t end = pos;
@@ -610,13 +662,62 @@ struct cf_cable_out {
     size_t header_len;
     size_t payload_len;
     size_t sent; /* bytes of header+payload accepted by the kernel */
-    unsigned opcode;
+    unsigned opcode; /* OP_RAW = pre-serialized bytes (the 101 response) */
 };
+
+/* The pre-serialized handshake marker, never a real WebSocket opcode. */
+#define OP_RAW 0x100u
+
+/* The per-HTTP-loop cable reactor (one bounded thread for every upgraded
+ * socket of that loop). Defined here because the socket accounting hooks
+ * below need its fields; its behavior lives in the server section. */
+struct cable_conn;
+struct cable_reactor {
+    struct cf_cable_server *server;
+    uint32_t loop_index;
+    pthread_t thread;
+    bool started;
+    bool owner_started; /* owner_start hook ran (owner_stop must run) */
+    int epfd;
+    int wake_fd;
+    pthread_mutex_t mutex; /* enrollment queue + aggregate byte budgets */
+    struct cable_conn *conns; /* enrolled, linked under mutex */
+    struct cable_conn *enroll_head, *enroll_tail; /* waiting enrollment */
+    size_t live;
+    size_t input_used;  /* aggregate buffered input bytes held by sockets */
+    size_t output_used; /* aggregate queued wire bytes across sockets */
+    size_t input_limit;
+    size_t output_limit;
+    bool stopping;
+};
+
+static void reactor_wake(struct cable_reactor *reactor);
+
+/* The token-form wake the owner_start hook receives: the C03 barrier calls it
+ * from the writer thread, so it only writes the eventfd. */
+static void reactor_wake_token(void *token) {
+    reactor_wake(token);
+}
 
 struct cf_cable_socket {
     int fd;
     bool deflate;
-    int wake_fd;
+    int wake_fd; /* standalone only; reactors own one wake eventfd */
+    struct cable_reactor *reactor; /* non-NULL: multiplexed transport */
+    const cf_cable_request *request; /* borrowed, sockets's lifetime */
+    void *app_user; /* hooks' per-connection context */
+    bool reactor_mode; /* fairness/budget behavior */
+    /* Owner thread: the authenticate hook handed its work to a worker and the
+     * post-auth step waits for cf_cable_socket_complete_auth. Input is not
+     * parsed before that (the worker wakes the socket when ready). */
+    bool auth_pending;
+    /* Owner thread: an on_text hook returned CF_BUSY; no further input is
+     * read or parsed until cf_cable_socket_resume. Buffered bytes stay
+     * charged to the aggregate input budget. */
+    bool paused;
+    size_t input_charged;  /* aggregate input bytes held (owner thread) */
+    size_t output_charged; /* aggregate output bytes queued (owner thread) */
+    size_t msg_charged;    /* part of input_charged held in s->msg */
     pthread_mutex_t mutex; /* guards the out queue and the flags below */
     struct cf_cable_out *out_head, *out_tail;
     size_t pending_bytes; /* queued wire bytes not yet accepted */
@@ -657,7 +758,67 @@ struct cf_cable_socket {
     uint64_t next_beat_ms;
 };
 
+/* Aggregate budget accounting: charged when bytes are buffered or queued,
+ * released when they are consumed or sent. The accounting fields
+ * (s->input_charged / s->output_charged) belong to the socket's owner
+ * thread; the reactor totals are guarded by the reactor mutex. A standalone
+ * socket (no reactor) makes all of these constant-time no-ops. */
+static bool reactor_input_charge(cf_cable_socket *s, size_t n) {
+    if (s->reactor == NULL || n == 0) return true;
+    struct cable_reactor *r = s->reactor;
+    bool ok = true;
+    pthread_mutex_lock(&r->mutex);
+    if (n > r->input_limit - r->input_used) {
+        ok = false;
+    } else {
+        r->input_used += n;
+        s->input_charged += n;
+    }
+    pthread_mutex_unlock(&r->mutex);
+    return ok;
+}
+
+static void reactor_input_release(cf_cable_socket *s, size_t n) {
+    if (s->reactor == NULL || n == 0) return;
+    if (n > s->input_charged) n = s->input_charged;
+    struct cable_reactor *r = s->reactor;
+    pthread_mutex_lock(&r->mutex);
+    r->input_used -= n;
+    pthread_mutex_unlock(&r->mutex);
+    s->input_charged -= n;
+}
+
+static bool reactor_output_charge(cf_cable_socket *s, size_t n) {
+    if (s->reactor == NULL || n == 0) return true;
+    struct cable_reactor *r = s->reactor;
+    bool ok = true;
+    pthread_mutex_lock(&r->mutex);
+    if (n > r->output_limit - r->output_used) {
+        ok = false;
+    } else {
+        r->output_used += n;
+        s->output_charged += n;
+    }
+    pthread_mutex_unlock(&r->mutex);
+    return ok;
+}
+
+static void reactor_output_release(cf_cable_socket *s, size_t n) {
+    if (s->reactor == NULL || n == 0) return;
+    if (n > s->output_charged) n = s->output_charged;
+    struct cable_reactor *r = s->reactor;
+    pthread_mutex_lock(&r->mutex);
+    r->output_used -= n;
+    pthread_mutex_unlock(&r->mutex);
+    s->output_charged -= n;
+}
+
+
 static void socket_wake(struct cf_cable_socket *s) {
+    if (s->reactor != NULL) {
+        reactor_wake(s->reactor);
+        return;
+    }
     uint64_t one = 1;
     ssize_t n = write(s->wake_fd, &one, sizeof one);
     (void)n; /* EAGAIN: a wake is already pending */
@@ -721,14 +882,13 @@ static void frame_header(unsigned opcode, bool compressed, size_t len,
 }
 
 /* Append one frame to the pending queue. Takes ownership of `payload` (a
- * retained reference) on every path. Returns CF_BUSY when the pending cap is
- * reached (the connection closes) and CF_IO when it already closed. */
-static cf_err out_queue(struct cf_cable_socket *s, unsigned opcode,
-                        cf_buf *payload, bool compressed) {
+ * retained reference) on every path. Returns CF_BUSY when the pending cap or
+ * the reactor's aggregate output budget is reached (the connection closes)
+ * and CF_IO when it already closed. */
+static cf_err out_queue_node(struct cf_cable_socket *s, unsigned opcode,
+                             cf_buf *payload, const unsigned char *header,
+                             size_t header_len) {
     size_t len = cf_buf_span(payload).len;
-    unsigned char header[10];
-    size_t header_len = 0;
-    frame_header(opcode, compressed, len, header, &header_len);
     size_t wire = header_len + len;
 
     pthread_mutex_lock(&s->mutex);
@@ -746,14 +906,25 @@ static cf_err out_queue(struct cf_cable_socket *s, unsigned opcode,
         socket_wake(s);
         return CF_BUSY;
     }
+    /* Aggregate reactor budget: charged under the socket mutex so a close
+     * that drains the queue cannot interleave with this enqueue. */
+    if (!reactor_output_charge(s, wire)) {
+        s->queue_cap_hit = true;
+        s->stats.over_budget_closes++;
+        pthread_mutex_unlock(&s->mutex);
+        cf_buf_release(payload);
+        socket_wake(s);
+        return CF_BUSY;
+    }
     struct cf_cable_out *node = calloc(1, sizeof *node);
     if (node == NULL) {
+        reactor_output_release(s, wire);
         pthread_mutex_unlock(&s->mutex);
         cf_buf_release(payload);
         return CF_NOMEM;
     }
     node->payload = payload;
-    memcpy(node->header, header, header_len);
+    if (header_len != 0) memcpy(node->header, header, header_len);
     node->header_len = header_len;
     node->payload_len = len;
     node->opcode = opcode;
@@ -765,10 +936,32 @@ static cf_err out_queue(struct cf_cable_socket *s, unsigned opcode,
     s->out_tail = node;
     if (s->pending_bytes == 0) s->last_progress_ms = cf_monotonic_ms();
     s->pending_bytes += wire;
-    s->stats.frames_queued++;
+    if (opcode != OP_RAW) s->stats.frames_queued++;
     pthread_mutex_unlock(&s->mutex);
     socket_wake(s);
     return CF_OK;
+}
+
+static cf_err out_queue(struct cf_cable_socket *s, unsigned opcode,
+                        cf_buf *payload, bool compressed) {
+    size_t len = cf_buf_span(payload).len;
+    unsigned char header[10];
+    size_t header_len = 0;
+    frame_header(opcode, compressed, len, header, &header_len);
+    return out_queue_node(s, opcode, payload, header, header_len);
+}
+
+/* Pre-serialized bytes (the 101 handshake response) go out before any
+ * WebSocket frame; they are counted in the aggregate output budget but not
+ * against the WebSocket pending-frame cap. */
+static cf_err queue_raw(struct cf_cable_socket *s, const unsigned char *bytes,
+                        size_t len) {
+    if (len == 0) return CF_OK;
+    cf_buf *payload = NULL;
+    if (cf_buf_copy((cf_span){bytes, len}, &payload) != CF_OK) return CF_NOMEM;
+    cf_err rc = out_queue_node(s, OP_RAW, payload, NULL, 0);
+    if (rc != CF_OK) cf_buf_release(payload);
+    return rc;
 }
 
 static cf_err queue_text_bytes(struct cf_cable_socket *s, cf_span text) {
@@ -800,6 +993,7 @@ void cf_cable_socket_request_close(cf_cable_socket *socket) {
 
 static void node_finish_stats(struct cf_cable_socket *s,
                               struct cf_cable_out *node) {
+    if (node->opcode == OP_RAW) return; /* the 101 response is not a frame */
     s->stats.frames_sent++;
     s->stats.bytes_sent += node->header_len + node->payload_len;
     if (node->opcode == OP_PING) s->stats.pings_sent++;
@@ -808,7 +1002,8 @@ static void node_finish_stats(struct cf_cable_socket *s,
 }
 
 /* Send as much of the queue as the socket accepts; called on the owner
- * thread. A positive send resets the stalled-write clock. */
+ * thread. A positive send resets the stalled-write clock and releases the
+ * aggregate output budget for the accepted bytes. */
 static void socket_flush(struct cf_cable_socket *s) {
     while (!s->transport_failed) {
         pthread_mutex_lock(&s->mutex);
@@ -837,6 +1032,7 @@ static void socket_flush(struct cf_cable_socket *s) {
             s->last_progress_ms = now;
             s->pending_bytes -= (size_t)n;
             pthread_mutex_unlock(&s->mutex);
+            reactor_output_release(s, (size_t)n);
             if (node->sent == node->header_len + node->payload_len) {
                 node_finish_stats(s, node);
                 cf_buf_release(node->payload);
@@ -913,6 +1109,7 @@ enum { R_B0 = 0, R_LEN16, R_LEN64, R_MASK, R_PAYLOAD };
 
 static void in_take(struct cf_cable_socket *s, size_t n) {
     s->in_pos += n;
+    reactor_input_release(s, n);
     if (s->in_pos == s->in.len) {
         s->in_pos = 0;
         s->in.len = 0;
@@ -923,7 +1120,15 @@ static void in_take(struct cf_cable_socket *s, size_t n) {
     }
 }
 
-enum feed_result { FEED_OK = 0, FEED_PROTOCOL, FEED_CLOSED, FEED_ABORT };
+enum feed_result {
+    FEED_OK = 0,
+    FEED_PROTOCOL,
+    FEED_CLOSED,
+    FEED_ABORT,
+    /* The on_text hook took the command's model work to a worker: stop
+     * consuming frames (ordering) until the owner resumes the socket. */
+    FEED_PAUSED
+};
 
 static enum feed_result protocol_fail(struct cf_cable_socket *s,
                                       uint16_t code) {
@@ -963,14 +1168,22 @@ static enum feed_result message_done(struct cf_cable_socket *s,
         }
         s->stats.messages_received++;
         if (s->hooks.on_text != NULL) {
-            (void)s->hooks.on_text(s->hooks.on_text_user, s, (cf_span){data,
-                                                                      len});
+            cf_err hrc = s->hooks.on_text(s->hooks.on_text_user, s,
+                                          (cf_span){data, len});
+            /* CF_BUSY: the command's model work runs on a worker; the owner
+             * must not parse the frames already buffered behind it until the
+             * wiring resumes the socket (the hook copied what it needs). */
+            if (hrc == CF_BUSY) result = FEED_PAUSED;
         }
     } else {
         /* The reference logs and ignores a binary message. */
         s->stats.binary_messages++;
     }
     cf_builder_dispose(&inflated);
+    /* The assembled message bytes leave the aggregate input accounting; the
+     * hook above observed them while they were charged. */
+    reactor_input_release(s, s->msg_charged);
+    s->msg_charged = 0;
     return result;
 }
 
@@ -986,9 +1199,12 @@ static bool msg_append(struct cf_cable_socket *s, const unsigned char *p,
             uint64_t idx = s->payload_have + off + j;
             tmp[j] = (unsigned char)(p[off + j] ^ s->mask[idx & 3]);
         }
+        if (!reactor_input_charge(s, chunk)) return false;
         if (cf_builder_append(&s->msg, (cf_span){tmp, chunk}) != CF_OK) {
+            reactor_input_release(s, chunk);
             return false;
         }
+        s->msg_charged += chunk;
         off += chunk;
     }
     return true;
@@ -1220,14 +1436,28 @@ static cf_err socket_write_all(struct cf_cable_socket *s,
 
 static bool socket_readable(struct cf_cable_socket *s) {
     unsigned char buf[CF_CABLE_READ_CHUNK];
-    for (;;) {
-        ssize_t n = recv(s->fd, buf, sizeof buf, 0);
+    /* A reactor bounds one socket's read per serviced event so a busy peer
+     * cannot starve the other sockets; level-triggered epoll reports the
+     * rest. A standalone run drains until EAGAIN as before. */
+    size_t budget =
+        s->reactor_mode ? CF_CABLE_REACTOR_READ_CHUNK : (size_t)-1;
+    while (budget != 0) {
+        size_t want = sizeof buf;
+        if (want > budget) want = budget;
+        ssize_t n = recv(s->fd, buf, want, 0);
         if (n > 0) {
-            if (cf_builder_append(&s->in, (cf_span){buf, (size_t)n}) !=
-                CF_OK) {
+            if (!reactor_input_charge(s, (size_t)n)) {
+                s->stats.over_budget_closes++;
                 s->transport_failed = true;
                 return false;
             }
+            if (cf_builder_append(&s->in, (cf_span){buf, (size_t)n}) !=
+                CF_OK) {
+                reactor_input_release(s, (size_t)n);
+                s->transport_failed = true;
+                return false;
+            }
+            budget -= (size_t)n;
             continue;
         }
         if (n == 0) {
@@ -1239,6 +1469,7 @@ static bool socket_readable(struct cf_cable_socket *s) {
         s->transport_failed = true;
         return false;
     }
+    return true; /* read budget spent; the next event continues */
 }
 
 static void socket_close_queue(struct cf_cable_socket *s) {
@@ -1254,19 +1485,26 @@ static void socket_close_queue(struct cf_cable_socket *s) {
         free(node);
         node = next;
     }
+    /* Return every residual aggregate reservation: unsent queue bytes and
+     * buffered input (the assembled message is part of input_charged). */
+    reactor_output_release(s, s->output_charged);
+    reactor_input_release(s, s->input_charged);
 }
 
-cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
-                           const cf_cable_hooks *hooks,
-                           const cf_cable_limits *limits,
-                           cf_cable_socket_stats *stats) {
-    if (stats != NULL) memset(stats, 0, sizeof *stats);
-    if (config == NULL || config->fd < 0) return CF_INVALID;
-
+/* Allocate and initialize a socket. reactor != NULL selects the multiplexed
+ * (reactor-serviced) transport; NULL is the standalone blocking driver.
+ * Returns NULL when allocation or setup fails. */
+static cf_cable_socket *socket_create(const cf_cable_socket_config *config,
+                                      const cf_cable_hooks *hooks,
+                                      const cf_cable_limits *limits,
+                                      struct cable_reactor *reactor) {
     cf_cable_socket *s = calloc(1, sizeof *s);
-    if (s == NULL) return CF_NOMEM;
+    if (s == NULL) return NULL;
     s->fd = config->fd;
     s->deflate = config->deflate;
+    s->reactor = reactor;
+    s->reactor_mode = reactor != NULL;
+    s->request = config->request;
     s->limits = limits != NULL ? *limits : (cf_cable_limits){0};
     if (s->limits.max_message_bytes == 0) {
         s->limits.max_message_bytes = CF_CABLE_MAX_MESSAGE;
@@ -1289,60 +1527,39 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
 
     if (pthread_mutex_init(&s->mutex, NULL) != 0) {
         free(s);
-        return CF_INTERNAL;
+        return NULL;
     }
-    s->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (s->wake_fd < 0) {
-        pthread_mutex_destroy(&s->mutex);
-        free(s);
-        return CF_INTERNAL;
+    if (reactor == NULL) {
+        s->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (s->wake_fd < 0) {
+            pthread_mutex_destroy(&s->mutex);
+            free(s);
+            return NULL;
+        }
+    } else {
+        s->wake_fd = -1;
     }
     /* The HTTP loop hands over a nonblocking fd; a direct caller may pass a
-     * blocking one, which would defeat the poll-loop. */
+     * blocking one, which would defeat the poll loop. */
     int flags = fcntl(s->fd, F_GETFL, 0);
     if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
         (void)fcntl(s->fd, F_SETFL, flags | O_NONBLOCK);
     }
+    return s;
+}
 
-    uint64_t deadline = cf_monotonic_ms() + s->limits.close_timeout_ms;
-    cf_err result = CF_OK;
-
-    /* The 101 response is written before anything else, exactly where hyper
-     * would write it for the reference. */
-    if (config->handshake_len != 0 &&
-        socket_write_all(s, config->handshake, config->handshake_len,
-                         deadline) != CF_OK) {
-        result = CF_IO;
-        goto done;
-    }
-
-    bool authenticated = false;
-    int64_t user_id = 0;
-    if (s->hooks.authenticate != NULL) {
-        cf_err rc = s->hooks.authenticate(s->hooks.authenticate_user,
-                                          config->request, &authenticated,
-                                          &user_id);
-        if (rc != CF_OK) authenticated = false;
-    }
-    (void)user_id;
-
+/* The owner-thread step once the connection's authentication resolved: the
+ * wiring's on_open (C03 install gate), the reference welcome (or the
+ * unauthorized disconnect + close), then the frames the client pipelined
+ * behind the handshake. Shared by the synchronous authenticate path and the
+ * asynchronous cf_cable_socket_complete_auth path. */
+static cf_err socket_after_auth(cf_cable_socket *s, bool authenticated) {
     /* The wiring attaches its application loop here, while the socket is live
      * and before any output; refusing the connection takes the unauthorized
      * path (C03's connection install gate). */
     if (authenticated && s->hooks.on_open != NULL &&
         s->hooks.on_open(s->hooks.on_open_user, s) != CF_OK) {
         authenticated = false;
-    }
-
-    /* Bytes the client pipelined after the handshake request are consumed
-     * before anything the socket reads later. */
-    if (config->pending_len != 0) {
-        if (cf_builder_append(
-                &s->in, (cf_span){config->pending,
-                                  config->pending_len}) != CF_OK) {
-            result = CF_NOMEM;
-            goto done;
-        }
     }
 
     if (!authenticated) {
@@ -1375,56 +1592,166 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
         }
     }
 
-    /* Consume pipelined frames before waiting for new socket input. */
-    if (s->in.len != 0) (void)reader_feed(s);
+    /* Consume pipelined frames before waiting for new socket input. The hook
+     * may pause the socket for its first worker-backed command; the rest of
+     * the buffer stays charged and unparsed until resume. */
+    if (s->in.len != 0 && reader_feed(s) == FEED_PAUSED) {
+        s->paused = true;
+    }
+    s->auth_pending = false;
+    return CF_OK;
+}
 
-    for (;;) {
-        /* One locked snapshot per iteration: the out queue, the pending bytes,
-         * the progress clock and the cap flag are shared with foreign senders
-         * and are only ever read or written under the socket mutex. */
-        size_t pending = 0;
-        bool has_out = false, cap_hit = false;
-        uint64_t last_progress = 0;
-        socket_queue_state(s, &pending, &has_out, &last_progress, &cap_hit);
-        if (s->finished || s->transport_failed || cap_hit) break;
+cf_err cf_cable_socket_complete_auth(cf_cable_socket *socket,
+                                     bool authenticated, int64_t user_id) {
+    if (socket == NULL) return CF_INVALID;
+    cf_cable_socket *s = socket;
+    if (!s->auth_pending) return CF_OK; /* idempotent */
+    (void)user_id; /* the identity lives on the socket's app_user */
+    return socket_after_auth(s, authenticated);
+}
 
-        /* Consume pending revocation control even when nothing else is ready
-         * (C03), then again right after a wake is observed. */
-        if (s->hooks.service != NULL) s->hooks.service(s->hooks.service_user);
+void cf_cable_socket_resume(cf_cable_socket *socket) {
+    if (socket == NULL) return;
+    cf_cable_socket *s = socket;
+    if (!s->paused) return;
+    s->paused = false;
+    if (s->auth_pending || s->closing || s->finished || s->transport_failed) {
+        return;
+    }
+    if (s->in.len != 0 && reader_feed(s) == FEED_PAUSED) {
+        s->paused = true; /* the next command is worker-backed too */
+    }
+}
 
-        uint64_t now = cf_monotonic_ms();
-        if (s->closing) {
-            if (s->wait_peer_close) {
-                if (now >= s->close_deadline_ms) break;
-            } else if (pending == 0) {
-                break;
-            }
+/* Handshake, authentication, application open and the first frames. Runs once
+ * on the owner thread. The 101 response precedes every WebSocket frame on the
+ * wire; a standalone run writes it synchronously (as before), while a reactor
+ * queues the pre-serialized bytes so a slow peer cannot stall the reactor.
+ * An authenticate hook that returns CF_BUSY leaves the socket in the
+ * auth_pending state: the welcome/unauthorized step then runs from
+ * cf_cable_socket_complete_auth on this same thread. Returns a cf_err on a
+ * fatal transport/hook failure; the caller finishes. */
+static cf_err socket_boot(cf_cable_socket *s,
+                          const cf_cable_socket_config *config) {
+    uint64_t deadline = cf_monotonic_ms() + s->limits.close_timeout_ms;
+    if (config->handshake_len != 0) {
+        cf_err hrc;
+        if (s->reactor != NULL) {
+            hrc = queue_raw(s, config->handshake, config->handshake_len);
         } else {
-            if (pending > 0 &&
-                now - last_progress >= s->limits.write_timeout_ms) {
-                s->stats.write_timeout_closes++;
-                break;
-            }
-            if (s->limits.beat_interval_ms != 0 && now >= s->next_beat_ms) {
-                cf_str ping = {0};
-                if (cf_cable_ping(cf_now_us(NULL) / INT64_C(1000000),
-                                  &ping) == CF_OK) {
-                    if (queue_text_bytes(
-                            s, (cf_span){(const unsigned char *)ping.ptr,
-                                         ping.len}) == CF_OK) {
-                        s->stats.pings_sent++;
-                    }
-                    cf_str_dispose(&ping);
-                }
-                s->next_beat_ms = now + s->limits.beat_interval_ms;
-            }
+            hrc = socket_write_all(s, config->handshake, config->handshake_len,
+                                   deadline);
         }
+        if (hrc != CF_OK) return CF_IO;
+    }
 
+    /* Bytes the client pipelined after the handshake request are consumed
+     * before anything the socket reads later; they count against the
+     * reactor's aggregate input budget from here on (HTTP released its own
+     * accounting when the connection left its read/write state machine).
+     * They are buffered in both the synchronous and asynchronous paths, so
+     * the budget covers them while authentication is in flight. */
+    if (config->pending_len != 0) {
+        if (!reactor_input_charge(s, config->pending_len)) {
+            s->stats.over_budget_closes++;
+            return CF_LIMIT;
+        }
+        if (cf_builder_append(
+                &s->in, (cf_span){config->pending,
+                                  config->pending_len}) != CF_OK) {
+            reactor_input_release(s, config->pending_len);
+            return CF_NOMEM;
+        }
+    }
+
+    bool authenticated = false;
+    int64_t user_id = 0;
+    if (s->hooks.authenticate != NULL) {
+        cf_err rc = s->hooks.authenticate(s->hooks.authenticate_user, s,
+                                          config->request, &authenticated,
+                                          &user_id);
+        if (rc == CF_BUSY) {
+            /* The wiring submitted the model work to the app's bounded
+             * worker pool and owns the result; it completes the connection
+             * from the owner thread (service hook ->
+             * cf_cable_socket_complete_auth). */
+            s->auth_pending = true;
+            return CF_OK;
+        }
+        if (rc != CF_OK) authenticated = false;
+    }
+    (void)user_id;
+    return socket_after_auth(s, authenticated);
+}
+
+/* What the owner must wait for after one pump pass. */
+typedef struct {
+    int timeout_ms;
+    bool want_write;
+    /* False while an async authentication result or a paused command keeps
+     * input from being parsed; the owner then ignores the fd's readability
+     * (level-triggered epoll reports it again once reading resumes). */
+    bool want_read;
+} socket_wait;
+
+/* One owner pass. revents == 0 is a tick: timeouts, ping cadence, the
+ * per-socket service hook. wake reports a drained reactor/socket wake.
+ * Returns true when the socket has finished (the caller flushes what is left
+ * and tears down). *wait, when given, receives the next wait description. */
+static bool socket_pump(cf_cable_socket *s, short revents, bool wake,
+                        socket_wait *wait) {
+    /* One locked snapshot per pass: the out queue, the pending bytes, the
+     * progress clock and the cap flag are shared with foreign senders and are
+     * only ever read or written under the socket mutex. */
+    size_t pending = 0;
+    bool has_out = false, cap_hit = false;
+    uint64_t last_progress = 0;
+    socket_queue_state(s, &pending, &has_out, &last_progress, &cap_hit);
+    if (s->finished || s->transport_failed || cap_hit) return true;
+
+    /* Consume pending revocation control even when nothing else is ready
+     * (C03), then again right after a wake is observed. On the production
+     * path this hook also installs finished worker results (authentication,
+     * subscribe validation/effects) through the C03 gate. */
+    if (s->hooks.service != NULL) {
+        s->hooks.service(s->hooks.service_user, s);
+    }
+    if (s->finished || s->transport_failed) return true;
+
+    uint64_t now = cf_monotonic_ms();
+    if (s->closing) {
+        if (s->wait_peer_close) {
+            if (now >= s->close_deadline_ms) return true;
+        } else if (pending == 0) {
+            return true;
+        }
+    } else {
+        if (pending > 0 &&
+            now - last_progress >= s->limits.write_timeout_ms) {
+            s->stats.write_timeout_closes++;
+            return true;
+        }
+        if (s->limits.beat_interval_ms != 0 && now >= s->next_beat_ms) {
+            cf_str ping = {0};
+            if (cf_cable_ping(cf_now_us(NULL) / INT64_C(1000000), &ping) ==
+                CF_OK) {
+                if (queue_text_bytes(
+                        s, (cf_span){(const unsigned char *)ping.ptr,
+                                     ping.len}) == CF_OK) {
+                    s->stats.pings_sent++;
+                }
+                cf_str_dispose(&ping);
+            }
+            s->next_beat_ms = now + s->limits.beat_interval_ms;
+        }
+    }
+
+    if (wait != NULL) {
         int timeout = 1000;
         if (s->closing && s->wait_peer_close) {
-            uint64_t left = s->close_deadline_ms > now
-                                ? s->close_deadline_ms - now
-                                : 0;
+            uint64_t left =
+                s->close_deadline_ms > now ? s->close_deadline_ms - now : 0;
             if (left < (uint64_t)timeout) timeout = (int)left;
         } else if (!s->closing && pending > 0) {
             uint64_t left = last_progress + s->limits.write_timeout_ms;
@@ -1432,56 +1759,44 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
             if (left < (uint64_t)timeout) timeout = (int)left;
         }
         if (timeout < 0) timeout = 0;
-
-        struct pollfd pf[2];
-        pf[0].fd = s->fd;
-        pf[0].events = POLLIN;
-        pf[0].revents = 0;
-        if (pending > 0 || has_out) {
-            pf[0].events |= POLLOUT;
-        }
-        pf[1].fd = s->wake_fd;
-        pf[1].events = POLLIN;
-        pf[1].revents = 0;
-        int pr = poll(pf, 2, timeout);
-        if (pr < 0) {
-            if (errno == EINTR) continue;
-            s->transport_failed = true;
-            break;
-        }
-        if (pr == 0) continue;
-
-        if (pf[1].revents != 0) {
-            socket_drain_wake(s);
-            if (s->hooks.service != NULL) {
-                s->hooks.service(s->hooks.service_user);
-            }
-            socket_queue_state(s, NULL, NULL, NULL, &cap_hit);
-            if (cap_hit) break;
-        }
-        if (pf[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            /* Drain what was already buffered, then finish. */
-            if (pf[0].revents & POLLIN) {
-                (void)socket_readable(s);
-                (void)reader_feed(s);
-            }
-            break;
-        }
-        if (pf[0].revents & POLLIN) {
-            if (socket_readable(s)) {
-                enum feed_result r = reader_feed(s);
-                (void)r; /* closing/transport flags carry the outcome */
-            }
-        }
-        socket_flush(s);
+        wait->timeout_ms = timeout;
+        wait->want_write = pending > 0 || has_out;
+        /* While an async authentication or a paused command owns the next
+         * input frames, the owner must not parse (or read ahead) new ones. */
+        wait->want_read = !s->auth_pending && !s->paused;
     }
 
-    /* Complete the close handshake best-effort: flush what is left. */
-    bool cap_hit_final = false;
-    socket_queue_state(s, NULL, NULL, NULL, &cap_hit_final);
-    if (!s->transport_failed && !cap_hit_final) socket_flush(s);
+    if (revents == 0 && !wake) return false;
 
-done:
+    if (wake) {
+        if (s->reactor == NULL) socket_drain_wake(s);
+        if (s->hooks.service != NULL) {
+            s->hooks.service(s->hooks.service_user, s);
+        }
+        socket_queue_state(s, NULL, NULL, NULL, &cap_hit);
+        if (cap_hit) return true;
+    }
+    if (revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        /* Drain what was already buffered, then finish. */
+        if (revents & POLLIN) {
+            (void)socket_readable(s);
+            (void)reader_feed(s);
+        }
+        return true;
+    }
+    if ((revents & POLLIN) && !s->auth_pending && !s->paused) {
+        if (socket_readable(s)) {
+            if (reader_feed(s) == FEED_PAUSED) s->paused = true;
+        }
+    }
+    socket_flush(s);
+    return false;
+}
+
+/* Owner thread: flush what a finished socket still has, run on_close before
+ * the memory is released, return the aggregate reservations and free it. */
+static cf_err socket_finish(cf_cable_socket *s,
+                            cf_cable_socket_stats *stats) {
     /* Detach anything that may still send to this socket (the C03 loop)
      * before the memory is released: after this returns no foreign send can
      * observe the freed socket. */
@@ -1497,22 +1812,94 @@ done:
         pthread_mutex_unlock(&s->mutex);
     }
     pthread_mutex_destroy(&s->mutex);
-    close(s->wake_fd);
+    if (s->wake_fd >= 0) close(s->wake_fd);
     cf_builder_dispose(&s->in);
     cf_builder_dispose(&s->msg);
     free(s);
+    return CF_OK;
+}
+
+void *cf_cable_socket_app_user(const cf_cable_socket *socket) {
+    return socket != NULL ? socket->app_user : NULL;
+}
+
+void cf_cable_socket_set_app_user(cf_cable_socket *socket, void *user) {
+    if (socket != NULL) socket->app_user = user;
+}
+
+const cf_cable_request *cf_cable_socket_request(const cf_cable_socket *socket) {
+    return socket != NULL ? socket->request : NULL;
+}
+
+void *cf_cable_socket_transport_token(const cf_cable_socket *socket) {
+    return socket != NULL ? (void *)socket->reactor : NULL;
+}
+
+cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
+                           const cf_cable_hooks *hooks,
+                           const cf_cable_limits *limits,
+                           cf_cable_socket_stats *stats) {
+    if (stats != NULL) memset(stats, 0, sizeof *stats);
+    if (config == NULL || config->fd < 0) return CF_INVALID;
+
+    cf_cable_socket *s = socket_create(config, hooks, limits, NULL);
+    if (s == NULL) return CF_NOMEM;
+
+    cf_err result = CF_OK;
+    if (socket_boot(s, config) != CF_OK) {
+        result = CF_IO;
+        goto done;
+    }
+
+    for (;;) {
+        socket_wait w;
+        if (socket_pump(s, 0, false, &w)) break;
+
+        struct pollfd pf[2];
+        pf[0].fd = s->fd;
+        pf[0].events = w.want_read ? POLLIN : 0;
+        if (w.want_write) pf[0].events |= POLLOUT;
+        pf[0].revents = 0;
+        pf[1].fd = s->wake_fd;
+        pf[1].events = POLLIN;
+        pf[1].revents = 0;
+        int pr = poll(pf, 2, w.timeout_ms);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            s->transport_failed = true;
+            break;
+        }
+        if (pr == 0) continue;
+
+        bool wake = pf[1].revents != 0;
+        if (socket_pump(s, pf[0].revents, wake, NULL)) break;
+    }
+
+done:;
+    /* Complete the close handshake best-effort: flush what is left. */
+    bool cap_hit_final = false;
+    socket_queue_state(s, NULL, NULL, NULL, &cap_hit_final);
+    if (!s->transport_failed && !cap_hit_final) socket_flush(s);
+    socket_finish(s, stats);
     return result;
 }
 
 /* ---- server: the /cable front mount (server.rs Server::call) -------------- */
 
-struct cf_cable_server;
-
 struct cable_conn {
-    struct cable_conn *next, *prev;
+    struct cable_conn *next, *prev;   /* the reactor's enrolled list */
+    struct cable_conn *enroll_next;   /* enrollment queue link */
+    struct cable_conn *server_next;   /* the server's live list */
     cf_cable_server *server;
-    int fd; /* -1 once closed (under the server mutex) */
-    pthread_t thread;
+    struct cable_reactor *reactor;
+    cf_cable_socket *socket;          /* set on the reactor thread */
+    uint32_t loop_index;              /* HTTP loop that handed it over */
+    int fd;                           /* -1 once closed */
+    cf_http_upgrade_lease *lease;     /* lifetime connection-slot reservation */
+    bool enrolled;                    /* linked into reactor->conns */
+    bool registered;                  /* fd registered in the reactor epoll */
+    uint32_t events;
+    bool shutdown_done;
     cf_cable_socket_stats stats;
 
     /* Owned copy of the upgrade request. */
@@ -1540,11 +1927,18 @@ struct cf_cable_server {
     cf_cable_hooks hooks;
     cf_cable_limits limits;
 
+    /* One bounded reactor thread per HTTP loop index; never per connection. */
+    size_t max_loops;
+    size_t input_bytes, output_bytes; /* per-reactor aggregate limits */
+    struct cable_reactor **reactors;
+    size_t reactor_count;
+
     pthread_mutex_t mutex;
     pthread_cond_t idle_cv;
     struct cable_conn *conns;
     size_t live;
     bool stopping;
+    bool stopped; /* reactors joined; only the free remains */
     cf_cable_socket_stats totals;
 };
 
@@ -1583,6 +1977,7 @@ void cf_cable_socket_stats_add(cf_cable_socket_stats *acc,
     acc->write_timeout_closes += part->write_timeout_closes;
     acc->unauthorized_closes += part->unauthorized_closes;
     acc->deflate_failures += part->deflate_failures;
+    acc->over_budget_closes += part->over_budget_closes;
 }
 
 static cf_err reply_404(cf_builder *reply) {
@@ -1666,10 +2061,113 @@ static void conn_free(struct cable_conn *conn) {
     free(conn);
 }
 
-static void *cable_conn_thread(void *arg) {
-    struct cable_conn *conn = arg;
-    cf_cable_server *server = conn->server;
+/* ---------------------------------------------------------- the reactor */
 
+static void reactor_wake(struct cable_reactor *reactor) {
+    uint64_t one = 1;
+    ssize_t n = write(reactor->wake_fd, &one, sizeof one);
+    (void)n; /* EAGAIN: a wake is already pending */
+}
+
+/* Keep the epoll interest in step with the socket's pending output and its
+ * pause state. While an async authentication or a worker-backed command is in
+ * flight the fd is not read (events without EPOLLIN): epoll still reports
+ * ERR/HUP, and the worker's wake makes the reactor revisit the socket. */
+static void reactor_update_events(struct cable_reactor *reactor,
+                                  struct cable_conn *conn) {
+    if (conn->socket == NULL || conn->fd < 0) return;
+    size_t pending = 0;
+    bool has_out = false;
+    socket_queue_state(conn->socket, &pending, &has_out, NULL, NULL);
+    uint32_t events = 0;
+    if (!conn->socket->auth_pending && !conn->socket->paused) {
+        events |= EPOLLIN;
+    }
+    if (pending > 0 || has_out) events |= EPOLLOUT;
+    if (conn->registered) {
+        if (events == conn->events) return;
+        struct epoll_event e = {.events = events, .data.ptr = conn};
+        if (epoll_ctl(reactor->epfd, EPOLL_CTL_MOD, conn->fd, &e) == 0) {
+            conn->events = events;
+        }
+        return;
+    }
+    struct epoll_event e = {.events = events, .data.ptr = conn};
+    if (epoll_ctl(reactor->epfd, EPOLL_CTL_ADD, conn->fd, &e) == 0) {
+        conn->registered = true;
+        conn->events = events;
+    } else {
+        /* Without a registration the socket can never be serviced again. */
+        conn->socket->transport_failed = true;
+    }
+}
+
+/* Owner thread (the reactor): stop, detach and free one connection. The
+ * lifetime reservation is released exactly once here, whatever ended the
+ * socket; with no lease (allocation failure or a direct hook caller) this
+ * thread closes the descriptor itself. */
+static void reactor_conn_finish(struct cable_reactor *reactor,
+                                struct cable_conn *conn) {
+    if (conn->enrolled) {
+        if (conn->prev != NULL) {
+            conn->prev->next = conn->next;
+        } else {
+            reactor->conns = conn->next;
+        }
+        if (conn->next != NULL) conn->next->prev = conn->prev;
+        conn->enrolled = false;
+    }
+    if (conn->socket != NULL) {
+        cf_cable_socket *s = conn->socket;
+        bool cap_hit_final = false;
+        socket_queue_state(s, NULL, NULL, NULL, &cap_hit_final);
+        if (!s->transport_failed && !cap_hit_final) socket_flush(s);
+        socket_finish(s, &conn->stats);
+        conn->socket = NULL;
+    }
+    if (conn->fd >= 0) {
+        if (conn->registered) {
+            (void)epoll_ctl(reactor->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+            conn->registered = false;
+        }
+        if (conn->lease != NULL) {
+            /* The HTTP loop thread closes the fd when it processes the
+             * release, exactly once, and frees the connection slot. */
+            conn->fd = -1;
+            cf_http_upgrade_release(conn->lease);
+            conn->lease = NULL;
+        } else {
+            close(conn->fd);
+            conn->fd = -1;
+        }
+    }
+    cf_cable_server *server = conn->server;
+    pthread_mutex_lock(&server->mutex);
+    {
+        struct cable_conn **link = &server->conns;
+        while (*link != NULL && *link != conn) link = &(*link)->server_next;
+        if (*link == conn) *link = conn->server_next;
+    }
+    if (server->live != 0) server->live--;
+    cf_cable_socket_stats_add(&server->totals, &conn->stats);
+    pthread_cond_broadcast(&server->idle_cv);
+    pthread_mutex_unlock(&server->mutex);
+    conn_free(conn);
+}
+
+/* Reactor thread: boot and register one connection handed over by the HTTP
+ * loop thread. */
+static void reactor_enroll(struct cable_reactor *reactor,
+                           struct cable_conn *conn) {
+    cf_cable_server *server = reactor->server;
+    bool stopping;
+    pthread_mutex_lock(&reactor->mutex);
+    stopping = reactor->stopping;
+    pthread_mutex_unlock(&reactor->mutex);
+    if (stopping) {
+        reactor_conn_finish(reactor, conn);
+        return;
+    }
     cf_cable_socket_config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.fd = conn->fd;
@@ -1680,69 +2178,247 @@ static void *cable_conn_thread(void *arg) {
     cfg.pending = conn->pending;
     cfg.pending_len = conn->pending_len;
     cfg.request = &conn->request;
-
-    cf_cable_socket_stats stats;
-    (void)cf_cable_socket_run(&cfg, &server->hooks, &server->limits, &stats);
-
-    pthread_mutex_lock(&server->mutex);
-    close(conn->fd);
-    conn->fd = -1;
-    if (conn->prev != NULL) {
-        conn->prev->next = conn->next;
-    } else {
-        server->conns = conn->next;
+    conn->socket = socket_create(&cfg, &server->hooks, &server->limits,
+                                 reactor);
+    if (conn->socket == NULL || socket_boot(conn->socket, &cfg) != CF_OK) {
+        reactor_conn_finish(reactor, conn);
+        return;
     }
-    if (conn->next != NULL) conn->next->prev = conn->prev;
-    server->live--;
-    cf_cable_socket_stats_add(&server->totals, &stats);
-    pthread_cond_broadcast(&server->idle_cv);
-    pthread_mutex_unlock(&server->mutex);
+    conn->enrolled = true;
+    conn->prev = NULL;
+    conn->next = reactor->conns;
+    if (reactor->conns != NULL) reactor->conns->prev = conn;
+    reactor->conns = conn;
+    reactor_update_events(reactor, conn);
+}
 
-    conn_free(conn);
+static void *reactor_main(void *arg) {
+    struct cable_reactor *reactor = arg;
+    struct cf_cable_server *server = reactor->server;
+    struct epoll_event events[64];
+
+    /* Owner-loop wiring (C03): register this loop's one preallocated control
+     * slot before any connection is enrolled, and remove it after the last
+     * socket is finished. A failure makes the loop refuse its enrollments
+     * (stopping) rather than serve connections a revocation cannot reach. */
+    if (server->hooks.owner_start != NULL) {
+        cf_err rc = server->hooks.owner_start(
+            server->hooks.owner_start_user, reactor, reactor_wake_token);
+        if (rc == CF_OK) {
+            pthread_mutex_lock(&reactor->mutex);
+            reactor->owner_started = true;
+            pthread_mutex_unlock(&reactor->mutex);
+        } else {
+            pthread_mutex_lock(&reactor->mutex);
+            reactor->stopping = true;
+            pthread_mutex_unlock(&reactor->mutex);
+        }
+    }
+
+    for (;;) {
+        /* Enrollments handed over by HTTP loop threads. */
+        pthread_mutex_lock(&reactor->mutex);
+        struct cable_conn *enroll = reactor->enroll_head;
+        reactor->enroll_head = reactor->enroll_tail = NULL;
+        bool stopping = reactor->stopping;
+        pthread_mutex_unlock(&reactor->mutex);
+        while (enroll != NULL) {
+            struct cable_conn *next = enroll->enroll_next;
+            enroll->enroll_next = NULL;
+            reactor_enroll(reactor, enroll);
+            enroll = next;
+        }
+
+        if (stopping) {
+            for (struct cable_conn *c = reactor->conns; c != NULL;
+                 c = c->next) {
+                if (!c->shutdown_done && c->fd >= 0) {
+                    shutdown(c->fd, SHUT_RDWR);
+                    c->shutdown_done = true;
+                    /* shutdown() makes the socket readable immediately even
+                     * if no epoll event follows; consume it here so the
+                     * socket observes EOF and finishes. */
+                    if (c->socket != NULL) (void)socket_readable(c->socket);
+                }
+            }
+        }
+
+        /* One tick per socket: deadlines, ping cadence, C03 service. */
+        int timeout = -1;
+        for (struct cable_conn *c = reactor->conns; c != NULL;) {
+            struct cable_conn *next = c->next;
+            socket_wait w;
+            memset(&w, 0, sizeof w);
+            if (socket_pump(c->socket, 0, false, &w)) {
+                reactor_conn_finish(reactor, c);
+            } else {
+                reactor_update_events(reactor, c);
+                if (timeout < 0 || w.timeout_ms < timeout) {
+                    timeout = w.timeout_ms;
+                }
+            }
+            c = next;
+        }
+        if (stopping && reactor->conns == NULL) {
+            pthread_mutex_lock(&reactor->mutex);
+            bool more = reactor->enroll_head != NULL;
+            pthread_mutex_unlock(&reactor->mutex);
+            if (!more) break;
+            continue;
+        }
+
+        int n = epoll_wait(reactor->epfd, events, 64, timeout);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        bool wake = false;
+        for (int i = 0; i < n; i++) {
+            struct epoll_event *e = &events[i];
+            if (e->data.ptr == reactor) { /* the wake eventfd */
+                uint64_t v;
+                while (read(reactor->wake_fd, &v, sizeof v) > 0) {
+                }
+                wake = true;
+                continue;
+            }
+            struct cable_conn *c = e->data.ptr;
+            if (!c->enrolled || c->socket == NULL) continue;
+            if (socket_pump(c->socket, e->events, wake, NULL)) {
+                reactor_conn_finish(reactor, c);
+            }
+        }
+        if (wake && reactor->conns != NULL) {
+            /* A foreign sender queued frames: flush every socket that now
+             * has pending output (or is due a timeout). */
+            for (struct cable_conn *c = reactor->conns; c != NULL;) {
+                struct cable_conn *next = c->next;
+                if (socket_pump(c->socket, 0, true, NULL)) {
+                    reactor_conn_finish(reactor, c);
+                }
+                c = next;
+            }
+        }
+    }
+
+    if (reactor->owner_started && server->hooks.owner_stop != NULL) {
+        server->hooks.owner_stop(server->hooks.owner_stop_user, reactor);
+        reactor->owner_started = false;
+    }
     return NULL;
 }
 
-/* The TAKEN continuation: register the connection and start its owner
- * thread once the HTTP loop has released the fd. Runs on the loop thread. */
-static cf_err cable_conn_start(void *user) {
+/* The reactor start/stop, serialized by the server mutex for start. */
+static struct cable_reactor *reactor_get(struct cf_cable_server *server,
+                                         uint32_t loop_index) {
+    if ((size_t)loop_index >= server->max_loops) return NULL;
+    struct cable_reactor *reactor = server->reactors[loop_index];
+    if (reactor != NULL) return reactor;
+    reactor = calloc(1, sizeof *reactor);
+    if (reactor == NULL) return NULL;
+    reactor->server = server;
+    reactor->loop_index = loop_index;
+    reactor->input_limit = server->input_bytes;
+    reactor->output_limit = server->output_bytes;
+    reactor->epfd = -1;
+    reactor->wake_fd = -1;
+    if (pthread_mutex_init(&reactor->mutex, NULL) != 0) {
+        free(reactor);
+        return NULL;
+    }
+    reactor->epfd = epoll_create1(EPOLL_CLOEXEC);
+    reactor->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (reactor->epfd >= 0 && reactor->wake_fd >= 0) {
+        struct epoll_event e = {.events = EPOLLIN, .data.ptr = reactor};
+        if (epoll_ctl(reactor->epfd, EPOLL_CTL_ADD, reactor->wake_fd, &e) !=
+            0) {
+            close(reactor->wake_fd);
+            reactor->wake_fd = -1;
+        }
+    }
+    if (reactor->epfd < 0 || reactor->wake_fd < 0 ||
+        pthread_create(&reactor->thread, NULL, reactor_main, reactor) != 0) {
+        if (reactor->epfd >= 0) close(reactor->epfd);
+        if (reactor->wake_fd >= 0) close(reactor->wake_fd);
+        pthread_mutex_destroy(&reactor->mutex);
+        free(reactor);
+        return NULL;
+    }
+    reactor->started = true;
+    server->reactors[loop_index] = reactor;
+    server->reactor_count++;
+    return reactor;
+}
+
+static void reactor_stop_and_join(struct cable_reactor *reactor) {
+    pthread_mutex_lock(&reactor->mutex);
+    reactor->stopping = true;
+    pthread_mutex_unlock(&reactor->mutex);
+    reactor_wake(reactor);
+    pthread_join(reactor->thread, NULL);
+    if (reactor->epfd >= 0) close(reactor->epfd);
+    if (reactor->wake_fd >= 0) close(reactor->wake_fd);
+    pthread_mutex_destroy(&reactor->mutex);
+    free(reactor);
+}
+
+/* The TAKEN continuation: enroll the connection on its HTTP loop's reactor
+ * once the loop has fully detached the fd. Runs on the loop thread. */
+static cf_err cable_conn_start(void *user, cf_http_upgrade_lease *lease) {
     struct cable_conn *conn = user;
     cf_cable_server *server = conn->server;
-    pthread_mutex_lock(&server->mutex);
-    if (server->stopping) {
-        pthread_mutex_unlock(&server->mutex);
-        close(conn->fd);
-        conn->fd = -1;
+    if (lease == CF_HTTP_UPGRADE_REJECTED) {
+        /* The loop refused the upgrade and already closed the fd/freed the
+         * slot; only this hook's own state remains. */
         conn_free(conn);
         return CF_BUSY;
     }
-    conn->prev = NULL;
-    conn->next = server->conns;
-    if (server->conns != NULL) server->conns->prev = conn;
-    server->conns = conn;
-    server->live++;
-    pthread_mutex_unlock(&server->mutex);
-
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    int create_rc =
-        pthread_create(&conn->thread, &attr, cable_conn_thread, conn);
-    pthread_attr_destroy(&attr);
-    if (create_rc != 0) {
-        pthread_mutex_lock(&server->mutex);
-        if (conn->prev != NULL) {
-            conn->prev->next = conn->next;
-        } else {
-            server->conns = conn->next;
-        }
-        if (conn->next != NULL) conn->next->prev = conn->prev;
-        server->live--;
+    conn->lease = lease;
+    pthread_mutex_lock(&server->mutex);
+    if (server->stopping) {
         pthread_mutex_unlock(&server->mutex);
-        close(conn->fd);
-        conn->fd = -1;
+        if (lease != NULL) {
+            conn->fd = -1;
+            cf_http_upgrade_release(lease);
+            conn->lease = NULL;
+        } else if (conn->fd >= 0) {
+            close(conn->fd);
+            conn->fd = -1;
+        }
+        conn_free(conn);
+        return CF_BUSY;
+    }
+    struct cable_reactor *reactor = reactor_get(server, conn->loop_index);
+    if (reactor == NULL) {
+        pthread_mutex_unlock(&server->mutex);
+        if (lease != NULL) {
+            conn->fd = -1;
+            cf_http_upgrade_release(lease);
+            conn->lease = NULL;
+        } else if (conn->fd >= 0) {
+            close(conn->fd);
+            conn->fd = -1;
+        }
         conn_free(conn);
         return CF_INTERNAL;
     }
+    conn->server_next = server->conns;
+    server->conns = conn;
+    server->live++;
+    pthread_mutex_lock(&reactor->mutex);
+    conn->enroll_next = NULL;
+    if (reactor->enroll_tail != NULL) {
+        reactor->enroll_tail->enroll_next = conn;
+    } else {
+        reactor->enroll_head = conn;
+    }
+    reactor->enroll_tail = conn;
+    /* Wake while the server mutex still pins the reactor: server stop joins
+     * (and frees) reactors only while holding it, so this cannot touch a
+     * freed reactor. */
+    reactor_wake(reactor);
+    pthread_mutex_unlock(&reactor->mutex);
+    pthread_mutex_unlock(&server->mutex);
     return CF_OK;
 }
 
@@ -1782,11 +2458,39 @@ cf_err cf_cable_server_create(const cf_cable_server_config *config,
     if (server->limits.beat_interval_ms == 0) {
         server->limits.beat_interval_ms = CF_CABLE_BEAT_INTERVAL_MS;
     }
+    server->max_loops = config->loops != 0 ? config->loops
+                                           : CF_CABLE_MAX_REACTORS;
+    if (server->max_loops > CF_CABLE_MAX_REACTORS) {
+        server->max_loops = CF_CABLE_MAX_REACTORS;
+    }
+    server->reactors = calloc(server->max_loops, sizeof *server->reactors);
+    if (server->reactors == NULL) {
+        free(server->mount_path);
+        free(server);
+        return CF_NOMEM;
+    }
+    /* Process-wide budget divided across the loops, with a floor of two
+     * message/pending caps per reactor so one maximum-size socket object can
+     * never trip the aggregate bound by itself. */
+    size_t in_total = config->input_bytes != 0 ? config->input_bytes
+                                               : CF_CABLE_DEFAULT_REACTOR_BYTES;
+    size_t out_total = config->output_bytes != 0
+                           ? config->output_bytes
+                           : CF_CABLE_DEFAULT_REACTOR_BYTES;
+    server->input_bytes = in_total / server->max_loops;
+    server->output_bytes = out_total / server->max_loops;
+    if (server->input_bytes < 2 * CF_CABLE_MAX_MESSAGE) {
+        server->input_bytes = 2 * CF_CABLE_MAX_MESSAGE;
+    }
+    if (server->output_bytes < 2 * CF_CABLE_MAX_PENDING_BYTES) {
+        server->output_bytes = 2 * CF_CABLE_MAX_PENDING_BYTES;
+    }
     if (config->allowed_request_origins_len != 0) {
         server->allowed_origins =
             calloc(config->allowed_request_origins_len,
                    sizeof *server->allowed_origins);
         if (server->allowed_origins == NULL) {
+            free(server->reactors);
             free(server->mount_path);
             free(server);
             return CF_NOMEM;
@@ -1799,6 +2503,7 @@ cf_err cf_cable_server_create(const cf_cable_server_config *config,
                     free(server->allowed_origins[j]);
                 }
                 free(server->allowed_origins);
+                free(server->reactors);
                 free(server->mount_path);
                 free(server);
                 return CF_NOMEM;
@@ -1811,6 +2516,7 @@ cf_err cf_cable_server_create(const cf_cable_server_config *config,
             free(server->allowed_origins[i]);
         }
         free(server->allowed_origins);
+        free(server->reactors);
         free(server->mount_path);
         free(server);
         return CF_INTERNAL;
@@ -1821,6 +2527,7 @@ cf_err cf_cable_server_create(const cf_cable_server_config *config,
             free(server->allowed_origins[i]);
         }
         free(server->allowed_origins);
+        free(server->reactors);
         free(server->mount_path);
         free(server);
         return CF_INTERNAL;
@@ -1829,23 +2536,36 @@ cf_err cf_cable_server_create(const cf_cable_server_config *config,
     return CF_OK;
 }
 
-void cf_cable_server_destroy(cf_cable_server *server) {
+void cf_cable_server_stop(cf_cable_server *server) {
     if (server == NULL) return;
     pthread_mutex_lock(&server->mutex);
     server->stopping = true;
-    for (struct cable_conn *c = server->conns; c != NULL; c = c->next) {
-        if (c->fd >= 0) shutdown(c->fd, SHUT_RDWR);
-    }
-    while (server->live != 0) {
-        pthread_cond_wait(&server->idle_cv, &server->mutex);
-    }
+    bool already = server->stopped;
+    server->stopped = true;
     pthread_mutex_unlock(&server->mutex);
+    if (already) return;
+    /* Stop and join every reactor; each shuts its sockets down and releases
+     * their lifetime reservations exactly once. The object stays alive: HTTP
+     * loop threads may still be inside the upgrade hook until the caller has
+     * joined them. */
+    for (size_t i = 0; i < server->max_loops; i++) {
+        if (server->reactors[i] != NULL) {
+            reactor_stop_and_join(server->reactors[i]);
+            server->reactors[i] = NULL;
+        }
+    }
+}
+
+void cf_cable_server_destroy(cf_cable_server *server) {
+    if (server == NULL) return;
+    cf_cable_server_stop(server);
     pthread_cond_destroy(&server->idle_cv);
     pthread_mutex_destroy(&server->mutex);
     for (size_t i = 0; i < server->allowed_origins_len; i++) {
         free(server->allowed_origins[i]);
     }
     free(server->allowed_origins);
+    free(server->reactors);
     free(server->mount_path);
     free(server);
 }
@@ -1857,6 +2577,15 @@ size_t cf_cable_server_connections(const cf_cable_server *server) {
     size_t live = server->live;
     pthread_mutex_unlock(&mutable_server->mutex);
     return live;
+}
+
+size_t cf_cable_server_reactors(const cf_cable_server *server) {
+    if (server == NULL) return 0;
+    cf_cable_server *mutable_server = (cf_cable_server *)server;
+    pthread_mutex_lock(&mutable_server->mutex);
+    size_t count = server->reactor_count;
+    pthread_mutex_unlock(&mutable_server->mutex);
+    return count;
 }
 
 void cf_cable_server_stats(const cf_cable_server *server,
@@ -1972,6 +2701,7 @@ cf_http_upgrade_result cf_cable_server_upgrade(void *user,
     }
     conn->server = server;
     conn->fd = request->fd;
+    conn->loop_index = request->loop_index;
     conn->deflate = handshake.deflate;
     conn->subprotocol = subprotocol;
     conn->handshake = response.ptr;
@@ -2047,9 +2777,9 @@ cf_http_upgrade_result cf_cable_server_upgrade(void *user,
     }
     pthread_mutex_unlock(&server->mutex);
 
-    /* The thread starts only after the loop reports the fd fully detached
-     * (see cf_http_upgrade_request.taken), so it can close the fd without
-     * racing the HTTP epoll registration. */
+    /* The connection is enrolled only after the loop reports the fd fully
+     * detached (see cf_http_upgrade_request.taken), so the reactor can
+     * register it without racing the HTTP epoll registration. */
     request->taken = cable_conn_start;
     request->taken_user = conn;
     return CF_HTTP_UPGRADE_TAKEN;
@@ -2057,81 +2787,113 @@ cf_http_upgrade_result cf_cable_server_upgrade(void *user,
 
 /* ---- A01 session authentication ------------------------------------------- */
 
-/* Rack cookie parsing: split pairs on ';', trim, name before the first '=';
- * a later duplicate of the same name wins. */
+static int cookie_hex_digit(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* params::decode_www_form_component (params.rs:510-535) plus the
+ * String::from_utf8 fallback in parse_cookie_header (cookies.rs:282-285):
+ * '+' is a space, '%' must be followed by two ASCII hex digits or the whole
+ * decode fails, and a failed decode or a non-UTF-8 result keeps the raw
+ * value.  On true `out` owns the result; false is allocation failure. */
+static bool cookie_decode_component(cf_span raw, cf_str *out) {
+    unsigned char *decoded = malloc(raw.len + 1);
+    if (decoded == NULL) return false;
+    size_t n = 0;
+    bool malformed = false;
+    for (size_t i = 0; i < raw.len;) {
+        unsigned char c = raw.ptr[i];
+        if (c == '+') {
+            decoded[n++] = ' ';
+            i++;
+        } else if (c == '%') {
+            int hi = i + 1 < raw.len ? cookie_hex_digit(raw.ptr[i + 1]) : -1;
+            int lo = i + 2 < raw.len ? cookie_hex_digit(raw.ptr[i + 2]) : -1;
+            if (hi < 0 || lo < 0) {
+                malformed = true;
+                break;
+            }
+            decoded[n++] = (unsigned char)((hi << 4) | lo);
+            i += 3;
+        } else {
+            decoded[n++] = c;
+            i++;
+        }
+    }
+    if (!malformed && cable_utf8_valid(decoded, n)) {
+        decoded[n] = '\0';
+        *out = (cf_str){(char *)decoded, n};
+        return true;
+    }
+    free(decoded);
+    char *copy = malloc(raw.len + 1);
+    if (copy == NULL) return false;
+    if (raw.len != 0) memcpy(copy, raw.ptr, raw.len);
+    copy[raw.len] = '\0';
+    *out = (cf_str){copy, raw.len};
+    return true;
+}
+
+/* Rack cookie parsing, byte-for-byte kit's parse_cookie_header
+ * (cookies.rs:269-289): split on ';'; the first part is taken as-is and only
+ * later parts lose leading ASCII spaces; an empty part contributes nothing;
+ * the name is everything before the first '=' (or the whole part, with an
+ * empty value, when there is no '='); the value is everything after it,
+ * decoded by cookie_decode_component.  The first occurrence of `name` wins:
+ * connection.rs:26-27 feeds every readable Cookie value, in header order, to
+ * CookieJar::from_headers (cookies.rs:148-159), whose seen set keeps the
+ * first pair per name across headers, and parse_cookie_header's own seen
+ * guard (cookies.rs:279-281) does the same within one header.  A later
+ * duplicate — in the same header or a later one — never overrides. */
 static bool request_cookie_value(const cf_cable_request *request,
                                  const char *name, cf_str *out) {
     size_t name_len = strlen(name);
-    bool found = false;
     for (size_t h = 0; h < request->header_count; h++) {
         if (!bytes_ieq_lit(request->headers[h].name, "cookie")) continue;
         cf_span v = request->headers[h].value;
+        /* get_all("cookie").filter_map(to_str): an unreadable value is
+         * dropped whole, so a later readable header still participates —
+         * but only while no earlier occurrence has matched. */
+        if (!cable_header_readable(v)) continue;
         size_t pos = 0;
+        size_t part_index = 0;
         while (pos <= v.len) {
             size_t end = pos;
             while (end < v.len && v.ptr[end] != ';') end++;
-            cf_span pair = span_trim((cf_span){v.ptr + pos, end - pos});
-            const unsigned char *eq = memchr(pair.ptr, '=', pair.len);
-            if (eq != NULL) {
-                cf_span cname =
-                    span_trim((cf_span){pair.ptr, (size_t)(eq - pair.ptr)});
-                if (cname.len == name_len &&
-                    memcmp(cname.ptr, name, name_len) == 0) {
-                    cf_span raw = span_trim((cf_span){
-                        eq + 1, pair.len - (size_t)(eq - pair.ptr) - 1});
-                    /* URL-unescape the wire value, as Rack does. */
-                    cf_builder decoded = {0};
-                    cf_err rc = CF_OK;
-                    for (size_t i = 0; i < raw.len; i++) {
-                        unsigned char c = raw.ptr[i];
-                        int value = c;
-                        if (c == '+') {
-                            value = ' ';
-                        } else if (c == '%' && i + 2 < raw.len) {
-                            int hi = -1, lo = -1;
-                            unsigned char a = raw.ptr[i + 1];
-                            unsigned char b = raw.ptr[i + 2];
-                            if (a >= '0' && a <= '9') hi = a - '0';
-                            else if (a >= 'a' && a <= 'f') hi = a - 'a' + 10;
-                            else if (a >= 'A' && a <= 'F') hi = a - 'A' + 10;
-                            if (b >= '0' && b <= '9') lo = b - '0';
-                            else if (b >= 'a' && b <= 'f') lo = b - 'a' + 10;
-                            else if (b >= 'A' && b <= 'F') lo = b - 'A' + 10;
-                            if (hi >= 0 && lo >= 0) {
-                                value = (hi << 4) | lo;
-                                i += 2;
-                            }
-                        }
-                        unsigned char byte = (unsigned char)value;
-                        if (rc == CF_OK) {
-                            rc = cf_builder_append(
-                                &decoded, (cf_span){&byte, 1});
-                        }
-                    }
-                    if (rc != CF_OK) {
-                        cf_builder_dispose(&decoded);
-                        return false;
-                    }
-                    size_t decoded_len = decoded.len;
-                    char *text = malloc(decoded_len + 1);
-                    if (text == NULL) {
-                        cf_builder_dispose(&decoded);
-                        return false;
-                    }
-                    if (decoded_len != 0) {
-                        memcpy(text, decoded.ptr, decoded_len);
-                    }
-                    text[decoded_len] = '\0';
-                    cf_builder_dispose(&decoded);
-                    cf_str_dispose(out);
-                    *out = (cf_str){text, decoded_len};
-                    found = true;
+            cf_span pair = {v.ptr + pos, end - pos};
+            if (part_index > 0) {
+                while (pair.len > 0 && pair.ptr[0] == ' ') {
+                    pair.ptr++;
+                    pair.len--;
                 }
             }
+            part_index++;
             pos = end + 1;
+            if (pair.len == 0) continue;
+            cf_span cname = pair;
+            cf_span raw = {pair.ptr + pair.len, 0};
+            for (size_t k = 0; k < pair.len; k++) {
+                if (pair.ptr[k] == '=') {
+                    cname = (cf_span){pair.ptr, k};
+                    raw = (cf_span){pair.ptr + k + 1, pair.len - k - 1};
+                    break;
+                }
+            }
+            if (cname.len != name_len ||
+                memcmp(cname.ptr, name, name_len) != 0) {
+                continue;
+            }
+            cf_str value = {0};
+            if (!cookie_decode_component(raw, &value)) return false;
+            cf_str_dispose(out);
+            *out = value;
+            return true;
         }
     }
-    return found;
+    return false;
 }
 
 cf_err cf_cable_session_authenticate(void *user,

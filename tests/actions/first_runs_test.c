@@ -383,6 +383,29 @@ CF_TEST(first_runs_show_frame_renders_the_frame_layout) {
     env_close(&env);
 }
 
+/* A non-ASCII `Turbo-Frame` value fails http 1.5.0's `HeaderValue::to_str`,
+ * so the pin reads the header as absent: the page render (with its preload
+ * header) is used. */
+CF_TEST(first_runs_show_non_ascii_turbo_frame_is_page) {
+    fr_env env;
+    CF_REQUIRE(env_open(&env));
+    CF_REQUIRE(fr_assets_setup());
+
+    cf_request req;
+    get_first_run(&req);
+    CF_REQUIRE(cf_test_req_header(
+                   &req, SP("Turbo-Frame"),
+                   (cf_span){(const unsigned char *)"\xC3\xA9", 2}) == CF_OK);
+    cf_response resp;
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    cf_span body = cf_buf_span(resp.body);
+    CF_CHECK(span_contains(body, "<!DOCTYPE html>"));
+    CF_CHECK(head_contains(&resp, &req, "Link: <"));
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
 /* prevent_repeats: once the account exists, show redirects to root. */
 CF_TEST(first_runs_show_redirects_once_the_account_exists) {
     fr_env env;

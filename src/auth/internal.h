@@ -19,7 +19,10 @@ cf_err auth_str_dup(cf_span span, cf_str *out);
 bool auth_span_equal(cf_span a, cf_span b);
 cf_span auth_cstr_span(const char *text);
 
-/* First request header with this name (case-insensitive), or false. */
+/* The kit's `request.header(name)`: the first request header with this name
+ * (case-insensitive) whose value passes http 1.5.0's `HeaderValue::to_str`
+ * (HTAB or visible ASCII); false when absent or unreadable (obs-text, DEL and
+ * other controls read as absent). */
 bool auth_request_header(const cf_request *request, const char *name,
                          cf_span *out);
 

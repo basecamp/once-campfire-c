@@ -20,9 +20,11 @@ static cf_err send_on_text(void *user, cf_cable_socket *socket,
     return CF_OK;
 }
 
-static cf_err auth_ok(void *user, const cf_cable_request *request,
+static cf_err auth_ok(void *user, cf_cable_socket *socket,
+                      const cf_cable_request *request,
                       bool *authenticated, int64_t *user_id) {
     (void)user;
+    (void)socket;
     (void)request;
     *authenticated = true;
     *user_id = 1;

@@ -14,7 +14,7 @@
 
 #include <yyjson.h>
 
-#define ROUTES_JSON "docs/devel/implementation/contracts/routes.json"
+#define ROUTES_JSON "tests/fixtures/contracts/routes.json"
 
 static const char *method_name(cf_method method) {
     switch (method) {
@@ -182,7 +182,10 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
         bool bound = strcmp(task, "H03") == 0 ||
                      strcmp(task, "A-welcome") == 0 ||
                      strcmp(task, "A-first_runs") == 0 ||
-                     strcmp(task, "A-sessions") == 0;
+                     strcmp(task, "A-sessions") == 0 ||
+                     strcmp(task, "A-rooms") == 0 ||
+                     strcmp(task, "A-messages") == 0 ||
+                     strcmp(task, "A-users-bans") == 0;
         if (!bound) {
             expected_501[yyjson_get_int(id)] = true;
             expected_count++;
@@ -200,9 +203,10 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
     }
     CF_CHECK(actual_count == expected_count);
     /* The four POST conductor rows are bound (A01's cf_check_csrf) and the
-     * A-welcome / A-first_runs / A-sessions rows are rebound to their real
-     * symbols; everything else unbound is a packet that has not landed. */
-    CF_CHECK(actual_count == 112);
+     * A-welcome / A-first_runs / A-sessions / A-rooms / A-messages /
+     * A-users-bans rows are rebound to their real symbols; everything else
+     * unbound is a packet that has not landed. */
+    CF_CHECK(actual_count == 92);
 }
 
 CF_TEST_MAIN()

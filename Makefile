@@ -51,9 +51,11 @@ AUTH_SRCS := \
 	src/auth/json.c \
 	src/auth/message.c \
 	src/auth/password.c \
+	src/auth/platform.c \
 	src/auth/rate.c \
 	src/auth/session.c \
-	src/auth/tokens.c
+	src/auth/tokens.c \
+	src/auth/user_agent.c
 
 RICHTEXT_SRCS := \
 	src/richtext/rt_attach.c \
@@ -107,7 +109,10 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/presenters/messages.c \
 	src/presenters/rooms.c \
 	src/actions/first_runs.c \
+	src/actions/messages.c \
+	src/actions/rooms.c \
 	src/actions/sessions.c \
+	src/actions/users/bans.c \
 	src/actions/welcome.c \
 	$(AUTH_SRCS) \
 	$(MODEL_SRCS) \
@@ -161,10 +166,19 @@ FILC ?= /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filc
 
 STRICT_FLAGS := -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
 	-Wall -Wextra -Werror -pthread
-# Application version baked at build time (views.h CF_VIEWS_APP_VERSION).
+# Application version baked at build time.  APP_VERSION is the single
+# Makefile variable: it feeds views.h's CF_VIEWS_APP_VERSION and A01's
+# set_version_headers X-Version (CF_APP_VERSION).  X-Rev is emitted only when
+# a nonempty GIT_REVISION is given (`make GIT_REVISION=<rev>`), absent by
+# default (IMPLEMENTATION-ROADMAP 2026-10-05 A01/A02 completion (e)).
 APP_VERSION ?= 0.1.0
-APP_CPPFLAGS := -Isrc -Itests -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"'
-# Same flags without the version define (golden buckets redefine it).
+GIT_REVISION ?=
+APP_CPPFLAGS := -Isrc -Itests -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"' \
+	-DCF_APP_VERSION='"$(APP_VERSION)"'
+ifneq ($(strip $(GIT_REVISION)),)
+APP_CPPFLAGS += -DCF_GIT_REVISION='"$(GIT_REVISION)"'
+endif
+# Same flags without the views version define (golden buckets redefine it).
 APP_TEST_CPPFLAGS := $(filter-out -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"',$(APP_CPPFLAGS))
 
 # ---------- build variants --------------------------------------------------
@@ -354,6 +368,9 @@ APP_GOLDEN_BUCKET_OBJS := $(filter-out $(MODE_OBJ)/src/presenters/layout.o,\
 # Controller action tests: route-double + views support + no-routes library.
 ACTIONS_TEST_SRCS := \
 	tests/actions/first_runs_test.c \
+	tests/actions/messages_test.c \
+	tests/actions/rooms_test.c \
+	tests/actions/users_bans_test.c \
 	tests/actions/welcome_test.c \
 	tests/actions/sessions_test.c
 ACTIONS_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(ACTIONS_TEST_SRCS))
@@ -364,6 +381,7 @@ AUTH_TEST_SRCS := \
 	tests/auth/test_before.c \
 	tests/auth/test_crypto.c \
 	tests/auth/test_password.c \
+	tests/auth/test_platform.c \
 	tests/auth/test_rate.c \
 	tests/auth/test_session.c \
 	tests/auth/test_tokens.c
@@ -374,7 +392,7 @@ AUTH_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(AUTH_TEST_SRCS))
 # completion queue) and the app/config suite touched by the shutdown path.
 TSAN_TEST_SRCS := tests/core/test_buffer.c tests/config/test_config.c \
 	tests/db/test_writer.c tests/jobs/test_jobs_writer.c \
-	tests/cable/test_cable_queue.c
+	tests/cable/test_cable_queue.c tests/cable/test_cable_live.c
 TSAN_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_TEST_SRCS))
 TSAN_HTTP_TEST_SRCS := tests/http/test_http_completion.c
 TSAN_HTTP_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(TSAN_HTTP_TEST_SRCS))
@@ -620,9 +638,11 @@ test-impl: $(BIN) $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) \
 	fi; \
 	echo "unit tests ($(MODE)): all passed"
 
-tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) $(TSAN_TEST_OBJS)
+tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) \
+		$(ACTIONS_TEST_BINS) $(AUTH_TEST_BINS) $(TSAN_TEST_OBJS)
 	@fail=0; \
-	for t in $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS); do \
+	for t in $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) \
+		$(ACTIONS_TEST_BINS) $(AUTH_TEST_BINS); do \
 		echo "-- $$t"; \
 		$$t || fail=1; \
 	done; \
@@ -639,4 +659,5 @@ tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) $(TSAN
 	$(MODE_OBJ)/tests/auth/*.d $(MODE_OBJ)/tests/richtext/*.d \
 	$(MODE_OBJ)/tests/cable/*.d $(MODE_OBJ)/tests/jobs/*.d \
 	$(MODE_OBJ)/tests/storage/*.d $(MODE_OBJ)/tests/actions/*.d \
-	$(MODE_OBJ)/tests/views/*.d $(MODE_OBJ)/tests/views/support/*.d
+	$(MODE_OBJ)/tests/views/*.d $(MODE_OBJ)/tests/views/support/*.d \
+	$(MODE_OBJ)/tests/support/*.d

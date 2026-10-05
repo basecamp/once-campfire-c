@@ -196,7 +196,8 @@ static cf_err auth_session_ensure_sid(struct auth_session_state *state) {
 }
 
 /* Load and decrypt the cookie once; malformed/invalid data reads as empty
- * (Session::load's `Some(Value::Object(map)) => map, _ => Map::new()`). */
+ * (Session::load's `Some(Value::Object(map)) => map, _ => Map::new()`), and a
+ * missing/null session_id is generated at load. */
 static cf_err auth_session_load(cf_ctx *ctx, struct auth_session_state *state) {
     memset(state, 0, sizeof *state);
     const cf_config *config = cf_app_config(ctx->app);
@@ -204,45 +205,56 @@ static cf_err auth_session_load(cf_ctx *ctx, struct auth_session_state *state) {
     cf_span name = auth_cstr_span(AUTH_SESSION_COOKIE);
     cf_span raw;
     cf_err rc = cf_ctx_cookie_get(ctx, name, &raw);
-    if (rc == CF_NOT_FOUND) return CF_OK;
-    if (rc != CF_OK) return rc;
-    state->present = true;
-    cf_str json = {0};
-    bool found = false;
-    rc = cf_auth_cookie_decrypt(
-        (cf_span){(const unsigned char *)config->secret_key_base,
-                  config->secret_key_base_len},
-        name, raw, cf_now_us(ctx->app), &json, &found);
-    if (rc != CF_OK) return rc;
-    if (!found) return CF_OK;
-    yyjson_read_err err;
-    yyjson_doc *doc = yyjson_read_opts(json.ptr, json.len, 0, NULL, &err);
-    if (doc != NULL) {
-        yyjson_val *root = yyjson_doc_get_root(doc);
-        if (yyjson_is_obj(root)) {
-            yyjson_obj_iter iter;
-            yyjson_obj_iter_init(root, &iter);
-            yyjson_val *key;
-            while ((key = yyjson_obj_iter_next(&iter)) != NULL) {
-                yyjson_val *value = yyjson_obj_iter_get_val(key);
-                size_t value_len = 0;
-                char *value_text = yyjson_val_write(value, 0, &value_len);
-                if (value_text == NULL) {
-                    rc = CF_NOMEM;
-                    break;
+    if (rc != CF_OK && rc != CF_NOT_FOUND) return rc;
+    if (rc == CF_OK) {
+        state->present = true;
+        cf_str json = {0};
+        bool found = false;
+        rc = cf_auth_cookie_decrypt(
+            (cf_span){(const unsigned char *)config->secret_key_base,
+                      config->secret_key_base_len},
+            name, raw, cf_now_us(ctx->app), &json, &found);
+        if (rc == CF_OK && found) {
+            yyjson_read_err err;
+            yyjson_doc *doc =
+                yyjson_read_opts(json.ptr, json.len, 0, NULL, &err);
+            if (doc != NULL) {
+                yyjson_val *root = yyjson_doc_get_root(doc);
+                if (yyjson_is_obj(root)) {
+                    yyjson_obj_iter iter;
+                    yyjson_obj_iter_init(root, &iter);
+                    yyjson_val *key;
+                    while ((key = yyjson_obj_iter_next(&iter)) != NULL) {
+                        yyjson_val *value = yyjson_obj_iter_get_val(key);
+                        size_t value_len = 0;
+                        char *value_text = yyjson_val_write(value, 0, &value_len);
+                        if (value_text == NULL) {
+                            rc = CF_NOMEM;
+                            break;
+                        }
+                        rc = auth_session_set_item(
+                            state,
+                            (cf_span){(const unsigned char *)yyjson_get_str(key),
+                                      yyjson_get_len(key)},
+                            (cf_span){(const unsigned char *)value_text,
+                                      value_len});
+                        free(value_text);
+                        if (rc != CF_OK) break;
+                    }
                 }
-                rc = auth_session_set_item(
-                    state,
-                    (cf_span){(const unsigned char *)yyjson_get_str(key),
-                              yyjson_get_len(key)},
-                    (cf_span){(const unsigned char *)value_text, value_len});
-                free(value_text);
-                if (rc != CF_OK) break;
+                yyjson_doc_free(doc);
             }
         }
-        yyjson_doc_free(doc);
+        cf_str_dispose(&json);
+        if (rc != CF_OK) {
+            auth_session_state_dispose(state);
+            return rc;
+        }
     }
-    cf_str_dispose(&json);
+    /* Session::load inserts a generated session_id before any value is set, so
+     * a fresh session serializes session_id first like the reference; loading
+     * alone never marks the session changed (nothing is committed). */
+    rc = auth_session_ensure_sid(state);
     if (rc == CF_OK) state->changed = false; /* loading is not a change */
     if (rc != CF_OK) auth_session_state_dispose(state);
     return rc;
@@ -367,6 +379,30 @@ cf_err cf_auth_session_remove(cf_ctx *ctx, cf_span key) {
     return rc;
 }
 
+/* FlashHash.from_session_value's discard filter: the key appears in the
+ * stored "discard" array (non-string entries are ignored, like
+ * `filter_map(Value::as_str)`). */
+static bool auth_flash_discarded(yyjson_val *discard, yyjson_val *key) {
+    if (discard == NULL || !yyjson_is_arr(discard)) return false;
+    size_t idx, max;
+    yyjson_val *item;
+    yyjson_arr_foreach(discard, idx, max, item) {
+        if (!yyjson_is_str(item)) continue;
+        if (yyjson_get_len(item) == yyjson_get_len(key) &&
+            memcmp(yyjson_get_str(item), yyjson_get_str(key),
+                   yyjson_get_len(key)) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* flash(): load session["flash"]["flashes"] into the context's map through
+ * cf_ctx_flash_now, so every restored value is shown on this request and
+ * discarded by cf_auth_flash_persist unless the request re-sets it. The
+ * session itself is not touched here: the reference loads lazily and only
+ * commit_flash (at the end of a successful response) rewrites the cookie.
+ * String values only (the port's flash map is string-valued). */
 cf_err cf_auth_flash_load(cf_ctx *ctx) {
     if (ctx == NULL) return CF_INVALID;
     struct auth_session_state state;
@@ -383,8 +419,9 @@ cf_err cf_auth_flash_load(cf_ctx *ctx) {
                                            state.items[at].value_len, 0, NULL,
                                            &err);
         if (doc != NULL) {
-            yyjson_val *flashes = yyjson_obj_get(yyjson_doc_get_root(doc),
-                                                 "flashes");
+            yyjson_val *root = yyjson_doc_get_root(doc);
+            yyjson_val *discard = yyjson_obj_get(root, "discard");
+            yyjson_val *flashes = yyjson_obj_get(root, "flashes");
             if (flashes != NULL && yyjson_is_obj(flashes)) {
                 yyjson_obj_iter iter;
                 yyjson_obj_iter_init(flashes, &iter);
@@ -392,7 +429,8 @@ cf_err cf_auth_flash_load(cf_ctx *ctx) {
                 while ((key = yyjson_obj_iter_next(&iter)) != NULL) {
                     yyjson_val *value = yyjson_obj_iter_get_val(key);
                     if (!yyjson_is_str(value)) continue;
-                    rc = cf_ctx_flash_set(
+                    if (auth_flash_discarded(discard, key)) continue;
+                    rc = cf_ctx_flash_now(
                         ctx,
                         (cf_span){(const unsigned char *)yyjson_get_str(key),
                                   yyjson_get_len(key)},
@@ -404,11 +442,41 @@ cf_err cf_auth_flash_load(cf_ctx *ctx) {
             }
             yyjson_doc_free(doc);
         }
-        /* A loaded flash is discarded at the end of the request. */
-        auth_session_drop_item(&state, auth_cstr_span(flash_key));
-        if (rc == CF_OK) rc = auth_session_commit(ctx, &state);
     }
     auth_session_state_dispose(&state);
+    return rc;
+}
+
+/* commit_flash: `flash.to_session_value()` written to session["flash"].
+ * Surviving entries keep their insertion order and are ActiveSupport-JSON
+ * encoded (the cookie serializer's spelling); an empty result removes the
+ * session key, so a consumed notice disappears from the cookie and a request
+ * that changed nothing writes no cookie (kit session.rs commit). */
+cf_err cf_auth_flash_persist(cf_ctx *ctx) {
+    if (ctx == NULL) return CF_INVALID;
+    static const char flash_key[] = "flash";
+    size_t pending = 0;
+    while (cf_ctx_flash_pending_at(ctx, pending, NULL, NULL)) pending++;
+    if (pending == 0) {
+        return cf_auth_session_remove(ctx, auth_cstr_span(flash_key));
+    }
+    cf_builder json = {0};
+    cf_err rc =
+        cf_builder_append(&json, auth_cstr_span("{\"discard\":[],\"flashes\":{"));
+    for (size_t i = 0; rc == CF_OK && i < pending; i++) {
+        cf_span key, value;
+        if (!cf_ctx_flash_pending_at(ctx, i, &key, &value)) break;
+        if (i != 0) rc = cf_builder_append(&json, auth_cstr_span(","));
+        if (rc == CF_OK) rc = auth_json_string_encode(&json, key);
+        if (rc == CF_OK) rc = cf_builder_append(&json, auth_cstr_span(":"));
+        if (rc == CF_OK) rc = auth_json_string_encode(&json, value);
+    }
+    if (rc == CF_OK) rc = cf_builder_append(&json, auth_cstr_span("}}"));
+    if (rc == CF_OK) {
+        rc = cf_auth_session_write(ctx, auth_cstr_span(flash_key),
+                                   (cf_span){json.ptr, json.len});
+    }
+    cf_builder_dispose(&json);
     return rc;
 }
 
@@ -883,8 +951,10 @@ static cf_err auth_destroy_cb(cf_tx *tx, void *user) {
 }
 
 /* reset_session: drop the data, start a new session id, and let commit's
- * "nothing but session_id" rule delete the cookie. */
+ * "nothing but session_id" rule delete the cookie. Ctx::reset_session also
+ * drops the flash. */
 static cf_err auth_session_reset(cf_ctx *ctx) {
+    cf_ctx_flash_reset(ctx);
     struct auth_session_state state;
     cf_err rc = auth_session_load(ctx, &state);
     if (rc == CF_OK) {

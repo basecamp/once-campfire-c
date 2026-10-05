@@ -7,11 +7,14 @@
  *
  * Every subscription lives in the connection loop's array and carries the
  * client's raw identifier (echoed byte for byte in confirmations, rejections
- * and deliveries), its canonical class name and the streams it reads. Model
- * validation for `subscribed` runs on the connection owner thread with the
- * loop's own reader (the connection worker), never on an HTTP loop thread;
- * the confirmation is written only after those effects succeeded. Presence
- * membership changes go through cf_write and broadcast after the write.
+ * and deliveries), its canonical class name and the streams it reads. On the
+ * production reactor path the `subscribed` model validation runs on the app's
+ * bounded request-worker pool (its result installed through the C03 gate and
+ * its deferred presence effect run as a second worker phase); the synchronous
+ * path (standalone sockets, tests) runs the identical plan-based validation
+ * on the owner thread with the loop's own reader. The confirmation is written
+ * only after those effects succeeded. Presence membership changes go through
+ * cf_write and broadcast after the write.
  *
  * Unknown channels/actions, duplicate subscribe, unsubscribe of an unknown
  * identifier and malformed identifiers/commands are logged and ignored, as
@@ -473,8 +476,10 @@ static bool guarded_stream(cf_span name) {
 }
 
 /* params[:signed_stream_name] verified with the stock Turbo verifier; a
- * missing/null name is simply unverified, any other non-string raises. */
-static cf_err verified_stream_name(cf_cable_loop *loop, yyjson_val *params,
+ * missing/null name is simply unverified, any other non-string raises. The
+ * secret is explicit so the worker path verifies with the cable's borrowed
+ * secret without touching the loop. */
+static cf_err verified_stream_name(cf_span secret, yyjson_val *params,
                                    cf_str *out, bool *found) {
     *found = false;
     cf_str empty = {0};
@@ -484,8 +489,7 @@ static cf_err verified_stream_name(cf_cable_loop *loop, yyjson_val *params,
     if (!yyjson_is_str(value)) return CF_INVALID;
     cf_span signed_name = {(const unsigned char *)yyjson_get_str(value),
                            yyjson_get_len(value)};
-    return cf_auth_turbo_verified_stream_name(
-        cf_cable_secret(cf_cable_loop_cable(loop)), signed_name, out, found);
+    return cf_auth_turbo_verified_stream_name(secret, signed_name, out, found);
 }
 
 /* ---- small JSON helpers ---------------------------------------------------------- */
@@ -628,42 +632,33 @@ static bool cast_id(yyjson_val *value, int64_t *out) {
 
 /* ---- per-subscription effects ------------------------------------------------------ */
 
-static cf_err stream_from(cf_cable_loop *loop, cf_cable_subscription *sub,
-                          cf_span stream) {
-    (void)loop;
-    return cf_cable_subscription_stream(sub, stream);
-}
-
 /* `RoomChannel#subscribed`'s stream_for: "<channel name>:<room gid param>". */
-static cf_err stream_for_room(cf_cable_subscription *sub, const cf_room *room) {
+static cf_err broadcasting_for_room(const char *class_name, const cf_room *room,
+                                    cf_str *out) {
     cf_str gid = {0};
     cf_err rc = cf_cable_room_gid_param(room, &gid);
     if (rc != CF_OK) return rc;
     cf_str stream = {0};
     rc = broadcasting_for(
-        (cf_span){(const unsigned char *)sub->class_name,
-                  strlen(sub->class_name)},
+        (cf_span){(const unsigned char *)class_name, strlen(class_name)},
         (cf_span){(const unsigned char *)gid.ptr, gid.len}, &stream);
     cf_str_dispose(&gid);
     if (rc != CF_OK) return rc;
-    rc = cf_cable_subscription_stream(
-        sub, (cf_span){(const unsigned char *)stream.ptr, stream.len});
-    cf_str_dispose(&stream);
-    return rc;
+    *out = stream;
+    return CF_OK;
 }
 
 /* `current_user.rooms.find_by(id: params[:room_id])` for RoomChannel,
- * PresenceChannel and TypingNotificationsChannel. */
-static cf_err find_room(cf_cable_loop *loop, yyjson_val *params, bool *found,
-                        cf_room *out) {
+ * PresenceChannel and TypingNotificationsChannel. The reader is explicit so
+ * the production worker path can use its own connection. */
+static cf_err find_room(cf_db *reader, int64_t user_id, yyjson_val *params,
+                        bool *found, cf_room *out) {
     *found = false;
     int64_t room_id = 0;
     if (!cast_id(yyjson_obj_get(params, "room_id"), &room_id)) {
         return CF_OK;
     }
-    return cf_room_find_for_user(cf_cable_loop_reader(loop),
-                                 cf_cable_loop_user_id(loop), room_id, found,
-                                 out);
+    return cf_room_find_for_user(reader, user_id, room_id, found, out);
 }
 
 typedef enum {
@@ -709,18 +704,26 @@ static cf_err membership_write(cf_tx *tx, void *arg) {
     return rc;
 }
 
-static cf_err membership_change(cf_cable_loop *loop, int64_t room_id,
-                                membership_change_kind change, bool *found) {
+static cf_err membership_change_ids(cf_app *app, int64_t user_id,
+                                    int64_t room_id, membership_change_kind change,
+                                    bool *found) {
     membership_args args = {
-        .app = cf_cable_loop_app(loop),
+        .app = app,
         .room_id = room_id,
-        .user_id = cf_cable_loop_user_id(loop),
+        .user_id = user_id,
         .change = change,
         .found = false,
     };
-    cf_err rc = cf_write(args.app, membership_write, &args);
+    cf_err rc = cf_write(app, membership_write, &args);
     *found = args.found;
     return rc;
+}
+
+static cf_err membership_change(cf_cable_loop *loop, int64_t room_id,
+                                membership_change_kind change, bool *found) {
+    return membership_change_ids(cf_cable_loop_app(loop),
+                                 cf_cable_loop_user_id(loop), room_id, change,
+                                 found);
 }
 
 static cf_err publish_text(cf_cable *cable, cf_span stream, cf_span payload) {
@@ -854,33 +857,62 @@ static cf_err typing_broadcast(cf_cable_loop *loop, cf_cable_subscription *sub,
 
 /* ---- subscribed handlers --------------------------------------------------------- */
 
-/* One `subscribed` callback. Runs model validation on the owner thread.
- * `defer_presence` is set by the subscribe path: its presence write must run
- * only after the C03 install gate accepted the authorization result (the
- * write itself advances the data version, which is fine once installed). */
-static cf_err channel_subscribed(cf_cable_loop *loop,
-                                 cf_cable_subscription *sub,
-                                 bool defer_presence) {
-    channel_state *state = sub->channel;
-    switch (state->kind) {
+/* ---- subscribed validation (shared by the owner and worker paths) ---------- */
+
+static cf_err plan_add_stream(cf_cable_sub_plan *plan, cf_span name) {
+    char *copy = malloc(name.len + 1);
+    if (copy == NULL) return CF_NOMEM;
+    memcpy(copy, name.ptr, name.len);
+    copy[name.len] = '\0';
+    if (plan->stream_count % 8 == 0) {
+        size_t cap = plan->stream_count + 8;
+        char **grown = realloc(plan->streams, cap * sizeof *grown);
+        if (grown == NULL) {
+            free(copy);
+            return CF_NOMEM;
+        }
+        plan->streams = grown;
+    }
+    plan->streams[plan->stream_count++] = copy;
+    return CF_OK;
+}
+
+void cf_cable_sub_plan_dispose(cf_cable_sub_plan *plan) {
+    if (plan == NULL) return;
+    if (plan->have_room) cf_room_dispose(&plan->room);
+    for (size_t i = 0; i < plan->stream_count; i++) free(plan->streams[i]);
+    free(plan->streams);
+    memset(plan, 0, sizeof *plan);
+}
+
+/* The `subscribed` validation of every channel kind, with all model reads on
+ * `reader` and every result owned by the plan (no loop/subscription access).
+ * `secret` is used only by Turbo's signed-stream verifier. */
+cf_err cf_cable_subscribe_validate(const char *class_name, cf_db *reader,
+                                   int64_t user_id, cf_span identifier,
+                                   cf_span secret, cf_cable_sub_plan *plan) {
+    memset(plan, 0, sizeof *plan);
+    if (class_name == NULL) return CF_INVALID;
+    channel_kind kind;
+    const char *canonical = NULL;
+    if (!class_for(class_name, &kind, &canonical)) return CF_INVALID;
+    switch (kind) {
     case CH_EMPTY:
         return CF_OK;
     case CH_READ_ROOMS: {
         cf_builder stream = {0};
-        cf_err rc = make_id_payload("user_", "_reads",
-                                    cf_cable_loop_user_id(loop), &stream);
+        cf_err rc = make_id_payload("user_", "_reads", user_id, &stream);
         if (rc == CF_OK) {
-            rc = stream_from(loop, sub, (cf_span){stream.ptr, stream.len});
+            rc = plan_add_stream(plan, (cf_span){stream.ptr, stream.len});
         }
         cf_builder_dispose(&stream);
         return rc;
     }
     case CH_UNREAD_ROOMS: {
         cf_builder stream = {0};
-        cf_err rc = make_id_payload("user_", "_unreads",
-                                    cf_cable_loop_user_id(loop), &stream);
+        cf_err rc = make_id_payload("user_", "_unreads", user_id, &stream);
         if (rc == CF_OK) {
-            rc = stream_from(loop, sub, (cf_span){stream.ptr, stream.len});
+            rc = plan_add_stream(plan, (cf_span){stream.ptr, stream.len});
         }
         cf_builder_dispose(&stream);
         return rc;
@@ -888,8 +920,8 @@ static cf_err channel_subscribed(cf_cable_loop *loop,
     case CH_ROOM:
     case CH_PRESENCE:
     case CH_TYPING: {
-        /* Parse this subscription's identifier for room_id. */
-        yyjson_doc *doc = yyjson_read(sub->identifier, sub->identifier_len, 0);
+        yyjson_doc *doc =
+            yyjson_read((const char *)identifier.ptr, identifier.len, 0);
         if (doc == NULL || !yyjson_is_obj(yyjson_doc_get_root(doc))) {
             yyjson_doc_free(doc);
             return CF_INVALID;
@@ -898,33 +930,30 @@ static cf_err channel_subscribed(cf_cable_loop *loop,
         bool found = false;
         cf_room room;
         memset(&room, 0, sizeof room);
-        cf_err rc = find_room(loop, params, &found, &room);
+        cf_err rc = find_room(reader, user_id, params, &found, &room);
         yyjson_doc_free(doc);
         if (rc != CF_OK) return rc;
         if (!found) {
-            sub->rejected = true;
-            state->has_room = false;
+            plan->rejected = true;
             return CF_OK;
         }
-        if (state->has_room) {
-            cf_room_dispose(&state->room);
+        plan->room = room;
+        plan->have_room = true;
+        plan->room_id = room.id;
+        cf_str stream = {0};
+        rc = broadcasting_for_room(canonical, &room, &stream);
+        if (rc == CF_OK) {
+            rc = plan_add_stream(
+                plan, (cf_span){(const unsigned char *)stream.ptr, stream.len});
+            cf_str_dispose(&stream);
         }
-        state->room = room;
-        state->has_room = true;
-        rc = stream_for_room(sub, &room);
         if (rc != CF_OK) return rc;
-        if (state->kind == CH_PRESENCE && !defer_presence) {
-            rc = presence_change(loop, sub, MEMBERSHIP_PRESENT);
-            if (rc != CF_OK) {
-                /* A raised callback sends neither confirmation nor rejection
-                 * and leaves the subscription registered. */
-                return rc;
-            }
-        }
+        if (kind == CH_PRESENCE) plan->presence_present = true;
         return CF_OK;
     }
     case CH_ROOM_MESSAGES: {
-        yyjson_doc *doc = yyjson_read(sub->identifier, sub->identifier_len, 0);
+        yyjson_doc *doc =
+            yyjson_read((const char *)identifier.ptr, identifier.len, 0);
         if (doc == NULL || !yyjson_is_obj(yyjson_doc_get_root(doc))) {
             yyjson_doc_free(doc);
             return CF_INVALID;
@@ -932,37 +961,36 @@ static cf_err channel_subscribed(cf_cable_loop *loop,
         yyjson_val *params = yyjson_doc_get_root(doc);
         cf_str verified = {0};
         bool found = false;
-        cf_err rc = verified_stream_name(loop, params, &verified, &found);
+        cf_err rc = verified_stream_name(secret, params, &verified, &found);
         if (rc == CF_OK && found && verified.len == 0) found = false;
         if (rc == CF_OK && found) {
             bool room_found = false;
             cf_room room;
             memset(&room, 0, sizeof room);
-            rc = subscribable_room(cf_cable_loop_reader(loop),
-                                   cf_cable_loop_user_id(loop),
-                                   (cf_span){(const unsigned char *)verified.ptr,
-                                             verified.len},
-                                   &room_found, &room);
+            rc = subscribable_room(
+                reader, user_id,
+                (cf_span){(const unsigned char *)verified.ptr, verified.len},
+                &room_found, &room);
             if (rc == CF_OK) {
                 if (room_found) {
                     cf_room_dispose(&room);
-                    rc = stream_from(
-                        loop, sub,
-                        (cf_span){(const unsigned char *)verified.ptr,
-                                  verified.len});
+                    rc = plan_add_stream(
+                        plan, (cf_span){(const unsigned char *)verified.ptr,
+                                        verified.len});
                 } else {
-                    sub->rejected = true;
+                    plan->rejected = true;
                 }
             }
         } else if (rc == CF_OK) {
-            sub->rejected = true;
+            plan->rejected = true;
         }
         cf_str_dispose(&verified);
         yyjson_doc_free(doc);
         return rc;
     }
     case CH_TURBO_STREAMS: {
-        yyjson_doc *doc = yyjson_read(sub->identifier, sub->identifier_len, 0);
+        yyjson_doc *doc =
+            yyjson_read((const char *)identifier.ptr, identifier.len, 0);
         if (doc == NULL || !yyjson_is_obj(yyjson_doc_get_root(doc))) {
             yyjson_doc_free(doc);
             return CF_INVALID;
@@ -970,18 +998,18 @@ static cf_err channel_subscribed(cf_cable_loop *loop,
         yyjson_val *params = yyjson_doc_get_root(doc);
         cf_str verified = {0};
         bool found = false;
-        cf_err rc = verified_stream_name(loop, params, &verified, &found);
+        cf_err rc = verified_stream_name(secret, params, &verified, &found);
         if (rc == CF_OK) {
             cf_span name = found
                                ? (cf_span){(const unsigned char *)verified.ptr,
                                            verified.len}
                                : (cf_span){NULL, 0};
             if (guarded_stream(name)) {
-                sub->rejected = true;
+                plan->rejected = true;
             } else if (found && verified.len != 0) {
-                rc = stream_from(loop, sub, name);
+                rc = plan_add_stream(plan, name);
             } else {
-                sub->rejected = true;
+                plan->rejected = true;
             }
         }
         cf_str_dispose(&verified);
@@ -990,6 +1018,66 @@ static cf_err channel_subscribed(cf_cable_loop *loop,
     }
     }
     return CF_INVALID;
+}
+
+/* The deferred model effect of a PresenceChannel subscription's subscribed
+ * callback (Membership::Connectable present + read broadcast). Uses cf_write
+ * and cf_cable_publish only, so a request worker may run it. */
+cf_err cf_cable_subscribe_presence_effect(cf_app *app, cf_cable *cable,
+                                          int64_t user_id, int64_t room_id) {
+    bool found = false;
+    cf_err rc = membership_change_ids(app, user_id, room_id,
+                                      MEMBERSHIP_PRESENT, &found);
+    if (rc != CF_OK) return rc;
+    if (!found) {
+        cf_cable_log("could not execute command", "nil membership");
+        return CF_INVALID;
+    }
+    return broadcast_read_room(cable, user_id, room_id);
+}
+
+cf_err cf_cable_subscribe_apply(cf_cable_subscription *sub,
+                                cf_cable_sub_plan *plan) {
+    if (sub == NULL || plan == NULL) return CF_INVALID;
+    channel_state *state = sub->channel;
+    if (plan->rejected) sub->rejected = true;
+    if (plan->have_room && state != NULL) {
+        if (state->has_room) cf_room_dispose(&state->room);
+        state->room = plan->room;
+        state->has_room = true;
+        plan->room = (cf_room){0};
+        plan->have_room = false;
+    }
+    for (size_t i = 0; i < plan->stream_count; i++) {
+        cf_span name = {(const unsigned char *)plan->streams[i],
+                        strlen(plan->streams[i])};
+        cf_err rc = cf_cable_subscription_stream(sub, name);
+        if (rc != CF_OK) return rc;
+    }
+    return CF_OK;
+}
+
+/* One `subscribed` callback on the synchronous path: the same validation and
+ * application the worker path uses, with the loop's own reader, plus the
+ * inline presence effect unless the caller defers it until after the C03
+ * install gate. */
+static cf_err channel_subscribed(cf_cable_loop *loop,
+                                 cf_cable_subscription *sub,
+                                 bool defer_presence) {
+    cf_cable_sub_plan plan;
+    cf_err rc = cf_cable_subscribe_validate(
+        sub->class_name, cf_cable_loop_reader(loop), cf_cable_loop_user_id(loop),
+        (cf_span){(const unsigned char *)sub->identifier, sub->identifier_len},
+        cf_cable_secret(cf_cable_loop_cable(loop)), &plan);
+    if (rc == CF_OK) rc = cf_cable_subscribe_apply(sub, &plan);
+    if (rc == CF_OK && plan.presence_present && !plan.rejected &&
+        !defer_presence) {
+        rc = cf_cable_subscribe_presence_effect(
+            cf_cable_loop_app(loop), cf_cable_loop_cable(loop),
+            cf_cable_loop_user_id(loop), plan.room_id);
+    }
+    cf_cable_sub_plan_dispose(&plan);
+    return rc;
 }
 
 static cf_err channel_perform(cf_cable_loop *loop,
@@ -1061,8 +1149,9 @@ static cf_err channel_perform(cf_cable_loop *loop,
             }
             cf_str verified = {0};
             bool found = false;
-            cf_err rc = verified_stream_name(loop, yyjson_doc_get_root(doc),
-                                             &verified, &found);
+            cf_err rc = verified_stream_name(
+                cf_cable_secret(cf_cable_loop_cable(loop)),
+                yyjson_doc_get_root(doc), &verified, &found);
             cf_str_dispose(&verified);
             yyjson_doc_free(doc);
             return rc;
@@ -1104,56 +1193,63 @@ static size_t subscription_index(cf_cable_loop *loop,
     return (size_t)-1;
 }
 
-/* Undo the validation effects of one attempt so the authorization can be
- * resubmitted from a clean subscription state (the C03 gate's stale-version
- * path). No presence effect can be present: it is deferred until install. */
-static void subscription_rollback_validation(cf_cable_subscription *sub,
-                                             size_t stream_base) {
-    while (sub->stream_count > stream_base) {
-        free(sub->streams[--sub->stream_count]);
+/* Owner thread: parse a subscribe command and install its subscription shell
+ * and channel state, with no model reads. CF_OK with *out == NULL means the
+ * command is ignored with no reply (duplicate identifier, bounds, unknown
+ * class, malformed command), exactly as the reference. */
+cf_err cf_cable_subscribe_begin(cf_cable_loop *loop, cf_span text,
+                                cf_cable_subscription **out) {
+    *out = NULL;
+    if (loop == NULL) return CF_INVALID;
+    yyjson_doc *doc = yyjson_read((const char *)text.ptr, text.len, 0);
+    if (doc == NULL) {
+        cf_cable_log("could not execute command", "malformed json");
+        return CF_OK;
     }
-    channel_state *state = sub->channel;
-    if (state != NULL && state->has_room) {
-        cf_room_dispose(&state->room);
-        state->has_room = false;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (!yyjson_is_obj(root)) {
+        yyjson_doc_free(doc);
+        cf_cable_log("could not execute command", "malformed json");
+        return CF_OK;
     }
-    sub->rejected = false;
-}
-
-static cf_err command_subscribe(cf_cable_loop *loop, yyjson_val *root) {
     yyjson_val *identifier_value = yyjson_obj_get(root, "identifier");
     if (!yyjson_is_str(identifier_value)) {
         cf_cable_log("could not execute command", "missing identifier");
+        yyjson_doc_free(doc);
         return CF_OK;
     }
     cf_span identifier = {
         (const unsigned char *)yyjson_get_str(identifier_value),
         yyjson_get_len(identifier_value)};
-    yyjson_doc *doc = yyjson_read((const char *)identifier.ptr, identifier.len,
-                                  0);
-    if (doc == NULL || !yyjson_is_obj(yyjson_doc_get_root(doc))) {
+    yyjson_doc *idoc =
+        yyjson_read((const char *)identifier.ptr, identifier.len, 0);
+    if (idoc == NULL || !yyjson_is_obj(yyjson_doc_get_root(idoc))) {
         cf_cable_log("could not execute command", "invalid identifier");
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_OK;
     }
     /* A repeated identifier (byte for byte) is ignored without a reply. */
     if (cf_cable_loop_find_subscription(loop, identifier) != NULL) {
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_OK;
     }
     if (cf_cable_loop_subscription_count(loop) >= CF_CABLE_MAX_SUBSCRIPTIONS ||
         identifier.len > CF_CABLE_MAX_IDENTIFIER_BYTES) {
         cf_cable_log("could not execute command", "subscription limit");
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_OK;
     }
-    yyjson_val *params = yyjson_doc_get_root(doc);
+    yyjson_val *params = yyjson_doc_get_root(idoc);
     const char *requested = json_field_str(params, "channel");
     channel_kind kind;
     const char *canonical = NULL;
     if (!class_for(requested, &kind, &canonical)) {
         cf_cable_log("subscription class not found",
                      requested != NULL ? requested : "");
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_OK;
     }
@@ -1161,74 +1257,179 @@ static cf_err command_subscribe(cf_cable_loop *loop, yyjson_val *root) {
         loop, identifier, canonical);
     if (sub == NULL) {
         cf_cable_log("could not execute command", "subscription limit");
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_OK;
     }
     channel_state *state = calloc(1, sizeof *state);
     if (state == NULL) {
         cf_cable_loop_remove_subscription(loop, subscription_index(loop, sub));
+        yyjson_doc_free(idoc);
         yyjson_doc_free(doc);
         return CF_NOMEM;
     }
     state->kind = kind;
     sub->channel = state;
+    yyjson_doc_free(idoc);
+    yyjson_doc_free(doc);
+    *out = sub;
+    return CF_OK;
+}
 
-    /* C03 install gate: the data version is captured before the model reads
-     * and installed before the confirmation. A version that moved during the
-     * read rejects the result and resubmits the authorization once through
-     * this loop's bounded worker queue (the port's existing bounded queue for
-     * the connection worker; a full queue rejects the subscription); a
-     * revoking/revoked loop always rejects. The presence write is deferred
-     * until after install because it advances the version itself. */
+/* Owner thread: the reference reply once the model effects succeeded (or the
+ * C03 gate refused). A refused or rejected subscription is answered with
+ * reject_subscription and removed; a failed callback gets no reply and stays
+ * registered, exactly like connection.rs. */
+void cf_cable_subscribe_reply(cf_cable_loop *loop,
+                              cf_cable_subscription *sub, bool refused,
+                              cf_err rc) {
+    if (loop == NULL || sub == NULL) return;
+    cf_span identifier = {(const unsigned char *)sub->identifier,
+                          sub->identifier_len};
+    if (refused) {
+        (void)cf_cable_loop_send_reject(loop, identifier);
+        cf_cable_loop_remove_subscription(loop, subscription_index(loop, sub));
+        return;
+    }
+    if (rc != CF_OK) {
+        cf_cable_log("could not execute command", sub->class_name);
+        return;
+    }
+    if (sub->rejected) {
+        (void)cf_cable_loop_send_reject(loop, identifier);
+        cf_cable_loop_remove_subscription(loop, subscription_index(loop, sub));
+    } else {
+        (void)cf_cable_loop_send_confirm(loop, identifier);
+    }
+}
+
+/* The synchronous subscribe dispatch: begin + validate + C03 gate (+ one
+ * bounded stale-version resubmission) + apply + deferred presence + reply,
+ * all on the owner thread with the loop's own reader. The production wiring
+ * runs the same pieces across the worker seam (pubsub.c). */
+static cf_err command_subscribe(cf_cable_loop *loop, cf_span text) {
+    cf_cable_subscription *sub = NULL;
+    cf_err rc = cf_cable_subscribe_begin(loop, text, &sub);
+    if (rc != CF_OK || sub == NULL) return rc;
+
     cf_app *app = cf_cable_loop_app(loop);
     cf_cable_revocation *slot = cf_cable_loop_revocation(loop);
+    cf_span identifier = {(const unsigned char *)sub->identifier,
+                          sub->identifier_len};
+    cf_span secret = cf_cable_secret(cf_cable_loop_cable(loop));
     cf_cable_auth_ticket ticket = cf_cable_auth_capture(app);
-    size_t stream_base = sub->stream_count;
-    cf_err rc = channel_subscribed(loop, sub, true);
+    cf_cable_sub_plan plan;
+    rc = cf_cable_subscribe_validate(sub->class_name, cf_cable_loop_reader(loop),
+                                     cf_cable_loop_user_id(loop), identifier,
+                                     secret, &plan);
     bool refused = false;
-    if (rc == CF_OK && !sub->rejected && slot != NULL) {
+    if (rc == CF_OK && !plan.rejected && slot != NULL) {
         bool resubmit = false;
         cf_err gate = cf_cable_auth_install(slot, ticket, &resubmit);
         if (gate == CF_BUSY && resubmit &&
             cf_cable_loop_pending(loop) < CF_CABLE_LOOP_MAX_COMMANDS) {
-            /* Resubmit: fresh version, fresh reads, clean attempt state. */
-            subscription_rollback_validation(sub, stream_base);
+            /* One bounded resubmission: fresh version, fresh reads; nothing
+             * was applied yet, so the attempt state is already clean. */
+            cf_cable_sub_plan_dispose(&plan);
             ticket = cf_cable_auth_capture(app);
-            rc = channel_subscribed(loop, sub, true);
-            if (rc == CF_OK && !sub->rejected) {
+            rc = cf_cable_subscribe_validate(sub->class_name,
+                                             cf_cable_loop_reader(loop),
+                                             cf_cable_loop_user_id(loop),
+                                             identifier, secret, &plan);
+            if (rc == CF_OK && !plan.rejected) {
                 gate = cf_cable_auth_install(slot, ticket, &resubmit);
             }
         }
-        if (rc == CF_OK && !sub->rejected && gate != CF_OK) {
-            refused = true;
-        }
+        if (rc == CF_OK && !plan.rejected && gate != CF_OK) refused = true;
     }
-    if (!refused && rc == CF_OK && !sub->rejected && kind == CH_PRESENCE) {
+    if (rc == CF_OK && !refused) rc = cf_cable_subscribe_apply(sub, &plan);
+    if (rc == CF_OK && !refused && !plan.rejected && plan.presence_present) {
         /* The deferred presence effect runs once the result is installed (or
          * immediately when the loop has no gate, i.e. a test loop). A raise
          * keeps the reference behavior: no reply, the subscription stays
          * registered. */
-        rc = presence_change(loop, sub, MEMBERSHIP_PRESENT);
+        rc = cf_cable_subscribe_presence_effect(
+            cf_cable_loop_app(loop), cf_cable_loop_cable(loop),
+            cf_cable_loop_user_id(loop), plan.room_id);
+    }
+    cf_cable_sub_plan_dispose(&plan);
+    cf_cable_subscribe_reply(loop, sub, refused, rc);
+    return CF_OK;
+}
+
+/* ---- message commands that need model work --------------------------------- */
+
+cf_cable_subscription *cf_cable_message_subscription(cf_cable_loop *loop,
+                                                     cf_span text) {
+    if (loop == NULL) return NULL;
+    yyjson_doc *doc = yyjson_read((const char *)text.ptr, text.len, 0);
+    if (doc == NULL) return NULL;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    cf_cable_subscription *sub = NULL;
+    if (yyjson_is_obj(root)) {
+        yyjson_val *idv = yyjson_obj_get(root, "identifier");
+        if (yyjson_is_str(idv)) {
+            cf_span identifier = {(const unsigned char *)yyjson_get_str(idv),
+                                  yyjson_get_len(idv)};
+            sub = cf_cable_loop_find_subscription(loop, identifier);
+        }
     }
     yyjson_doc_free(doc);
-    if (refused) {
-        size_t index = subscription_index(loop, sub);
-        cf_cable_loop_remove_subscription(loop, index);
-        (void)cf_cable_loop_send_reject(loop, identifier);
-        return CF_OK;
+    return sub;
+}
+
+cf_cable_command_kind cf_cable_command_kind_of(cf_span text) {
+    yyjson_doc *doc = yyjson_read((const char *)text.ptr, text.len, 0);
+    if (doc == NULL) return CF_CABLE_CMD_OTHER;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    cf_cable_command_kind kind = CF_CABLE_CMD_OTHER;
+    if (yyjson_is_obj(root)) {
+        const char *command = json_field_str(root, "command");
+        if (command != NULL && strcmp(command, "subscribe") == 0) {
+            kind = CF_CABLE_CMD_SUBSCRIBE;
+        } else if (command != NULL && strcmp(command, "message") == 0) {
+            yyjson_val *data = yyjson_obj_get(root, "data");
+            if (yyjson_is_str(data)) {
+                yyjson_doc *ddoc = yyjson_read(
+                    yyjson_get_str(data), yyjson_get_len(data), 0);
+                if (ddoc != NULL) {
+                    yyjson_val *droot = yyjson_doc_get_root(ddoc);
+                    if (yyjson_is_obj(droot)) {
+                        yyjson_val *action = yyjson_obj_get(droot, "action");
+                        if (yyjson_is_str(action) &&
+                            strcmp(yyjson_get_str(action), "subscribed") == 0) {
+                            kind = CF_CABLE_CMD_MESSAGE_SUBSCRIBED;
+                        }
+                    }
+                    yyjson_doc_free(ddoc);
+                }
+            }
+        }
     }
-    if (rc != CF_OK) {
-        cf_cable_log("could not execute command", canonical);
-        return CF_OK; /* the subscription stays registered */
+    yyjson_doc_free(doc);
+    return kind;
+}
+
+/* Owner thread, no reads: channel_perform's gating for a message command's
+ * "subscribed" action (channel_perform leaves *handled false for a channel
+ * that ignores the action and for an already-rejected subscription). */
+bool cf_cable_message_subscribed_handled(const cf_cable_subscription *sub) {
+    if (sub == NULL || sub->channel == NULL) return false;
+    channel_state *state = sub->channel;
+    switch (state->kind) {
+    case CH_EMPTY:
+    case CH_TURBO_STREAMS:
+        return false;
+    case CH_READ_ROOMS:
+    case CH_UNREAD_ROOMS:
+        return true;
+    case CH_ROOM:
+    case CH_TYPING:
+    case CH_PRESENCE:
+    case CH_ROOM_MESSAGES:
+        return !sub->rejected;
     }
-    if (sub->rejected) {
-        size_t index = subscription_index(loop, sub);
-        cf_cable_loop_remove_subscription(loop, index);
-        (void)cf_cable_loop_send_reject(loop, identifier);
-    } else {
-        (void)cf_cable_loop_send_confirm(loop, identifier);
-    }
-    return CF_OK;
+    return false;
 }
 
 static cf_err command_unsubscribe(cf_cable_loop *loop, yyjson_val *root) {
@@ -1343,7 +1544,7 @@ cf_err cf_cable_channels_dispatch(cf_cable_loop *loop, cf_span text) {
     if (command == NULL) {
         cf_cable_log("received unrecognized command", "missing command");
     } else if (strcmp(command, "subscribe") == 0) {
-        rc = command_subscribe(loop, root);
+        rc = command_subscribe(loop, text);
     } else if (strcmp(command, "unsubscribe") == 0) {
         rc = command_unsubscribe(loop, root);
     } else if (strcmp(command, "message") == 0) {

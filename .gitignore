@@ -4,3 +4,6 @@ tmp/
 /vendor/src/
 /vendor/build/
 /storage/
+
+# Python bytecode
+__pycache__/

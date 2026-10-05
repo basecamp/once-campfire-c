@@ -90,8 +90,11 @@ static cf_err welcome_last_room_visited(cf_ctx *ctx, int64_t user_id,
     return rc;
 }
 
-/* kit `is_turbo_frame_request`: the first `Turbo-Frame` header, trimmed, is
- * nonempty (header lookup is case-insensitive, first value wins). */
+/* kit `is_turbo_frame_request`: the first `Turbo-Frame` header
+ * (case-insensitive), whose bytes must pass http 1.5.0's
+ * `HeaderValue::to_str` (HTAB or visible ASCII only; any other byte makes the
+ * header read as absent), and whose value must be nonempty after
+ * `str::trim()` (only spaces and tabs here). */
 static bool welcome_turbo_frame_request(const cf_request *request) {
     if (request == NULL) return false;
     static const char target[] = "turbo-frame";
@@ -110,16 +113,14 @@ static bool welcome_turbo_frame_request(const cf_request *request) {
         }
         if (!match) continue;
         cf_span value = request->headers[i].value;
-        size_t begin = 0, end = value.len;
-        while (begin < end && (value.ptr[begin] == ' ' || value.ptr[begin] == '\t' ||
-                               value.ptr[begin] == '\n' || value.ptr[begin] == '\r')) {
-            begin++;
+        bool blank = true;
+        for (size_t k = 0; k < value.len; k++) {
+            unsigned char b = value.ptr[k];
+            /* Not through `HeaderValue::to_str` -> absent. */
+            if (!((b >= 32 && b < 127) || b == '\t')) return false;
+            if (b != ' ' && b != '\t') blank = false;
         }
-        while (end > begin && (value.ptr[end - 1] == ' ' || value.ptr[end - 1] == '\t' ||
-                               value.ptr[end - 1] == '\n' || value.ptr[end - 1] == '\r')) {
-            end--;
-        }
-        return begin < end;
+        return !blank;
     }
     return false;
 }
@@ -160,7 +161,7 @@ static cf_err welcome_render(cf_ctx *ctx, const cf_user *user) {
     if (rc != CF_OK) return rc;
 
     cf_view_layout_model layout = {0};
-    rc = cf_presenter_layout_load(ctx, NULL, &layout);
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
     if (rc != CF_OK) return rc;
 
     cf_view_ctx view_ctx;

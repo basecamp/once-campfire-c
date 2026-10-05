@@ -43,8 +43,10 @@ static cf_err fixture_admit(void *user, cf_http_task *task) {
     return rc == CF_OK ? CF_OK : CF_BUSY;
 }
 
-static cf_err fixture_auth(void *user, const cf_cable_request *request,
+static cf_err fixture_auth(void *user, cf_cable_socket *socket,
+                           const cf_cable_request *request,
                            bool *authenticated, int64_t *user_id) {
+    (void)socket;
     (void)user;
     *authenticated = false;
     *user_id = 0;
@@ -133,8 +135,12 @@ static bool fixture_start(struct loop_fixture *f) {
 }
 
 static void fixture_stop(struct loop_fixture *f) {
+    /* Stop the loop, stop the cable server (which shuts the upgraded sockets
+     * down and releases their lifetime reservations, letting the loop
+     * drain), join the loop, then free the server. */
+    if (f->loop != NULL) cf_http_loop_stop(f->loop);
+    if (f->server != NULL) cf_cable_server_stop(f->server);
     if (f->loop != NULL) {
-        cf_http_loop_stop(f->loop);
         pthread_join(f->thread, NULL);
         cf_http_loop_destroy(f->loop);
         f->loop = NULL;

@@ -94,7 +94,10 @@ static unsigned char fr_lower(unsigned char c) {
     return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
 }
 
-/* `c.is_turbo_frame_request()`: a non-blank `Turbo-Frame` header. */
+/* `c.is_turbo_frame_request()`: the first `Turbo-Frame` header, whose bytes
+ * must pass http 1.5.0's `HeaderValue::to_str` (HTAB or visible ASCII only;
+ * any other byte makes the header read as absent) and be nonempty after
+ * `str::trim()` (only spaces and tabs). */
 static bool fr_turbo_frame_request(const cf_request *request) {
     if (request == NULL) return false;
     cf_span value = {NULL, 0};
@@ -117,11 +120,14 @@ static bool fr_turbo_frame_request(const cf_request *request) {
         }
     }
     if (!found) return false;
+    bool blank = true;
     for (size_t i = 0; i < value.len; i++) {
         unsigned char c = value.ptr[i];
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return true;
+        /* Not through `HeaderValue::to_str` -> the header reads as absent. */
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
     }
-    return false;
+    return !blank;
 }
 
 /* ---- responses ---------------------------------------------------------- */
@@ -199,7 +205,7 @@ static cf_err fr_page_response(cf_ctx *ctx, cf_builder *body, bool frame) {
  * request. */
 static cf_err fr_render_show(cf_ctx *ctx) {
     cf_view_layout_model layout = {0};
-    cf_err rc = cf_presenter_layout_load(ctx, NULL, &layout);
+    cf_err rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
     if (rc != CF_OK) return rc;
     cf_view_ctx view_ctx = {0};
     cf_view_ctx_init(&view_ctx, ctx, &layout);

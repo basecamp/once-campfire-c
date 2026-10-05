@@ -9,6 +9,10 @@
  *    format, respond_to, rendered_format, set_vary_header} with their tests;
  *  - flash/session state: kit/src/session.rs (A00 owns the state container;
  *    A01 owns session persistence and cookie values);
+ *  - method override: kit adapter.rs `rails_middleware -> method_override`
+ *    (via H02's cf_effective_method), applied at context creation so
+ *    parameter parsing, route matching, cf_before_actions/CSRF, the action
+ *    and the reference error rendering all see the effective verb;
  *  - error mapping: 00-contracts.md "Error translation".
  *
  * The context owns cf_ctx.private_state (cookie jar, flash map, cached
@@ -18,6 +22,7 @@
 #include "context.h"
 
 #include "app.h"
+#include "auth.h" /* cf_auth_flash_load (A01's flash hand-off) */
 #include "http/params.h"
 #include "routes.h" /* cf_action_reference_action_not_found (fallback 404) */
 
@@ -78,8 +83,38 @@ static cf_span cf_span_trim_end(cf_span s) {
     return (cf_span){s.ptr, end};
 }
 
+/* HeaderValue::to_str (http 1.5.0 value.rs): a value is readable when every
+ * byte is HTAB or visible ASCII (0x20..=0x7E). Obs-text (>= 0x80, valid UTF-8
+ * included), DEL and the other controls make the read answer the reference's
+ * `None` -- absent, never the raw bytes. */
+static bool cf_header_readable(cf_span value) {
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (c != '\t' && (c < 0x20 || c > 0x7E)) return false;
+    }
+    return true;
+}
+
+/* kit adapter.rs builds the jar from
+ * `headers.get_all(COOKIE).iter().filter_map(|v| v.to_str().ok())`. to_str
+ * also rejects DEL and the C0 controls, but H01's field-value check
+ * (http/request.c is_field_value) already rejects DEL and every control but
+ * HTAB at the protocol layer, so obs-text (>= 0x80) is the only unreadable
+ * byte class a request built by the HTTP loop can carry. Skipping on
+ * obs-text is therefore to_str-exact for every reachable request; control
+ * bytes that only direct request construction can produce keep the raw parse
+ * the pinned Ruby ISSPACE vectors (welcome/presenter `last_room`) exercise. */
+static bool cf_cookie_header_readable(cf_span value) {
+    for (size_t i = 0; i < value.len; i++) {
+        if (value.ptr[i] >= 0x80) return false;
+    }
+    return true;
+}
+
 /* First value of a request header (H01 validates names; comparison is
- * case-insensitive). Returns false when absent. */
+ * case-insensitive), or false when absent. The kit's `request.header()`:
+ * an unreadable first value reads as absent, and a later header with the
+ * same name is not consulted (`HeaderMap::get` returns the first). */
 static bool cf_request_header(const cf_request *req, const char *name,
                               cf_span *out) {
     size_t n = strlen(name);
@@ -97,6 +132,7 @@ static bool cf_request_header(const cf_request *req, const char *name,
             }
         }
         if (same) {
+            if (!cf_header_readable(req->headers[i].value)) return false;
             *out = req->headers[i].value;
             return true;
         }
@@ -774,11 +810,15 @@ static bool cf_host_is_onion(const cf_request *req) {
 
 /* ------------------------------------------------------------- flash map */
 
+/* One FlashHash entry: `consumed` is the reference's `discard` membership —
+ * loaded values are consumed by rendering this request and are not written
+ * back; a later set/now clears it. */
 struct cf_flash_entry {
     char *key;
     size_t key_len;
     char *value;
     size_t value_len;
+    bool consumed;
 };
 
 struct cf_flash_map {
@@ -805,6 +845,40 @@ static void cf_flash_dispose(struct cf_flash_map *map) {
     }
     free(map->entries);
     memset(map, 0, sizeof *map);
+}
+
+/* FlashHash#[]= / #now: replace in place (keeping the insertion position) or
+ * append; `consumed` distinguishes now (true) from set (false). */
+static cf_err cf_flash_store(struct cf_flash_map *map, cf_span key,
+                             cf_span value, bool consumed) {
+    size_t idx = cf_flash_find(map, key);
+    if (idx != SIZE_MAX) {
+        char *copy = cf_span_dup(value);
+        if (copy == NULL) return CF_NOMEM;
+        free(map->entries[idx].value);
+        map->entries[idx].value = copy;
+        map->entries[idx].value_len = value.len;
+        map->entries[idx].consumed = consumed;
+        return CF_OK;
+    }
+    if (map->len == map->cap) {
+        size_t cap = map->cap == 0 ? 4 : map->cap * 2;
+        struct cf_flash_entry *grown =
+            realloc(map->entries, cap * sizeof *grown);
+        if (grown == NULL) return CF_NOMEM;
+        map->entries = grown;
+        map->cap = cap;
+    }
+    char *kcopy = cf_span_dup(key);
+    char *vcopy = cf_span_dup(value);
+    if (kcopy == NULL || vcopy == NULL) {
+        free(kcopy);
+        free(vcopy);
+        return CF_NOMEM;
+    }
+    map->entries[map->len++] =
+        (struct cf_flash_entry){kcopy, key.len, vcopy, value.len, consumed};
+    return CF_OK;
 }
 
 /* --------------------------------------------------------------- formats */
@@ -1574,8 +1648,16 @@ static bool cf_should_apply_vary(bool has_format_param, bool has_accept,
 
 struct cf_ctx_state {
     cf_params *params; /* owned merged body/query/path tree */
+    /* Owned shallow copy of the request when method override changed the
+     * verb: ctx->request points here for the context's lifetime, so no
+     * caller buffer is mutated while every span still borrows the original
+     * request's storage (the H01 task owns that storage until the context is
+     * destroyed). */
+    cf_request effective_request;
     struct cf_cookie_jar jar;
     struct cf_flash_map flash;
+    bool flash_loaded;  /* the session's flash was restored once */
+    bool flash_touched; /* flash accessed: finish commits it (commit_flash) */
     /* cached negotiation */
     bool formats_done;
     cf_err formats_rc;
@@ -1584,6 +1666,11 @@ struct cf_ctx_state {
     bool rendered_set;
     const cf_format *rendered;
     unsigned error_status; /* 0 = none */
+    /* The User-Agent platform A01's before-action stores (cf_ctx_set_platform):
+     * the frozen cf_ctx contract has no field for it, so it lives here with
+     * the rest of the per-context state. */
+    cf_platform platform;
+    bool has_platform;
 };
 
 void cf_ctx_set_error_status(cf_ctx *ctx, unsigned status) {
@@ -1603,6 +1690,40 @@ const cf_params *cf_ctx_params(const cf_ctx *ctx) {
 
 const cf_param *cf_ctx_param(const cf_ctx *ctx, cf_span name) {
     return cf_param_get(cf_ctx_params(ctx), name);
+}
+
+const cf_platform *cf_ctx_platform(const cf_ctx *ctx) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL || !st->has_platform) return NULL;
+    return &st->platform;
+}
+
+cf_err cf_ctx_set_platform(cf_ctx *ctx, const cf_platform *platform) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL) return CF_INVALID;
+    if (platform == NULL) {
+        memset(&st->platform, 0, sizeof st->platform);
+        st->has_platform = false;
+        return CF_OK;
+    }
+    /* The value copy is self-contained except for the spans the parser
+     * synthesized, which point at the *source* struct's text buffers (they
+     * are always stored at offset 0 of one of them).  Rebase those onto the
+     * stored copy's own buffers; every other span borrows the request or a
+     * literal. */
+    st->platform = *platform;
+    if (st->platform.browser_version.ptr ==
+        (const unsigned char *)platform->version_text) {
+        st->platform.browser_version.ptr =
+            (const unsigned char *)st->platform.version_text;
+    }
+    if (st->platform.operating_system.ptr ==
+        (const unsigned char *)platform->os_text) {
+        st->platform.operating_system.ptr =
+            (const unsigned char *)st->platform.os_text;
+    }
+    st->has_platform = true;
+    return CF_OK;
 }
 
 static bool cf_ctx_format_param(const cf_ctx *ctx, cf_span *out) {
@@ -1842,26 +1963,52 @@ cf_err cf_ctx_create(cf_ctx *ctx, cf_app *app, cf_db *reader,
     memset(ctx, 0, sizeof *ctx);
     ctx->app = app;
     ctx->reader = reader;
-    ctx->request = request;
     ctx->response = response;
 
     struct cf_ctx_state *st = calloc(1, sizeof *st);
     if (st == NULL) return CF_NOMEM;
     ctx->private_state = st;
 
-    for (size_t i = 0; i < request->header_count; i++) {
-        if (!cf_span_ieq_lit(request->headers[i].name, "cookie")) continue;
-        cf_err rc = cf_jar_parse_cookie_header(&st->jar,
-                                               request->headers[i].value);
+    /* Rack::MethodOverride (kit adapter.rs `method_override`, middleware
+     * before routing and CSRF): a POST's form `_method` field, else the
+     * X-HTTP-Method-Override header, replaces the verb when it names one of
+     * the reference's overridable methods. adapter.rs mutates `parts.method`
+     * and keeps the wire verb in `original_method`; here the caller's
+     * (const) request is never touched and a context-owned shallow copy
+     * carries the effective verb instead, so parameter parsing, routing,
+     * cf_before_actions/CSRF, the actions and the error rendering all
+     * observe it. A malformed form body returns CF_INVALID, which
+     * cf_ctx_process maps to 400, the status adapter.rs answers for a body
+     * parse error. */
+    cf_err rc = CF_OK;
+    const cf_request *req = request;
+    cf_method effective = request->method;
+    rc = cf_effective_method(request, &effective);
+    if (rc != CF_OK) return rc;
+    if (effective != request->method) {
+        st->effective_request = *request;
+        st->effective_request.method = effective;
+        req = &st->effective_request;
+    }
+    ctx->request = req;
+
+    for (size_t i = 0; i < req->header_count; i++) {
+        if (!cf_span_ieq_lit(req->headers[i].name, "cookie")) continue;
+        /* kit adapter.rs: `get_all(COOKIE).iter().filter_map(to_str)`: an
+         * unreadable (obs-text) Cookie value is skipped and later values are
+         * still parsed, so a readable second Cookie header can supply a name
+         * an unreadable first one carried. */
+        if (!cf_cookie_header_readable(req->headers[i].value)) continue;
+        rc = cf_jar_parse_cookie_header(&st->jar, req->headers[i].value);
         if (rc != CF_OK) return rc;
     }
 
-    cf_err rc = cf_params_parse(request, &st->params);
+    rc = cf_params_parse(req, &st->params);
     if (rc != CF_OK) return rc;
 
     cf_route_match match;
     memset(&match, 0, sizeof match);
-    rc = cf_route_match_request(request, &match);
+    rc = cf_route_match_request(req, &match);
     if (rc != CF_OK) return rc;
     ctx->route = match;
     if (ctx->route.path_params != NULL) {
@@ -1913,41 +2060,59 @@ cf_err cf_ctx_cookie_get(const cf_ctx *ctx, cf_span name, cf_span *out) {
     return CF_OK;
 }
 
-cf_err cf_ctx_flash_set(cf_ctx *ctx, cf_span key, cf_span value) {
+/* flash(), loaded lazily from the encrypted session on first use. The guard
+ * is set before the A01 call: cf_auth_flash_load restores values through
+ * cf_ctx_flash_now, which must not re-enter the loader. */
+static cf_err cf_ctx_flash_ensure_loaded(cf_ctx *ctx) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL) return CF_INVALID;
+    if (st->flash_loaded) return CF_OK;
+    st->flash_loaded = true;
+    return cf_auth_flash_load(ctx);
+}
+
+static cf_err cf_ctx_flash_store(cf_ctx *ctx, cf_span key, cf_span value,
+                                 bool consumed) {
     struct cf_ctx_state *st = cf_ctx_state(ctx);
     if (st == NULL || key.len == 0) return CF_INVALID;
+    cf_err rc = cf_ctx_flash_ensure_loaded(ctx);
+    if (rc != CF_OK) return rc;
+    rc = cf_flash_store(&st->flash, key, value, consumed);
+    if (rc == CF_OK) st->flash_touched = true;
+    return rc;
+}
+
+cf_err cf_ctx_flash_set(cf_ctx *ctx, cf_span key, cf_span value) {
+    return cf_ctx_flash_store(ctx, key, value, false);
+}
+
+cf_err cf_ctx_flash_now(cf_ctx *ctx, cf_span key, cf_span value) {
+    return cf_ctx_flash_store(ctx, key, value, true);
+}
+
+cf_err cf_ctx_flash_delete(cf_ctx *ctx, cf_span key) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL || key.len == 0) return CF_INVALID;
+    cf_err rc = cf_ctx_flash_ensure_loaded(ctx);
+    if (rc != CF_OK) return rc;
+    st->flash_touched = true;
     size_t idx = cf_flash_find(&st->flash, key);
-    if (idx != SIZE_MAX) {
-        char *copy = cf_span_dup(value);
-        if (copy == NULL) return CF_NOMEM;
-        free(st->flash.entries[idx].value);
-        st->flash.entries[idx].value = copy;
-        st->flash.entries[idx].value_len = value.len;
-        return CF_OK;
-    }
-    if (st->flash.len == st->flash.cap) {
-        size_t cap = st->flash.cap == 0 ? 4 : st->flash.cap * 2;
-        struct cf_flash_entry *grown =
-            realloc(st->flash.entries, cap * sizeof *grown);
-        if (grown == NULL) return CF_NOMEM;
-        st->flash.entries = grown;
-        st->flash.cap = cap;
-    }
-    char *kcopy = cf_span_dup(key);
-    char *vcopy = cf_span_dup(value);
-    if (kcopy == NULL || vcopy == NULL) {
-        free(kcopy);
-        free(vcopy);
-        return CF_NOMEM;
-    }
-    st->flash.entries[st->flash.len++] =
-        (struct cf_flash_entry){kcopy, key.len, vcopy, value.len};
+    if (idx == SIZE_MAX) return CF_OK; /* FlashHash#delete of an absent key */
+    free(st->flash.entries[idx].key);
+    free(st->flash.entries[idx].value);
+    /* Shift left: insertion order is observable. */
+    memmove(&st->flash.entries[idx], &st->flash.entries[idx + 1],
+            (st->flash.len - idx - 1) * sizeof *st->flash.entries);
+    st->flash.len--;
     return CF_OK;
 }
 
 cf_err cf_ctx_flash_get(const cf_ctx *ctx, cf_span key, cf_span *out) {
     struct cf_ctx_state *st = cf_ctx_state(ctx);
     if (st == NULL || out == NULL) return CF_INVALID;
+    cf_err rc = cf_ctx_flash_ensure_loaded((cf_ctx *)ctx);
+    if (rc != CF_OK) return rc;
+    st->flash_touched = true;
     size_t idx = cf_flash_find(&st->flash, key);
     if (idx == SIZE_MAX) return CF_NOT_FOUND;
     *out = (cf_span){(const unsigned char *)st->flash.entries[idx].value,
@@ -1955,9 +2120,60 @@ cf_err cf_ctx_flash_get(const cf_ctx *ctx, cf_span key, cf_span *out) {
     return CF_OK;
 }
 
+static void cf_flash_entry_out(const struct cf_flash_entry *entry,
+                               cf_span *key, cf_span *value) {
+    if (key != NULL) {
+        *key = (cf_span){(const unsigned char *)entry->key, entry->key_len};
+    }
+    if (value != NULL) {
+        *value = (cf_span){(const unsigned char *)entry->value,
+                           entry->value_len};
+    }
+}
+
+bool cf_ctx_flash_at(const cf_ctx *ctx, size_t index, cf_span *key,
+                     cf_span *value) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL) return false;
+    if (cf_ctx_flash_ensure_loaded((cf_ctx *)ctx) != CF_OK) return false;
+    st->flash_touched = true;
+    if (index >= st->flash.len) return false;
+    cf_flash_entry_out(&st->flash.entries[index], key, value);
+    return true;
+}
+
+bool cf_ctx_flash_pending_at(const cf_ctx *ctx, size_t index, cf_span *key,
+                             cf_span *value) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL) return false;
+    for (size_t i = 0; i < st->flash.len; i++) {
+        if (st->flash.entries[i].consumed) continue;
+        if (index == 0) {
+            cf_flash_entry_out(&st->flash.entries[i], key, value);
+            return true;
+        }
+        index--;
+    }
+    return false;
+}
+
+void cf_ctx_flash_reset(cf_ctx *ctx) {
+    struct cf_ctx_state *st = cf_ctx_state(ctx);
+    if (st == NULL) return;
+    cf_flash_dispose(&st->flash);
+    st->flash_loaded = true;
+    st->flash_touched = false;
+}
+
 cf_err cf_finish_cookies(cf_ctx *ctx) {
     struct cf_ctx_state *st = cf_ctx_state(ctx);
     if (st == NULL || ctx->response == NULL) return CF_INVALID;
+    if (st->flash_touched) {
+        /* commit_flash, before the jar's headers are written (kit ctx.rs
+         * commit(): commit_flash, commit_session, set_cookie_headers). */
+        cf_err flash_rc = cf_auth_flash_persist(ctx);
+        if (flash_rc != CF_OK) return flash_rc;
+    }
     bool ssl = ctx->request->tls;
     bool onion = cf_host_is_onion(ctx->request);
 
@@ -2026,12 +2242,30 @@ static unsigned cf_generic_status(cf_err err) {
     }
 }
 
+/* An error raised by an action answers a *fresh* response: the reference
+ * (kit adapter.rs `dispatch` -> `Ctx::finish`) sends `Err(error)` straight to
+ * `error_response`, which renders ErrorPages::render without merging the
+ * `Ctx::headers` map the before-actions wrote (X-Version/X-Rev among them);
+ * only `Ok(response)` and `Err(Error::Halt(response))` reach the merge loop.
+ * So X-Version/X-Rev set by the chain do NOT survive onto a mapped 404/406,
+ * and the unmatched-route 404 (adapter.rs `not_found`) never ran the chain at
+ * all.  Rebuilding here is the faithful mapping; see the A01-A02 r2 evidence
+ * for the pin lines. */
 static cf_err cf_finish_mapped(cf_ctx *ctx, cf_err err) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
     unsigned status = 0;
     struct cf_ctx_state *st = cf_ctx_state(ctx);
     if (st != NULL && st->error_status != 0) status = st->error_status;
     if (status == 0) status = cf_generic_status(err);
+    if (status == 404) {
+        /* The reference renders every action-level 404 through
+         * exceptions::render (public/404.html, or the format's hash body for
+         * JSON/XML/YAML): reuse H03's reference handler, the same body the
+         * unmatched-route path serves. */
+        cf_response_dispose(ctx->response);
+        cf_response_init(ctx->response);
+        return cf_action_reference_action_not_found(ctx);
+    }
     if (status >= 500) {
         /* Sanitized log: operation name and route id only. */
         fprintf(stderr, "campfire: dispatch: %s (route=%u)\n",
@@ -2058,6 +2292,23 @@ cf_err cf_dispatch(cf_ctx *ctx) {
     return CF_OK;
 }
 
+/* H01 selects HEAD body suppression from the request object it serializes
+ * (`head = req->method == CF_HEAD`, Content-Length from the response body in
+ * cf_http_response_serialize), so an override to HEAD must be visible on that
+ * object, exactly as adapter.rs makes it visible by replacing `parts.method`
+ * on the request the server serializes. Every other verb is invisible after
+ * dispatch (output.c reads only `method` for HEAD and `close_after`), so only
+ * HEAD is recorded; `original_method` keeps the wire verb. The object is
+ * H01's mutable task storage (cf_http_task_request borrows it for the app);
+ * this is the one field cf_ctx_process writes, and it does so for the mapped
+ * error/404 paths too because they reach the same serializer. */
+static void cf_ctx_record_effective_head(const cf_ctx *ctx,
+                                         const cf_request *request) {
+    if (ctx->request == NULL || request == NULL) return;
+    if (ctx->request->method != CF_HEAD || request->method == CF_HEAD) return;
+    ((cf_request *)request)->method = CF_HEAD;
+}
+
 cf_err cf_ctx_process(cf_app *app, cf_db *reader, const cf_request *request,
                       cf_response *response) {
     if (response == NULL) return CF_INVALID;
@@ -2066,6 +2317,7 @@ cf_err cf_ctx_process(cf_app *app, cf_db *reader, const cf_request *request,
 
     cf_ctx ctx;
     cf_err rc = cf_ctx_create(&ctx, app, reader, request, response);
+    cf_ctx_record_effective_head(&ctx, request);
     if (rc != CF_OK) {
         if (rc == CF_NOT_FOUND) {
             /* Unmatched route: the reference's public 404 (the same handler

@@ -17,6 +17,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/epoll.h>
+#include <unistd.h>
 
 /* ------------------------------------------------------------ validators */
 
@@ -581,6 +582,7 @@ static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
     cf_http_upgrade_request req;
     memset(&req, 0, sizeof req);
     req.fd = conn->fd;
+    req.loop_index = loop->cfg.loop_index;
     req.method = conn->method;
     req.target = (cf_span){hb + conn->off_target, conn->len_target};
     req.path = (cf_span){hb + conn->off_path, conn->len_path};
@@ -625,24 +627,64 @@ static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
         cf_http_upgrade_taken_fn taken = req.taken;
         void *taken_user = req.taken_user;
         cf_builder_dispose(&req.reply);
-        /* The descriptor leaves HTTP without being closed. */
-        if (conn->fd >= 0) {
-            if (conn->registered) {
-                (void)epoll_ctl(loop->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
-                conn->registered = false;
-            }
-            conn->fd = -1;
-            if (loop->active_conns != 0) loop->active_conns--;
+        /* The descriptor leaves HTTP's read/write state machine without being
+         * closed. The connection slot stays reserved for the upgraded
+         * connection's whole lifetime: the lease is an admitted (never
+         * answered) task whose abandon completion, processed on this loop
+         * thread, is the single owner-side point that closes the fd and
+         * releases the slot. If the lease cannot be allocated, the old
+         * no-reservation detach applies: the hook gets the fd with lease ==
+         * NULL and owns its close. */
+        if (conn->fd >= 0 && conn->registered) {
+            (void)epoll_ctl(loop->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+            conn->registered = false;
         }
-        cf_http_conn_close(loop, conn);
-        /* Only now is the fd free of HTTP state: the hook may close, reuse
-         * or hand it to another owner (a connection thread). */
-        if (taken != NULL) (void)taken(taken_user);
+        struct cf_http_task *task = calloc(1, sizeof *task);
+        cf_http_upgrade_lease *lease = NULL;
+        if (task != NULL && conn->fd >= 0) {
+            task->loop = loop;
+            task->conn = conn->id;
+            task->sequence = ++conn->sequence;
+            cf_response_init(&task->response);
+            atomic_init(&task->submit_state, 0);
+            conn->pending_task = task;
+            conn->state = CF_HTTP_STATE_WORKING;
+            conn->deadline_kind = CF_HTTP_DL_NONE;
+            conn->deadline_ms = 0;
+            loop->outstanding_tasks++;
+            lease = (cf_http_upgrade_lease *)task;
+        } else {
+            free(task);
+            /* No reservation is possible: the upgrade is refused (the
+             * connection is retired and its fd closed here) rather than
+             * proceeding without lifetime admission. */
+            if (conn->fd >= 0) {
+                close(conn->fd);
+                conn->fd = -1;
+                if (loop->active_conns != 0) loop->active_conns--;
+            }
+            loop->counters.errors++;
+            cf_http_conn_close(loop, conn);
+            lease = CF_HTTP_UPGRADE_REJECTED;
+        }
+        /* Only now is the fd free of HTTP read/write state: the hook may use
+         * or hand it to another owner (the cable transport). */
+        if (taken != NULL) (void)taken(taken_user, lease);
         return result;
     }
 
     cf_builder_dispose(&req.reply);
     return CF_HTTP_UPGRADE_PASS;
+}
+
+/* Release a TAKEN upgrade's lifetime reservation: abandon the never-answered
+ * lease task, whose completion (on the loop thread) closes the descriptor and
+ * frees the connection slot exactly once. Safe from any thread; the
+ * submit_state CAS inside cf_http_task_abandon makes a second release a
+ * no-op, so "released exactly once" cannot double-close. */
+void cf_http_upgrade_release(cf_http_upgrade_lease *lease) {
+    if (lease == NULL) return;
+    cf_http_task_abandon((struct cf_http_task *)lease);
 }
 
 static void offer_request(struct cf_http_conn *conn) {

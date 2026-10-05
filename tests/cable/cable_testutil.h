@@ -385,10 +385,11 @@ typedef struct {
     int text_count;
 } ct_capture;
 
-static inline cf_err ct_auth_capture(void *user,
+static inline cf_err ct_auth_capture(void *user, cf_cable_socket *socket,
                                      const cf_cable_request *request,
                                      bool *authenticated, int64_t *user_id) {
     ct_capture *cap = user;
+    (void)socket;
     (void)request;
     cap->auth_calls++;
     *authenticated = cap->authenticated;

@@ -7,10 +7,18 @@ list, or if a repo-local external reference is missing or changed.
 
 All required test inputs are committed: the route/schema development contracts
 are copied byte for byte into tests/fixtures/contracts/ and listed as
-role="contract-input" entries, so the default run succeeds in a clean checkout
-without docs/devel.  tmp/ external references are verified when the read-only
-oracle tree is present and reported as absent otherwise (tmp/ is not required
-at runtime); --require-tmp makes their absence fatal.
+role="contract-input" entries, the UA corpus is a normal listed entry, and the
+asset tree is listed by delegation.  A role="delegated-subtree" entry pins one
+committed inventory file (fixture == delegated_manifest) that records every
+other file under the named `subtree` with its sha256 (and bytes where
+recorded).  The verifier hashes that inventory like any other entry and then
+checks every file under the subtree against it, so an added, removed or
+altered asset file fails until the delegated inventory and its root pin are
+updated -- without duplicating hundreds of asset entries here.  The default
+run therefore succeeds in a clean checkout without docs/devel.  tmp/ external
+references are verified when the read-only oracle tree is present and reported
+as absent otherwise (tmp/ is not required at runtime); --require-tmp makes
+their absence fatal.
 
 Usage:
     python3 tests/fixtures/tools/verify_manifest.py [--require-tmp]
@@ -83,8 +91,133 @@ def main() -> int:
             if not entry.get(key):
                 errors.append(f"entry: contract input {entry['fixture']} lacks {key}")
 
+    # Delegated subtrees: a role="delegated-subtree" entry in this manifest
+    # pins one committed inventory file (entry["fixture"], equal to
+    # entry["delegated_manifest"]), and the inventory lists every other file
+    # under entry["subtree"] with its sha256 (bytes where recorded).  This
+    # keeps large generated trees out of this manifest without skipping them:
+    # an added, removed or altered file under the subtree fails here.
+    delegated_prefixes: list[str] = []
+    delegated_checked = 0
+    delegated_bytes = 0
+    fixtures_root = FIXTURES.resolve()
+
+    for entry in manifest["entries"]:
+        if entry.get("role") != "delegated-subtree":
+            continue
+        subtree_rel = entry.get("subtree")
+        if not subtree_rel or not entry.get("delegated_manifest"):
+            errors.append(
+                f"delegated: {entry.get('fixture')} lacks subtree/delegated_manifest"
+            )
+            continue
+        subtree_dir = (REPO_ROOT / subtree_rel).resolve()
+        manifest_path = (REPO_ROOT / entry["delegated_manifest"]).resolve()
+        if not (subtree_dir.is_relative_to(fixtures_root) and subtree_dir != fixtures_root):
+            errors.append(
+                f"delegated: subtree {subtree_rel} must be a strict subdirectory "
+                "of tests/fixtures/"
+            )
+            continue
+        if not (manifest_path.is_relative_to(subtree_dir) and manifest_path.is_file()):
+            errors.append(
+                f"delegated: {entry['delegated_manifest']} is not a file inside "
+                f"{subtree_rel}"
+            )
+            continue
+        if entry["fixture"] != entry["delegated_manifest"]:
+            errors.append(
+                f"delegated: {entry['fixture']} must name its delegated_manifest "
+                f"{entry['delegated_manifest']}"
+            )
+        manifest_rel = manifest_path.relative_to(REPO_ROOT).as_posix()
+        delegated_prefixes.append(subtree_dir.relative_to(REPO_ROOT).as_posix() + "/")
+
+        try:
+            inventory = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"delegated: cannot read {manifest_rel}: {exc}")
+            continue
+
+        records: dict[str, tuple[str, int | None]] = {}
+
+        def record(rel: object, digest: object, size: object, where: str) -> None:
+            if not isinstance(rel, str) or not rel:
+                errors.append(f"delegated: {manifest_rel} {where} record lacks a fixture path")
+                return
+            full = (REPO_ROOT / rel).resolve()
+            if not full.is_relative_to(subtree_dir):
+                errors.append(
+                    f"delegated: {manifest_rel} {where} record {rel} is outside "
+                    f"{subtree_rel}"
+                )
+                return
+            if not isinstance(digest, str) or len(digest) != 64:
+                errors.append(f"delegated: {manifest_rel} {where} record {rel} lacks a sha256")
+                return
+            if size is not None and not isinstance(size, int):
+                errors.append(
+                    f"delegated: {manifest_rel} {where} record {rel} has non-integer bytes"
+                )
+                return
+            previous = records.get(rel)
+            if previous is not None:
+                prev_digest, prev_size = previous
+                if prev_digest != digest:
+                    errors.append(f"delegated: {manifest_rel} records {rel} inconsistently")
+                    return
+                if prev_size is not None and size is not None and prev_size != size:
+                    errors.append(f"delegated: {manifest_rel} records {rel} inconsistently")
+                    return
+                if prev_size is not None:
+                    size = prev_size
+            records[rel] = (digest, size)
+
+        for item in inventory.get("entries", []):
+            record(item.get("fixture"), item.get("sha256"), item.get("bytes"), "entries")
+        for section in ("reference_files", "auxiliary_files"):
+            for item in inventory.get(section, []):
+                record(item.get("fixture"), item.get("sha256"), item.get("bytes"), section)
+        importmap = inventory.get("importmap", {})
+        for rel_key, digest_key in (
+            ("tags_fixture", "tags_sha256"),
+            ("json_fixture", "json_sha256"),
+            ("rb_fixture", "rb_sha256"),
+        ):
+            if importmap.get(rel_key):
+                record(importmap[rel_key], importmap.get(digest_key), None, "importmap")
+
+        actual: dict[str, Path] = {}
+        for path in sorted(subtree_dir.rglob("*")):
+            if path.is_file():
+                actual[path.relative_to(REPO_ROOT).as_posix()] = path
+        for rel in sorted(records):
+            if rel not in actual:
+                errors.append(f"delegated: missing fixture {rel} (recorded in {manifest_rel})")
+        for rel, path in sorted(actual.items()):
+            if rel == manifest_rel:
+                # The inventory file itself is pinned by its root entry.
+                continue
+            if rel not in records:
+                errors.append(f"delegated: unlisted file under {subtree_rel}: {rel}")
+                continue
+            digest, size = records[rel]
+            data_len = path.stat().st_size
+            actual_digest = sha256_file(path)
+            if actual_digest != digest:
+                errors.append(
+                    f"delegated: {rel} sha256 {actual_digest} != {manifest_rel} {digest}"
+                )
+            if size is not None and data_len != size:
+                errors.append(
+                    f"delegated: {rel} size {data_len} != {manifest_rel} {size}"
+                )
+            delegated_checked += 1
+            delegated_bytes += data_len
+
     # The fixture tree must contain exactly the manifest-listed bytes (plus the
-    # manifest and this tools/ directory).
+    # manifest, this tools/ directory, and the delegated subtrees, which are
+    # checked file by file above).
     listed = {e["fixture"] for e in manifest["entries"]}
     for path in sorted(FIXTURES.rglob("*")):
         if path.is_dir():
@@ -92,8 +225,11 @@ def main() -> int:
         rel = path.relative_to(REPO_ROOT).as_posix()
         if rel == "tests/fixtures/MANIFEST.json" or rel.startswith("tests/fixtures/tools/"):
             continue
-        if rel not in listed:
-            errors.append(f"unlisted file under tests/fixtures/: {rel}")
+        if rel in listed:
+            continue
+        if any(rel.startswith(prefix) for prefix in delegated_prefixes):
+            continue
+        errors.append(f"unlisted file under tests/fixtures/: {rel}")
 
     tmp_present = (REPO_ROOT / "tmp/rust-ref").is_dir()
     external_checked = 0
@@ -134,6 +270,8 @@ def main() -> int:
         f"checked {checked} files, {bytes_total} bytes "
         f"(fixtures {totals['fixture_files']}, seed {totals['seed_files']}); "
         f"contract inputs: {contract_inputs}; "
+        f"delegated subtrees: {len(delegated_prefixes)} "
+        f"({delegated_checked} files, {delegated_bytes} bytes); "
         f"external file references hashed: {external_checked}; "
         f"tmp/rust-ref present: {tmp_present}"
     )

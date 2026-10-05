@@ -77,6 +77,18 @@ static bool cf_request_header(const cf_request *req, const char *name,
     return false;
 }
 
+/* http 1.5.0 HeaderValue::to_str: HTAB or 0x20..=0x7E.  campfire app.rs
+ * reads Accept-Encoding through `headers.get(..).and_then(|v| v.to_str().ok())`,
+ * so an unreadable value is None and static serving falls back to the
+ * identity file (`accept_encoding.unwrap_or("")`). */
+static bool cf_header_value_readable(cf_span value) {
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (c != '\t' && (c < 0x20 || c > 0x7E)) return false;
+    }
+    return true;
+}
+
 static int cf_hex_value(unsigned char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -410,7 +422,8 @@ cf_err cf_assets_serve(const cf_request *request, cf_response *response,
 
     cf_span accept;
     char *accept_encoding = NULL;
-    if (cf_request_header(request, "accept-encoding", &accept)) {
+    if (cf_request_header(request, "accept-encoding", &accept) &&
+        cf_header_value_readable(accept)) {
         accept_encoding = malloc(accept.len + 1);
         if (accept_encoding == NULL) {
             free(clean);

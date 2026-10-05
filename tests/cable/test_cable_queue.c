@@ -21,8 +21,10 @@ static cf_err flood_on_text(void *user, cf_cable_socket *socket,
     return CF_OK;
 }
 
-static cf_err queue_auth(void *user, const cf_cable_request *request,
+static cf_err queue_auth(void *user, cf_cable_socket *socket,
+                         const cf_cable_request *request,
                          bool *authenticated, int64_t *user_id) {
+    (void)socket;
     (void)user;
     (void)request;
     *authenticated = true;

@@ -359,9 +359,11 @@ CF_TEST(bad_utf8_path_params_are_400_end_to_end) {
     CF_CHECK(resp.status == 400);
     CF_CHECK(resp.body_kind == CF_BODY_NONE);
     cf_response_dispose(&resp);
-    /* A malformed escape is literal and still routes. */
+    /* A malformed escape is literal and still routes; rooms#show is bound
+     * now, so the request runs the action and answers its redirect (no
+     * session => sign-in redirect), not the development 501. */
     run_get(app, "/rooms/%zz", NULL, &resp);
-    CF_CHECK(resp.status == 501); /* rooms#show has not landed */
+    CF_CHECK(resp.status == 302);
     cf_response_dispose(&resp);
     cf_app_destroy(app);
 }

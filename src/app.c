@@ -13,6 +13,7 @@
 #include "app.h"
 #include "app_internal.h"
 
+#include "auth.h" /* bounded crypto queue: start/stop wiring */
 #include "config.h"
 #include "context.h"
 #include "db/db_internal.h"
@@ -30,6 +31,17 @@ struct cf_worker {
     bool active;
 };
 
+/* One entry of the bounded request pool: either an HTTP task (admission) or a
+ * submitted closure (cf_app_submit_worker). Both count against the same
+ * CF_REQUEST_SLOTS budget through pool_admitted. */
+enum cf_pool_item_kind { CF_POOL_TASK = 0, CF_POOL_CLOSURE };
+struct cf_pool_item {
+    int kind;
+    cf_http_task *task;
+    void (*fn)(void *user);
+    void *user;
+};
+
 /* One request worker: its own reader connection and start handshake. */
 struct cf_request_worker {
     cf_app *app;
@@ -45,6 +57,7 @@ struct cf_request_worker {
 
 struct cf_app {
     cf_config *config;               /* owned; freed only after workers join */
+    cf_cable *cable;                 /* borrowed C02 cable (cf_app_set_cable) */
     _Atomic uint64_t data_version;   /* 06: initialized to 1, one writer */
     _Atomic bool stop_requested;
     pthread_mutex_t version_mutex;   /* cache/version mutex; always exists */
@@ -52,12 +65,15 @@ struct cf_app {
     struct cf_worker workers[CF_APP_MAX_WORKERS];
     size_t worker_count;
 
-    /* A00 request pool: bounded by CF_REQUEST_SLOTS (running + queued). */
+    /* A00 request pool: bounded by CF_REQUEST_SLOTS (running + queued). HTTP
+     * tasks and cf_app_submit_worker closures share this one queue and its
+     * accounting. */
     bool serving_started;
     bool writer_started;
+    bool crypto_started; /* this app started the process-wide crypto queue */
     pthread_mutex_t pool_mutex;
     pthread_cond_t pool_cv;
-    cf_http_task **pool_queue;
+    struct cf_pool_item *pool_queue;
     size_t pool_cap, pool_head, pool_count, pool_admitted;
     struct cf_request_worker *rw;
     size_t rw_count;
@@ -135,6 +151,12 @@ void cf_app_destroy(cf_app *app) {
     if (app == NULL) return;
     cf_app_request_stop(app);
     cf_app_join_workers(app); /* no worker may reference app/config after this */
+    if (app->crypto_started) {
+        /* Releases this app's reference; the last one drains and joins after
+         * every submitter has been joined. */
+        cf_crypto_queue_stop();
+        app->crypto_started = false;
+    }
     cf_writer_stop(app);      /* no-op when the writer was never started */
     app->writer_started = false;
     cf_app_pool_dispose(app);
@@ -150,6 +172,16 @@ void cf_app_destroy(cf_app *app) {
 const cf_config *cf_app_config(const cf_app *app) {
     if (app == NULL) return NULL;
     return app->config;
+}
+
+void cf_app_set_cable(cf_app *app, cf_cable *cable) {
+    if (app == NULL) return;
+    app->cable = cable;
+}
+
+cf_cable *cf_app_cable(const cf_app *app) {
+    if (app == NULL) return NULL;
+    return app->cable;
 }
 
 cf_err cf_app_register_worker(cf_app *app, pthread_t thread) {
@@ -260,8 +292,7 @@ static void cf_request_worker_ready(struct cf_request_worker *w, cf_err err) {
  * exactly once; stale completions are H01's checks, so the worker never
  * touches the task after either call. */
 static void cf_request_worker_run_task(cf_app *app, cf_db *reader,
-                                       cf_http_task *task) {
-    uint64_t sequence = cf_http_task_sequence(task); /* borrowed accessor */
+                                       cf_http_task *task) {    uint64_t sequence = cf_http_task_sequence(task); /* borrowed accessor */
     cf_response response;
     cf_response_init(&response);
     const cf_request *request = cf_http_task_request(task);
@@ -299,6 +330,12 @@ static void cf_request_worker_run_task(cf_app *app, cf_db *reader,
                           memory_order_relaxed);
 }
 
+/* The calling request worker's reader (cf_app_worker_reader). A worker sets
+ * it once its connection is open and clears it before closing, so a
+ * submitted closure always sees the worker's own connection, never the
+ * reactor's or another thread's. */
+static _Thread_local cf_db *g_worker_reader;
+
 static void *cf_request_worker_main(void *arg) {
     struct cf_request_worker *w = arg;
     cf_app *app = w->app;
@@ -317,6 +354,7 @@ static void *cf_request_worker_main(void *arg) {
         return NULL;
     }
     w->reader = reader;
+    g_worker_reader = reader;
     cf_request_worker_ready(w, CF_OK);
 
     for (;;) {
@@ -328,18 +366,27 @@ static void *cf_request_worker_main(void *arg) {
             pthread_mutex_unlock(&app->pool_mutex);
             break;
         }
-        cf_http_task *task = app->pool_queue[app->pool_head];
+        struct cf_pool_item item = app->pool_queue[app->pool_head];
         app->pool_head = (app->pool_head + 1) % app->pool_cap;
         app->pool_count--;
         bool stopping = cf_app_stop_requested(app);
         pthread_mutex_unlock(&app->pool_mutex);
 
-        if (stopping) {
-            /* Shutdown: queued work is discarded without losing its
-             * completion (CORE-04). */
-            cf_http_task_abandon(task);
+        if (item.kind == CF_POOL_TASK) {
+            if (stopping) {
+                /* Shutdown: queued HTTP work is discarded without losing its
+                 * completion (CORE-04). */
+                cf_http_task_abandon(item.task);
+            } else {
+                cf_request_worker_run_task(app, reader, item.task);
+            }
         } else {
-            cf_request_worker_run_task(app, reader, task);
+            /* A submitted closure always runs exactly once: even during
+             * shutdown it must complete so its own reference/state is
+             * released (cf_app_submit_worker). It runs on this worker with
+             * this worker's reader and is expected to be cancellation-aware
+             * by checking its owner's state. */
+            item.fn(item.user);
         }
 
         pthread_mutex_lock(&app->pool_mutex);
@@ -347,10 +394,13 @@ static void *cf_request_worker_main(void *arg) {
         pthread_mutex_unlock(&app->pool_mutex);
     }
 
+    g_worker_reader = NULL;
     cf_db_close(w->reader);
     w->reader = NULL;
     return NULL;
 }
+
+cf_db *cf_app_worker_reader(void) { return g_worker_reader; }
 
 cf_err cf_app_start(cf_app *app) {
     if (app == NULL) return CF_INVALID;
@@ -362,6 +412,18 @@ cf_err cf_app_start(cf_app *app) {
     cf_err rc = cf_writer_start(app, config);
     if (rc != CF_OK) return rc;
     app->writer_started = true;
+
+    /* The bounded crypto queue exists before the first request worker can
+     * serve (00-contracts): bcrypt for sign-in, the unknown-account dummy
+     * verification and setup hashing runs on these CF_CRYPTO_WORKERS threads,
+     * never on the request worker. */
+    rc = cf_crypto_queue_start(config->crypto_workers);
+    if (rc != CF_OK) {
+        cf_writer_stop(app);
+        app->writer_started = false;
+        return rc;
+    }
+    app->crypto_started = true;
 
     size_t slots = config->request_slots;
     size_t readers = config->readers;
@@ -451,6 +513,10 @@ fail:
         w->thread = 0;
     }
     cf_app_join_workers(app);
+    if (app->crypto_started) {
+        cf_crypto_queue_stop();
+        app->crypto_started = false;
+    }
     cf_writer_stop(app);
     app->writer_started = false;
     cf_app_pool_dispose(app);
@@ -461,6 +527,10 @@ void cf_app_stop(cf_app *app) {
     if (app == NULL) return;
     cf_app_request_stop(app);
     cf_app_join_workers(app);
+    if (app->crypto_started) {
+        cf_crypto_queue_stop(); /* after the request workers that wait on it */
+        app->crypto_started = false;
+    }
     cf_writer_stop(app);
     app->writer_started = false;
 }
@@ -475,7 +545,33 @@ cf_err cf_app_admit(void *app_user, struct cf_http_task *task) {
         return CF_BUSY;
     }
     size_t tail = (app->pool_head + app->pool_count) % app->pool_cap;
-    app->pool_queue[tail] = task;
+    app->pool_queue[tail].kind = CF_POOL_TASK;
+    app->pool_queue[tail].task = task;
+    app->pool_queue[tail].fn = NULL;
+    app->pool_queue[tail].user = NULL;
+    app->pool_count++;
+    app->pool_admitted++;
+    pthread_cond_signal(&app->pool_cv);
+    pthread_mutex_unlock(&app->pool_mutex);
+    return CF_OK;
+}
+
+cf_err cf_app_submit_worker(cf_app *app, void (*fn)(void *user), void *user) {
+    if (app == NULL || fn == NULL) return CF_INVALID;
+    pthread_mutex_lock(&app->pool_mutex);
+    if (!app->serving_started || cf_app_stop_requested(app) ||
+        app->pool_cap == 0 || app->pool_admitted >= app->pool_cap) {
+        /* The same bounded admission budget as HTTP tasks: the pool is full
+         * (running + queued == CF_REQUEST_SLOTS) or stopping. The caller
+         * treats the closure as not submitted. */
+        pthread_mutex_unlock(&app->pool_mutex);
+        return CF_BUSY;
+    }
+    size_t tail = (app->pool_head + app->pool_count) % app->pool_cap;
+    app->pool_queue[tail].kind = CF_POOL_CLOSURE;
+    app->pool_queue[tail].task = NULL;
+    app->pool_queue[tail].fn = fn;
+    app->pool_queue[tail].user = user;
     app->pool_count++;
     app->pool_admitted++;
     pthread_cond_signal(&app->pool_cv);

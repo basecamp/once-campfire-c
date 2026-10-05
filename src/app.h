@@ -26,6 +26,14 @@ void cf_app_destroy(cf_app *app);
 /* Borrowed immutable config, valid until cf_app_destroy. NULL for NULL. */
 const cf_config *cf_app_config(const cf_app *app);
 
+/* The application cable: `c.app().broadcasts` for the controller packets
+ * (cf_broadcast_*). Set once by main.c right after the cable is created and
+ * before any request can be dispatched (tests inject one the same way);
+ * borrowed, never owned or destroyed by cf_app_destroy. The getter returns
+ * NULL until the setter ran and NULL for a NULL app. */
+void cf_app_set_cable(cf_app *app, cf_cable *cable);
+cf_cable *cf_app_cable(const cf_app *app);
+
 /* Start the serving path: create/validate the schema and start the single
  * writer (cf_writer_start), then open one read-only SQLite connection per
  * CF_READERS request worker on its own thread and queue them. Call before the
@@ -45,6 +53,24 @@ void cf_app_stop(cf_app *app);
  * non-OK value declines without consuming storage, and the loop answers 503 +
  * Retry-After (00-contracts.md; CORE-04). Never blocks the loop thread. */
 cf_err cf_app_admit(void *app_user, struct cf_http_task *task);
+
+/* Bounded worker submission (04-cable-jobs.md C02/C03, P12-02b): queue one
+ * closure onto the app's existing request-worker pool. The pool is the same
+ * bounded CF_REQUEST_SLOTS pool the HTTP admission hook uses, with one shared
+ * accounting: pool_admitted counts every admitted item (running + queued)
+ * whether it is an HTTP task or a closure, and the pool never holds more than
+ * CF_REQUEST_SLOTS of them; no additional queue exists. CF_BUSY means the
+ * pool is full (running + queued == the slot budget) or stopping, and the
+ * caller must treat the closure as not submitted (the C02/C03 overload arm:
+ * reject the subscription/connection rather than queue unbounded work).
+ * A submitted closure runs exactly once on a request worker, with that
+ * worker's read-only SQLite connection (cf_app_worker_reader); if shutdown
+ * begins before it is dequeued it still runs while the workers drain, so the
+ * caller must keep `user` alive until the closure returns or itself be
+ * reference counted, and the closure must be cancellation-aware (it can
+ * observe cf_app_stop_requested and its own state). A closure must not block
+ * indefinitely: it occupies one of the CF_READERS workers. Never blocks. */
+cf_err cf_app_submit_worker(cf_app *app, void (*fn)(void *user), void *user);
 
 /* Per-loop share of the process-wide CF_INPUT_BYTES / CF_OUTPUT_BYTES
  * reservation (sums never exceed the configured total except when the config

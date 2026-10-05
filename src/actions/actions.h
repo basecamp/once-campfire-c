@@ -22,4 +22,21 @@ cf_err cf_action_sessions_new(cf_ctx *ctx);
 cf_err cf_action_sessions_destroy(cf_ctx *ctx);
 cf_err cf_action_sessions_create(cf_ctx *ctx);
 
+/* A-rooms (routes 96, 97, 101, 104). */
+cf_err cf_action_rooms_show(cf_ctx *ctx);
+cf_err cf_action_rooms_index(cf_ctx *ctx);
+cf_err cf_action_rooms_destroy(cf_ctx *ctx);
+
+/* A-messages (routes 76-83, 137, 138, 140-144). */
+cf_err cf_action_messages_index(cf_ctx *ctx);
+cf_err cf_action_messages_create(cf_ctx *ctx);
+cf_err cf_action_messages_edit(cf_ctx *ctx);
+cf_err cf_action_messages_show(cf_ctx *ctx);
+cf_err cf_action_messages_update(cf_ctx *ctx);
+cf_err cf_action_messages_destroy(cf_ctx *ctx);
+
+/* A-users-bans (routes 55, 56). */
+cf_err cf_action_users_bans_destroy(cf_ctx *ctx);
+cf_err cf_action_users_bans_create(cf_ctx *ctx);
+
 #endif /* CF_ACTIONS_H */

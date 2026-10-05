@@ -12,8 +12,18 @@
 #include "config.h"
 #include "models/ban.h"
 #include "models/room.h"
+#include "platform.h"
+#include "routes.h"
+#include "user_agent.h"
+#include "views.h"
 
 #include <string.h>
+
+/* src/routes.c owns the real endpoint lookup; the test route double linked by
+ * the auth/actions/views buckets provides no endpoint table, so the reference
+ * is weak: without src/routes.c "no endpoint" answers, and the Turbo-Frame
+ * rule decides the layout.  A test may define its own strong cf_route_by_id. */
+extern const cf_route *cf_route_by_id(uint32_t id) __attribute__((weak));
 
 bool cf_auth_halted(const cf_ctx *ctx) {
     return ctx != NULL && ctx->response != NULL && ctx->response->status != 0;
@@ -23,6 +33,13 @@ static unsigned char auth_lower(unsigned char c) {
     return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
 }
 
+/* The kit's `request.header(name)` is
+ * `headers.get(name).and_then(|v| v.to_str().ok())`: the first matching
+ * header, whose value must pass http 1.5.0's `HeaderValue::to_str` (HTAB or
+ * visible ASCII, 0x20..=0x7E). Anything else -- obs-text (which H01 admits),
+ * DEL or another control -- makes the read answer the reference's `None`
+ * (absent), never the raw bytes. A later header with the same name is not
+ * consulted: `HeaderMap::get` returns the first value. */
 bool auth_request_header(const cf_request *request, const char *name,
                          cf_span *out) {
     if (request == NULL || name == NULL || out == NULL) return false;
@@ -39,6 +56,7 @@ bool auth_request_header(const cf_request *request, const char *name,
             }
         }
         if (!match) continue;
+        if (!cf_ua_header_readable(header->value)) return false;
         *out = header->value;
         return true;
     }
@@ -47,6 +65,161 @@ bool auth_request_header(const cf_request *request, const char *name,
 
 static bool auth_method_safe(const cf_request *request) {
     return request->method == CF_GET || request->method == CF_HEAD;
+}
+
+/* 1. set_version_headers: X-Version from the build-baked CF_APP_VERSION (the
+ * Makefile's APP_VERSION), X-Rev only when a nonempty CF_GIT_REVISION define
+ * exists.  Rails drops a header set to nil; the version is never nil. */
+#ifndef CF_APP_VERSION
+#define CF_APP_VERSION "0"
+#endif
+static cf_err auth_set_version_headers(cf_ctx *ctx) {
+    cf_err rc = cf_response_header(ctx->response, auth_cstr_span("X-Version"),
+                                   auth_cstr_span(CF_APP_VERSION));
+#ifdef CF_GIT_REVISION
+    if (rc == CF_OK && CF_GIT_REVISION[0] != '\0') {
+        rc = cf_response_header(ctx->response, auth_cstr_span("X-Rev"),
+                                auth_cstr_span(CF_GIT_REVISION));
+    }
+#endif
+    return rc;
+}
+
+/* The kit's `request.user_agent()`: the first User-Agent value readable by
+ * HeaderValue::to_str (HTAB or visible ASCII; H01 already rejected the other
+ * control bytes, and obs-text is unreadable).  False is the reference's
+ * `None` -- an absent header or one whose bytes cannot be read -- which the
+ * platform helper parses as "".  The present? filter is applied only by
+ * allow_browser's check, exactly like the Rust. */
+static bool auth_user_agent(cf_ctx *ctx, cf_span *out) {
+    cf_span value;
+    if (!auth_request_header(ctx->request, "user-agent", &value)) return false;
+    if (!cf_ua_header_readable(value)) return false;
+    *out = value;
+    return true;
+}
+
+/* `c.is_turbo_frame_request()`: the first `Turbo-Frame` header, whose bytes
+ * must pass HeaderValue::to_str (HTAB or visible ASCII) and be nonempty after
+ * `str::trim()`.  Same semantics as src/actions/sessions.c. */
+static bool auth_turbo_frame_request(const cf_request *request) {
+    if (request == NULL) return false;
+    cf_span value = {NULL, 0};
+    bool found = false;
+    for (size_t i = 0; i < request->header_count; i++) {
+        const cf_header *header = &request->headers[i];
+        if (header->name.len != 11) continue;
+        static const char name[] = "turbo-frame";
+        bool match = true;
+        for (size_t k = 0; k < 11; k++) {
+            if (auth_lower(header->name.ptr[k]) != (unsigned char)name[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            value = header->value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+    bool blank = true;
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
+    }
+    return !blank;
+}
+
+/* render_incompatible_browser's own-layout rule, read from the Rust: the
+ * matched route's endpoint starts with "messages#" or "messages/by_bots#",
+ * and those controllers always use the application layout. */
+static bool auth_route_owns_layout(const cf_ctx *ctx) {
+    const cf_route *row =
+        cf_route_by_id != NULL ? cf_route_by_id(ctx->route.id) : NULL;
+    if (row == NULL || row->endpoint == NULL) return false;
+    return strncmp(row->endpoint, "messages#", 9) == 0 ||
+           strncmp(row->endpoint, "messages/by_bots#", 17) == 0;
+}
+
+/* `Layout#page` appends the stylesheet preload links (the `Link` header); the
+ * frame layout carries none (same as src/actions/sessions.c). */
+static cf_err auth_link_header(cf_ctx *ctx) {
+    cf_builder links = {0};
+    cf_err rc = cf_views_preload_links(&links);
+    if (rc == CF_INVALID) return CF_OK;
+    if (rc == CF_OK && links.len != 0) {
+        rc = cf_response_header(ctx->response, auth_cstr_span("Link"),
+                                (cf_span){links.ptr, links.len});
+    }
+    cf_builder_dispose(&links);
+    return rc;
+}
+
+/* `render template: "sessions/incompatible_browser"` from the before-action:
+ * 200 + text/html whatever the request format (no respond_to, never 406). */
+static cf_err auth_render_incompatible_browser(cf_ctx *ctx) {
+    cf_view_layout_model layout = {0};
+    cf_err rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) return rc;
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+    bool own_layout = auth_route_owns_layout(ctx);
+    bool frame = !own_layout && auth_turbo_frame_request(ctx->request);
+
+    cf_builder body = {0};
+    rc = frame ? cf_view_session_incompatible_frame(&view_ctx, &body)
+               : cf_view_session_incompatible(&view_ctx, &body);
+    if (rc == CF_OK) {
+        cf_buf *buf = NULL;
+        rc = cf_builder_freeze(&body, &buf);
+        if (rc != CF_OK) {
+            cf_builder_dispose(&body);
+        } else {
+            ctx->response->status = 200;
+            rc = cf_response_body(ctx->response, buf);
+            cf_buf_release(buf);
+            if (rc == CF_OK) {
+                rc = cf_response_header(
+                    ctx->response, auth_cstr_span("Content-Type"),
+                    auth_cstr_span("text/html; charset=utf-8"));
+            }
+            if (rc == CF_OK && !frame) rc = auth_link_header(ctx);
+        }
+    } else {
+        cf_builder_dispose(&body);
+    }
+    cf_view_layout_model_dispose(&layout);
+    return rc;
+}
+
+/* 7. allow_browser: check a present, non-blank UA and render the
+ * incompatible-browser page (200, HTML, any format) when the browser is below
+ * Campfire's minimums.
+ *
+ * The layout's platform is the reference's `platform` helper: the
+ * ApplicationPlatform allow_browser stored, else `ApplicationPlatform.new(
+ * request.user_agent())` -- the header value when the kit can read it (blank
+ * included: the gem then parses it, which for whitespace-only values is the
+ * default UA), and "" when the header is absent or unreadable.  So every
+ * request leaves step 7 with facts for the views; only the *check* is gated on
+ * the kit's present? filter. */
+static cf_err auth_allow_browser(cf_ctx *ctx) {
+    cf_span user_agent = {NULL, 0};
+    bool readable = auth_user_agent(ctx, &user_agent);
+    cf_platform platform;
+    cf_err rc = cf_platform_parse(readable ? user_agent : (cf_span){NULL, 0},
+                                  &platform);
+    if (rc != CF_OK) return rc;
+    /* The context stores its own copy (cf_ctx is the frozen contract). */
+    rc = cf_ctx_set_platform(ctx, &platform);
+    if (rc != CF_OK) return rc;
+    if (!readable || !cf_ua_present(user_agent)) return CF_OK;
+    if (!cf_platform_blocked(&platform)) return CF_OK;
+    return auth_render_incompatible_browser(ctx);
 }
 
 static cf_err auth_halt(cf_ctx *ctx, unsigned status, const char *content_type) {
@@ -97,18 +270,24 @@ static cf_err auth_deny_bots(cf_ctx *ctx) {
 }
 
 /* The pinned request.base_url for the Origin comparison: scheme from the
- * listener (D-C07: proxy headers ignored), host_with_port from the (H01
- * validated) Host header, the port only when it is not the scheme default.
- * A request without a Host header falls back to PUBLIC_ORIGIN, which H01
- * admits only when it is consistent with the origin. */
+ * listener (D-C07: proxy headers ignored), host_with_port from the Host
+ * header read through the kit's `request.header()` gate (an unreadable value
+ * reads as absent), the port only when it is not the scheme default.  A
+ * request without a readable Host header falls back the way the pin's
+ * `host()` does: `header("host")` -> `uri.authority()` (always None here
+ * because H01 admits origin-form targets only) -> "localhost"
+ * (request.rs:160-166).  The absent Host therefore yields scheme +
+ * "localhost" with the scheme-default port, not PUBLIC_ORIGIN. */
 static cf_err auth_base_url(cf_ctx *ctx, cf_builder *out) {
-    const cf_config *config = cf_app_config(ctx->app);
-    if (config == NULL) return CF_INTERNAL;
     const char *scheme = ctx->request->tls ? "https://" : "http://";
     unsigned standard_port = ctx->request->tls ? 443 : 80;
     cf_span host;
     if (!auth_request_header(ctx->request, "host", &host) || host.len == 0) {
-        return cf_builder_append(out, auth_cstr_span(config->public_origin));
+        cf_err rc = cf_builder_append(out, auth_cstr_span(scheme));
+        if (rc == CF_OK) {
+            rc = cf_builder_append(out, auth_cstr_span("localhost"));
+        }
+        return rc;
     }
     cf_err rc = cf_builder_append(out, auth_cstr_span(scheme));
     if (rc != CF_OK) return rc;
@@ -208,13 +387,13 @@ cf_err cf_before_actions(cf_ctx *ctx, cf_before policy) {
     if (ctx == NULL || ctx->app == NULL || ctx->response == NULL) {
         return CF_INVALID;
     }
-    /* 1. set_version_headers: the pinned source writes X-Version/X-Rev from
-     *    config.app_version/git_revision; F03's cf_config has neither field.
-     *    Reported to the integrator; other tasks cannot add them either. */
+    /* 1. set_version_headers (build-time defines; see above). */
+    cf_err rc = auth_set_version_headers(ctx);
+    if (rc != CF_OK) return rc;
     /* 2. Current.request = request: nothing to store in this context design. */
 
     /* 3. reject_banned_ip (unsafe methods only). */
-    cf_err rc = auth_reject_banned_ip(ctx);
+    rc = auth_reject_banned_ip(ctx);
     if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
 
     /* 4. require_authentication / allow_unauthenticated_access /
@@ -236,10 +415,10 @@ cf_err cf_before_actions(cf_ctx *ctx, cf_before policy) {
         if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
     }
 
-    /* 7. allow_browser: deferred to the integrator; it needs the platform_agent
-     *    UA parser (campfire/src/concerns/user_agent.rs, no A01 fixture) and
-     *    A02's sessions/incompatible_browser view for its block response.
-     *    Reported in docs/devel/evidence/A01.md. */
+    /* 7. allow_browser (concerns.rs): parse a present UA, keep the platform
+     *    on the context for the layout, block an outdated browser. */
+    rc = auth_allow_browser(ctx);
+    if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
 
     /* 8. require_unauthenticated_access: restore the session, then redirect a
      *    signed-in user to the root. */

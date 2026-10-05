@@ -6,13 +6,16 @@
  * create one H01 loop per CF_LOOPS and run them on their own threads, then
  * block SIGINT/SIGTERM with pthread_sigmask and wait with sigwait.
  *
- * Shutdown order (00-contracts.md CORE-05, 01 H01, A00): signal all loops to
- * stop (they drain admitted tasks and pending output for up to five seconds),
- * join the loop threads, stop the app (workers abandon queued tasks and exit,
- * writer released), destroy the loops and the listener, then cf_app_destroy
- * joins any remaining worker before freeing app/config. SIGINT/SIGTERM are
- * blocked before any thread exists, so sigwait is their only consumer and a
- * request delivered at any point stays pending until consumed. */
+ * Shutdown order (00-contracts.md CORE-05, 01 H01, A00, 04 C03): signal all
+ * loops to stop (they drain admitted tasks and pending output for up to five
+ * seconds), then cf_cable_server_stop (reactors join and submit their
+ * upgrades' lease releases), join the loop threads (the releases complete
+ * there), destroy the cable server, stop the app (workers abandon queued HTTP
+ * tasks and drain submitted closures, writer released), destroy the loops and
+ * the listener, then cf_app_destroy joins any remaining worker before freeing
+ * app/config. SIGINT/SIGTERM are blocked before any thread exists, so sigwait
+ * is their only consumer and a request delivered at any point stays pending
+ * until consumed. */
 #include "app.h"
 #include "app_internal.h"
 #include "cable/channels.h"
@@ -212,6 +215,9 @@ int main(int argc, char **argv) {
         cf_cable_config cable_config;
         memset(&cable_config, 0, sizeof cable_config);
         cable_config.app = app;
+        /* The cable's shared reader pool is bounded by the loop count (one
+         * reader per reactor), never by connections. */
+        cable_config.loops = cfg->loops;
         if (cf_cable_create(&cable_config, &cable) != CF_OK) {
             fprintf(stderr, "campfire: startup failed: cable creation\n");
             cf_app_stop(app);
@@ -222,6 +228,11 @@ int main(int argc, char **argv) {
         cf_cable_server_config_default(&cable_server_config);
         /* D-C07: the scheme comes from the listener; TLS lands with P01. */
         cable_server_config.assume_ssl = !cfg->disable_ssl;
+        /* One bounded cable reactor thread per HTTP loop, and the loop's
+         * share of the process-wide input/output budgets. */
+        cable_server_config.loops = cfg->loops;
+        cable_server_config.input_bytes = cfg->input_bytes;
+        cable_server_config.output_bytes = cfg->output_bytes;
         cf_cable_server_hooks(cable, &cable_server_config.hooks);
         if (cf_cable_server_create(&cable_server_config, &cable_server) !=
             CF_OK) {
@@ -232,6 +243,10 @@ int main(int argc, char **argv) {
             cf_app_destroy(app);
             return 1;
         }
+        /* The controller actions' app->broadcasts seam: set once the cable
+         * exists, before the loops can dispatch anything. The app borrows the
+         * cable; both are released in the shutdown order below. */
+        cf_app_set_cable(app, cable);
         /* C03: the writer's mandatory DISCONNECT_USER consumer (04 C03). A
          * committed sign-out/ban/deactivation returns only after every
          * affected connection acknowledged its revocation. */
@@ -331,18 +346,35 @@ int main(int argc, char **argv) {
     }
 
 shutdown:
-    /* Stop accepting and drain admitted tasks first (H01), then stop the
-     * workers, then destroy the loops; cf_app_destroy frees app/config. The
-     * cable server joins every connection thread (whose exit detaches its
-     * subscription loop) while the writer is still up, so disconnect
-     * presence effects can run; the cable itself is released last. */
+    /* Cable teardown follows the enforced caller order documented on
+     * cf_cable_server_stop (cable.h):
+     *   1. stop the HTTP loops (no new upgrade-hook calls);
+     *   2. cf_cable_server_stop(): every reactor joins, shuts its upgraded
+     *      sockets down and submits each upgrade's lifetime lease for release
+     *      (the connection-slot release completes on the loop thread);
+     *   3. join the HTTP loop threads: the lease releases run there and free
+     *      every connection slot (this is the "release leases" step);
+     *   4. only then cf_cable_server_destroy() frees the server: no loop
+     *      thread can still be inside the upgrade hook and every lease is
+     *      released.
+     * This function performs exactly that order: loops stop, server stop,
+     * loop join, server destroy. The cable server joins every reactor (whose
+     * socket exit detaches its subscription loop) while the writer is still
+     * up, so disconnect presence effects can run; the cable itself is
+     * released last. */
     for (size_t i = 0; i < loops_created; i++) {
         cf_http_loop_stop(loops[i]);
     }
+    if (cable_server != NULL) cf_cable_server_stop(cable_server);
     for (size_t i = 0; i < threads_created; i++) {
         (void)pthread_join(loop_threads[i], NULL);
     }
-    if (cable_server != NULL) cf_cable_server_destroy(cable_server);
+    /* No loop can be inside the upgrade hook now; every lease was released
+     * by the loop completions joined above. */
+    if (cable_server != NULL) {
+        cf_cable_server_destroy(cable_server);
+        cable_server = NULL;
+    }
     if (cable != NULL &&
         cf_cable_stop(cable, 5000) != CF_OK) {
         fprintf(stderr,

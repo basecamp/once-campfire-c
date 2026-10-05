@@ -8,16 +8,22 @@
  * cf_cable_revocation_handler below; the frozen symbol
  * cf_cable_disconnect_user(cf_cable *, int64_t, bool) is its payload.
  *
- * One preallocated control slot exists per loop (cf_cable_revocation).
- * Registration happens when the loop attaches (before the loop can be
- * revoked) and unregisters when it detaches. The barrier fills every affected
- * slot, wakes each loop through the registered wake callback, and waits on a
- * shared acknowledgment count/condition until every affected loop consumed
- * its slot and revoked; it holds no DB, cache or subscriber lock while
- * waiting. A loop consumes its slot by calling cf_cable_revocation_service
- * from its owner thread: the control read does not touch the loop's ordinary
- * queues, so a full broadcast queue or a stalled socket cannot starve the
- * acknowledgment.
+ * One preallocated control slot exists per loop (cf_cable_revocation): a
+ * production owner loop (one bounded cable reactor servicing an HTTP loop's
+ * upgraded sockets) registers one shared slot and one member per connection
+ * (cf_cable_revocation_loop_register / cf_cable_revocation_member_add); a
+ * standalone socket's own thread is its loop and uses the legacy single-
+ * connection registration (cf_cable_revocation_register). The legacy
+ * registration fills only when its fixed user matches; the shared slot fills
+ * when any of its unrevoked members belongs to the user. Registration happens
+ * before the loop can be revoked and unregisters when it detaches. The
+ * barrier fills every affected slot, wakes each loop through the registered
+ * wake callback, and waits on a shared acknowledgment count/condition until
+ * every affected loop consumed its slot and revoked; it holds no DB, cache or
+ * subscriber lock while waiting. A loop consumes its slot by calling
+ * cf_cable_revocation_service from its owner thread: the control read does
+ * not touch the loop's ordinary queues, so a full broadcast queue or a
+ * stalled socket cannot starve the acknowledgment.
  *
  * The owner-side operations come from the wiring that owns the loop
  * (src/cable/pubsub.c and the C01 socket): the loop supplies
@@ -156,6 +162,74 @@ cf_cable_auth_ticket cf_cable_auth_capture(const cf_app *app);
 
 /* True when the ticket is valid and its version is still current. */
 bool cf_cable_auth_version_current(const cf_app *app, cf_cable_auth_ticket t);
+
+/* ---- one preallocated control slot per owner loop (P12-02b) ----------------- */
+
+/* 04 C03: "Use one preallocated control slot per loop because there is only
+ * one writer and one barrier at a time." A production owner loop (the one
+ * bounded cable reactor servicing every upgraded socket of an HTTP loop)
+ * registers exactly one shared slot here and adds one member per connection
+ * it services; a standalone socket's owner thread is its own loop and
+ * registers/removes the same way. The barrier fills a shared slot once when
+ * at least one of its unrevoked members matches the commit's user, wakes the
+ * owner through the slot's wake callback, and waits on the shared
+ * acknowledgment count exactly as for a legacy per-loop slot. The owner
+ * consumes the slot once (cf_cable_revocation_service): every member whose
+ * user id matches the control runs its owner-side callbacks before the single
+ * per-slot acknowledgment; members of other users are untouched, and the
+ * control read never touches the loop's ordinary queues (the stalled-socket
+ * guarantee is unchanged). Members are added before the connection is linked
+ * into the cable and removed after it is unlinked, so the barrier's
+ * registered-vs-attached wiring check still holds. Only the owner thread adds,
+ * removes, installs and services members; the barrier thread only fills the
+ * slot and waits. */
+typedef struct cf_cable_revocation_member cf_cable_revocation_member;
+
+typedef struct {
+    /* Barrier thread, with the C03 state mutex held; must not block or call
+     * back into C03 (an eventfd write / condition signal). */
+    void (*wake)(void *user);
+    void *user;
+} cf_cable_revocation_loop_ops;
+
+/* Register one shared control slot for an owner loop. On failure *out stays
+ * NULL. Unregister from the owner thread once its members are gone. */
+cf_err cf_cable_revocation_loop_register(cf_cable *scope, cf_app *app,
+                                         const cf_cable_revocation_loop_ops *ops,
+                                         cf_cable_revocation **out);
+/* Remove a shared slot. A pending control is acknowledged (the loop's members
+ * are gone, so it cannot serve it); the barrier must not time out because of
+ * a loop that stopped. NULL is a no-op. */
+void cf_cable_revocation_loop_unregister(cf_cable_revocation *slot);
+
+/* Add one connection as a member of a shared slot (owner thread, before the
+ * connection becomes visible to the cable). */
+cf_err cf_cable_revocation_member_add(cf_cable_revocation *slot,
+                                      int64_t user_id,
+                                      const cf_cable_revocation_ops *ops,
+                                      cf_cable_revocation_member **out);
+/* Remove a member (owner thread, after the connection was unlinked). When a
+ * barrier is waiting on the slot and this member was its last match, the slot
+ * is acknowledged here so a session that just went away cannot stall the
+ * committed revocation. NULL is a no-op. */
+void cf_cable_revocation_member_remove(cf_cable_revocation_member *member);
+
+/* True when this connection must not accept new application output or install
+ * access: it was revoked, or its owner loop is inside a control (a
+ * conservative window bounded by one service call). */
+bool cf_cable_revocation_member_revoked(
+    const cf_cable_revocation_member *member);
+
+/* The member install gate: the same contract as cf_cable_auth_install below,
+ * with the stale-version resubmission budget kept per connection. Owner
+ * thread, serialized with the slot's service call. */
+cf_err cf_cable_revocation_member_install(cf_cable_revocation_member *member,
+                                          cf_cable_auth_ticket ticket,
+                                          bool *resubmit);
+
+/* Test-only: number of shared per-owner-loop slots registered for `scope`
+ * (a production measurement seam; legacy per-loop slots are not counted). */
+size_t cf_cable_test_revocation_loop_slots(const cf_cable *scope);
 
 /* The install gate, on the loop's owner thread, serialized with
  * cf_cable_revocation_service (04 C03 "Loop-local install/control handling is
