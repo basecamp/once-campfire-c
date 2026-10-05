@@ -44,6 +44,55 @@ typedef struct cf_http_task cf_http_task;
  * loop. */
 typedef cf_err (*cf_http_admit_fn)(void *user, cf_http_task *task);
 
+/* ---- upgrade seam (added for C01, the /cable front mount) ----------------
+ * An optional hook that inspects every complete, validated request on the
+ * loop thread before it is frozen or admitted to a worker (so before the
+ * assets mount and application routing). It exists for protocol upgrades:
+ * the /cable WebSocket mount. The hook returns one of:
+ *
+ *  - CF_HTTP_UPGRADE_PASS: not this hook's request; ordinary processing.
+ *  - CF_HTTP_UPGRADE_REPLY: the hook wrote a complete HTTP/1.1 response into
+ *    request->reply and owns that builder until it returns; the loop copies
+ *    the bytes to the socket (close_after forces Connection: close). The
+ *    connection stays an ordinary HTTP connection.
+ *  - CF_HTTP_UPGRADE_TAKEN: the hook copied request->pending (if any) and
+ *    takes ownership of request->fd. The HTTP connection is retired without
+ *    closing the descriptor; no response bytes are written by HTTP. The hook
+ *    must not use fd after returning until it owns it, and must close it.
+ *
+ * All spans are borrowed for the call only. The hook must not block the loop
+ * on another thread. */
+typedef enum {
+    CF_HTTP_UPGRADE_PASS = 0,
+    CF_HTTP_UPGRADE_REPLY,
+    CF_HTTP_UPGRADE_TAKEN
+} cf_http_upgrade_result;
+
+/* TAKEN continuation: called on the loop thread after the connection has
+ * left HTTP (the fd was removed from epoll and the HTTP slot was retired
+ * without closing it), so the hook may close or hand off the fd freely. */
+typedef cf_err (*cf_http_upgrade_taken_fn)(void *user);
+
+typedef struct {
+    int fd;               /* nonblocking socket, borrowed unless TAKEN */
+    cf_method method;
+    cf_span target, path, query, peer_ip;
+    const cf_header *headers; /* request headers, in received order */
+    size_t header_count;
+    const unsigned char *pending; /* bytes read after the request head */
+    size_t pending_len;
+    cf_builder reply;     /* REPLY: full HTTP response bytes to send */
+    bool close_after;     /* REPLY: close after the response */
+    /* TAKEN: the hook stores its continuation here; the loop calls it after
+     * the detach, on the loop thread, and would only fail to serve the
+     * connection (the fd is already the hook's). */
+    cf_http_upgrade_taken_fn taken;
+    void *taken_user;
+} cf_http_upgrade_request;
+
+typedef cf_http_upgrade_result (*cf_http_upgrade_fn)(
+    void *user, cf_http_upgrade_request *request);
+
 typedef struct {
     /* Bound listening socket owned by the caller. create() puts it in
      * nonblocking mode; destroy() leaves it open (the caller closes it). */
@@ -63,6 +112,10 @@ typedef struct {
     /* Optional: when non-NULL, run() also leaves when cf_app_stop_requested
      * becomes true. The app itself is never dereferenced outside that call. */
     cf_app *app;
+    /* Optional protocol-upgrade hook (C01: the /cable front mount); NULL
+     * keeps every request ordinary. See cf_http_upgrade_request above. */
+    cf_http_upgrade_fn upgrade;
+    void *upgrade_user;
     cf_http_admit_fn admit; /* required */
     void *admit_user;
 } cf_http_loop_config;

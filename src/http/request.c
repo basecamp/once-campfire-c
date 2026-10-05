@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/epoll.h>
 
 /* ------------------------------------------------------------ validators */
 
@@ -538,9 +539,120 @@ static void fail(struct cf_http_conn *conn, unsigned status) {
     (void)cf_http_conn_queue_status(conn, status, true, NULL);
 }
 
+/* Consume this request's body bytes from `in`, keeping only pipelined bytes.
+ * Chunked decoding already moved the decoded body out of `in`. */
+static void drop_consumed_body(struct cf_http_conn *conn) {
+    if (conn->chunked) return;
+    size_t body = (size_t)conn->body_expected;
+    if (conn->in.len > body) {
+        memmove(conn->in.ptr, conn->in.ptr + body, conn->in.len - body);
+        conn->in.len -= body;
+    } else {
+        conn->in.len = 0;
+    }
+}
+
+/* Run the loop's upgrade hook (C01's /cable front mount) on a complete
+ * request, before it is frozen or admitted. See cf_http_upgrade_request in
+ * http.h. */
+static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
+    struct cf_http_loop *loop = conn->loop;
+    const unsigned char *hb = conn->head.ptr;
+    if (hb == NULL) return CF_HTTP_UPGRADE_PASS;
+
+    cf_header hdrs[CF_HTTP_HEADER_COUNT_MAX];
+    for (size_t i = 0; i < conn->hdr_count; i++) {
+        hdrs[i].name = (cf_span){hb + conn->hdr_refs[i].name_off,
+                                 conn->hdr_refs[i].name_len};
+        hdrs[i].value = (cf_span){hb + conn->hdr_refs[i].value_off,
+                                  conn->hdr_refs[i].value_len};
+    }
+    /* Bytes after the request head: the body (if any) is not pending; for a
+     * bodyless GET everything buffered is. */
+    const unsigned char *pending = conn->in.ptr;
+    size_t pending_len = conn->in.len;
+    if (!conn->chunked && conn->body_expected <= conn->in.len) {
+        pending += (size_t)conn->body_expected;
+        pending_len -= (size_t)conn->body_expected;
+    } else if (!conn->chunked) {
+        pending_len = 0;
+    }
+
+    cf_http_upgrade_request req;
+    memset(&req, 0, sizeof req);
+    req.fd = conn->fd;
+    req.method = conn->method;
+    req.target = (cf_span){hb + conn->off_target, conn->len_target};
+    req.path = (cf_span){hb + conn->off_path, conn->len_path};
+    req.query = (cf_span){hb + conn->off_query, conn->len_query};
+    req.peer_ip = (cf_span){(const unsigned char *)conn->peer_ip,
+                            strlen(conn->peer_ip)};
+    req.headers = hdrs;
+    req.header_count = conn->hdr_count;
+    req.pending = pending;
+    req.pending_len = pending_len;
+
+    cf_http_upgrade_result result = loop->cfg.upgrade(loop->cfg.upgrade_user,
+                                                      &req);
+
+    if (result == CF_HTTP_UPGRADE_REPLY) {
+        drop_consumed_body(conn);
+        if (req.reply.len != 0) {
+            cf_err rc =
+                cf_http_conn_queue_bytes(conn, req.reply.ptr, req.reply.len);
+            if (rc == CF_OK) {
+                conn->pending_kind = CF_HTTP_PENDING_FINAL;
+                conn->state = CF_HTTP_STATE_WRITING;
+                conn->close_after = conn->close_after || req.close_after;
+                /* Flushing happens from the loop's EPOLLOUT branch, so this
+                 * call never re-enters the request parser. */
+                cf_http_conn_update_events(conn);
+            } else {
+                loop->counters.errors++;
+                cf_http_conn_close(loop, conn);
+            }
+        } else {
+            /* A REPLY with no bytes cannot be sent as a response. */
+            loop->counters.errors++;
+            cf_http_conn_close(loop, conn);
+        }
+        cf_builder_dispose(&req.reply);
+        cf_http_request_reset_parse(conn);
+        return result;
+    }
+
+    if (result == CF_HTTP_UPGRADE_TAKEN) {
+        cf_http_upgrade_taken_fn taken = req.taken;
+        void *taken_user = req.taken_user;
+        cf_builder_dispose(&req.reply);
+        /* The descriptor leaves HTTP without being closed. */
+        if (conn->fd >= 0) {
+            if (conn->registered) {
+                (void)epoll_ctl(loop->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
+                conn->registered = false;
+            }
+            conn->fd = -1;
+            if (loop->active_conns != 0) loop->active_conns--;
+        }
+        cf_http_conn_close(loop, conn);
+        /* Only now is the fd free of HTTP state: the hook may close, reuse
+         * or hand it to another owner (a connection thread). */
+        if (taken != NULL) (void)taken(taken_user);
+        return result;
+    }
+
+    cf_builder_dispose(&req.reply);
+    return CF_HTTP_UPGRADE_PASS;
+}
+
 static void offer_request(struct cf_http_conn *conn) {
     if (conn->request_offered) return;
     conn->request_offered = true;
+
+    if (conn->loop->cfg.upgrade != NULL) {
+        cf_http_upgrade_result ur = run_upgrade_hook(conn);
+        if (ur != CF_HTTP_UPGRADE_PASS) return; /* answered or moved to cable */
+    }
 
     cf_request *req = NULL;
     size_t reserved = 0;
@@ -558,15 +670,7 @@ static void offer_request(struct cf_http_conn *conn) {
     }
 
     /* CL bodies are consumed from `in`; keep only pipelined bytes. */
-    if (!conn->chunked) {
-        size_t body = (size_t)conn->body_expected;
-        if (conn->in.len > body) {
-            memmove(conn->in.ptr, conn->in.ptr + body, conn->in.len - body);
-            conn->in.len -= body;
-        } else {
-            conn->in.len = 0;
-        }
-    }
+    drop_consumed_body(conn);
 
     uint64_t sequence = ++conn->sequence;
     cf_err ar = cf_http_loop_admit(conn->loop, conn, req, reserved, sequence);
