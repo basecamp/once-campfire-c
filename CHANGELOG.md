@@ -87,6 +87,21 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
 | post_message | 3,223 | 3,763 | 43,735 | 950 |
 | /up | 71,907 | 174,128 | 105,760 | 3,896 |
 
+- **Post-profile fix (commit `604f037`)**: the follow-up diagnosis traced the
+  C/Rust gap to `auth_pbkdf2_sha256` being re-derived on every key use (~486 us
+  each; 1 per authenticated cache hit, 2 per avatar, 44 per room render — 42
+  of them for avatar URLs), where the pin caches derived keys. Memoized
+  (bounded, keyed by full secret+salt+length, independently verified), the
+  C-only A/B at loops=4 gives: cached dynamic routes 7.3k -> 130-149k rps
+  (room 17.9x, messages 19.6x, sidebar 20.4x, search 20.4x; avatar 42x, post
+  28x), uncached 163-3.4k -> 2.0k-24.9k, static/`/up` unchanged as controls;
+  CPU/success room hit 535 -> 24 us, render 24.4 -> 1.9 ms. Cross-app
+  (load-caveated, different runs): C's cached rows now lead the dynamic
+  routes (room 130.6k vs Rust 28.3k, Rails 232), and uncached C is
+  Rust-class on sidebar/post; the full room render remains the honest gap.
+  A new ~130-160k rps ceiling (shared-listener accept path and/or generator
+  capacity) is the next investigation; the quiet-window rerun will produce
+  the publication-grade table.
 - Cache delta on C: 44-54x (room), 40-44x (messages), 9-10x (sidebar), 16-17x
   (search); CPU/success ~25-31 ms -> ~0.55 ms. **All 18 reps are
   load-caveated**: host load1 at the gate was 6.0-11.1 (gate 1.5, 0 reps
