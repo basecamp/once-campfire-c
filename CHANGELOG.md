@@ -5,6 +5,68 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 1c: live server, auth, routes and assets (A00, A01, H03)
+
+**Phase 1 exit met**: HTTP-01..08, DB-01..03/06 core paths and the measured
+`/up` baseline are all satisfied; the server boots, serves, and drains cleanly.
+
+### Verification (independent verifiers; all found defects fixed and re-verified)
+- **A00**: the verifiers (three independent runs) reproduced a blocking defect —
+  requests without an `Accept:` header segfaulted on an uninitialized span.
+  Fixed; independently CONFIRMED with valgrind crash-before, raw-socket matrices
+  in plain/ASan/Fil-C, a re-derived 28-case format probe, and a shadow-root test
+  proving the asset front mount runs before dispatch. 47/47 app + 25/25
+  routes/assets cases across four modes; 103k differential route cases clean.
+- **H03**: 177 rows re-derived with zero drift, all 111 recognition vectors,
+  built-ins and 41 reference-error responses verified; the four POST conductor
+  rows now enforce CSRF semantics live (403/422 matrix); unmatched-route bodies
+  are byte-equal to the reference `public/404.html`; dev-501 is exactly the 118
+  unlanded implement rows.
+- **A01**: two confirmed cookie divergences fixed with reference-exact bytes —
+  logout/reset now delete `_campfire_session` (byte-compared deletion line,
+  including the null-filter reset path) and identical session writes no longer
+  re-encrypt/re-set cookies. Independent verification falsified by reverting the
+  fix; `CF_NOMEM` propagation proven mechanically with `--wrap=malloc`; 45/45
+  in plain/ASan/Fil-C. One claimed minor was refuted (signed-id underscore
+  behavior), one confirmed unreachable.
+
+### Added
+- **A00**: `cf_ctx` context (params merge body→query→path, cookie queue +
+  `cf_finish_cookies`, private format/flash state), dispatcher with the generic
+  error mapping, CF_READERS worker pool with per-worker reader connections,
+  process-wide CF_REQUEST_SLOTS admission accounting, per-loop budget division,
+  `cf_writer_start` wiring, and the live serve path in `main.c`.
+- **A01**: current-format cookies/signed IDs/PBKDF2 message verification via
+  OpenSSL, session lifecycle (fresh session on login, hourly activity refresh,
+  logout/ban/deactivation effects), the before-action chain in reference order,
+  the CSRF safe/unsafe × HTTP/HTTPS × Origin × Fetch-Site matrix, and the fixed
+  IP rate window (10 attempts / 180 s, bounded map).
+- **H03**: the 177-row ordered route table with the finite matcher (literals,
+  `:name`, `*name`, `(.:format)`, non-greedy globs, post-recognition percent
+  decoding), built-in health/turbo_native/mailbox/conductor responses, the 41
+  reference-error rows, and static asset serving from the pinned fixtures
+  (digested paths, immutable caching, recorded Last-Modified, identity/gzip
+  negotiation groundwork, traversal rejection).
+- **Build**: Makefile wiring for context/routes/assets/auth (model-free subset),
+  app/routes/assets/auth test buckets with their link recipes, TSan coverage for
+  the threaded app cases, OpenSSL linked per mode, and section folding for the
+  partial live link until R02 lands.
+- **Measured `/up` baseline** (diagnostic, not the competitive benchmark):
+  cold 0.114 ms; 56.6k req/s on one keep-alive connection (p50 16.5 µs,
+  p95 23.6 µs, ~12 µs server CPU/response); 79.2k req/s on 8 connections;
+  213 wire bytes; 80k+ requests all exact 200s; clean 0.06 s SIGTERM drain.
+
+### Integration state
+- Full suite: **469 cf_test cases across 45 binaries** plus the standalone core
+  programs and CLI checks — green under dev, bench, Fil-C, ASan/UBSan and TSan.
+
+### Known gaps / ruled deferrals
+- A01 remaining: bounded crypto queue (required by 00-contracts), build-time
+  X-Version/X-Rev defines, `allow_browser` with A02, 429/422 bodies with their
+  packets, `cf_auth_key_derive` cleanup, AUTH-06 through controller packets.
+- Asset byte-ranges deferred to V02 completeness; generic error bodies await
+  A02 views; compression selection is K01; the rich-text bridge lands with R02.
+
 ## 2026-10-05 — Phase 1b: HTTP transport, writer, model families (H01, D02, D01)
 
 Phase status: **H01 DONE**, **D02 PARTIAL** (A00 start wiring + C03/J01 consumers land
