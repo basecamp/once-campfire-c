@@ -5,6 +5,64 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 2a: rich text, Cable transport, jobs, storage (R02, C01, J01, S01)
+
+### Verification (independent verifiers; every finding repaired and re-verified)
+- **R02**: corpus replay 658 × 4 fields + 54 web_url with zero mismatches and zero
+  security violations. The verifier's C-vs-Rust oracle diff (3948 lines) exposed a
+  confirmed foreign-namespace defect class (rendered attachments dropped inside
+  SVG/MathML) — fixed; two further adversarial parity gaps (MathML
+  `annotation-xml` integration point; `<svg><title>` raw-text scanning) closed in
+  follow-ups. Oracle now byte-identical in plain/ASan/Fil-C; 46 XSS bodies and 37
+  extra injections byte-identical; 12/12 focused tests with a pre-fix negative
+  control. Documented data-loss-only fail-safes remain (neutral-name literal
+  collision; three conservative-miss scanner classes; script double-escape).
+- **C01**: verified CONFIRMED (handshake/subprotocol matrix, framing adversarial
+  suite, deflate no-context-takeover, 1 MiB assembled+inflated cap, 4 MiB/30 s
+  pending limits, counters). Orphan-continuation close-code ordering fixed to
+  `socket.rs` (1003/1009/1002; independent 148-check driver). The test harness's
+  blocking-send flake is fixed (nonblocking + poll deadline; 36/36 Fil-C runs
+  clean, pre-fix hang reproduced on a scratch copy).
+- **J01**: verified CONFIRMED (128-slot per-kind FIFOs, CF_BUSY boundary before
+  execution, per-kind isolation, exact counters at 127/128/129 and shutdown
+  discards, no hidden durability, TSan clean).
+- **S01**: verified CONFIRMED (path safety incl. symlink probes, 0600 unique
+  staging, move-before-commit, checksum, argv-only subprocess with process-group
+  kill/reap and output caps). The trailing-slash `O_NOFOLLOW` bypass is fixed
+  (symlinked root refused with any trailing slashes; 127/127 independent probe).
+- **Doubles retired**: model tests now exercise the production R02/A01 pipeline
+  (228/228 in dev/ASan/Fil-C).
+- **Integration**: the full stack links into the application; `cf_richtext_configure`
+  runs at startup with the configured secret; an auxiliary-object depfile gap was
+  fixed (it had produced stale-object failures across bench/Fil-C/TSan trees).
+
+### Added
+- **R02** (11 units): Gumbo DOM adapter at the reference's parser limits;
+  sanitizer/filters/autolink/plain-text/editor pipeline in reference order;
+  signed-mention and attachment resolution through A01 and the DB; immutable
+  process-wide pipeline returned by `cf_tx_rich_text`.
+- **C01**: WebSocket handshake (version/key/Origin policy/auth/subprotocol),
+  framing (masking, fragmentation, control-frame interleave, UTF-8 validation),
+  permessage-deflate without context takeover, 1 MiB assembled+inflated cap,
+  4 MiB pending / 30 s stalled-write closes with separate counters, and the H01
+  upgrade seam with clean connection detach.
+- **J01**: per-kind bounded job queues, worker threads (media fixed at four),
+  handler-registration API, exact per-kind accounting, discard-and-count shutdown.
+- **S01**: storage key layout under STORAGE_PATH, 0600 staging with incremental
+  checksum and move-before-commit, deletion rules, argv-only subprocess helper
+  with timeouts, output caps and process-group kill.
+
+### Integration state
+- Suite: **543 cf_test cases across 58 binaries** green in dev, bench, Fil-C,
+  ASan/UBSan and TSan, plus the standalone core programs and CLI checks.
+
+### Rulings and known gaps
+- Cross-module surfaces ratified (`richtext.h`, `cable.h`, `jobs.h`,
+  `storage.h`); asset byte-ranges deferred to V02 completeness; C01's production
+  mount wiring lands with C02, J01's start with J02, storage open with S02/H02;
+  libvips remains F00-BLOCKED and the installed ffmpeg is 9.0.2 rather than the
+  pinned 7.1.5 (S03 prerequisite).
+
 ## 2026-10-05 — Phase 1c: live server, auth, routes and assets (A00, A01, H03)
 
 **Phase 1 exit met**: HTTP-01..08, DB-01..03/06 core paths and the measured
