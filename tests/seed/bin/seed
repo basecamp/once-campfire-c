@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Build parity seeds with the reference app.
+#
+#   parity/bin/seed build [NAME...]   build the named seeds (default: all of parity/seeds/*.rb)
+#   parity/bin/seed list              list seeds and whether they're built
+#
+# Each seed lands in parity/.seed/NAME/{db/production.sqlite3, storage/, labels.json}. The database is
+# prepared by the reference app (db:prepare, i.e. schema.rb) and filled by parity/seeds/NAME.rb
+# running under bin/rails runner, so every row, attachment, variant and preview is Ruby's.
+# Uses the same runtime as parity/bin/reference (PARITY_RUNTIME=docker|native).
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SEEDS=${PARITY_SEED_DIR:-$ROOT/parity/.seed}
+REFERENCE=$ROOT/parity/bin/reference
+
+all_seeds() {
+  local f; for f in "$ROOT"/parity/seeds/*.rb; do basename "$f" .rb; done | grep -vx build
+}
+
+build() {
+  local name=$1 tmp=$SEEDS/.build-$1
+  [ -f "$ROOT/parity/seeds/$name.rb" ] || { echo "seed: no parity/seeds/$name.rb" >&2; exit 1; }
+  echo "seed: building $name" >&2
+  rm -rf "$tmp"; mkdir -p "$tmp/db" "$tmp/storage"
+
+  "$REFERENCE" exec --storage "$tmp" -- bin/rails db:prepare
+  "$REFERENCE" runner --storage "$tmp" "$ROOT/parity/seeds/build.rb" "$name"
+
+  rm -f "$tmp/db/production.sqlite3-wal" "$tmp/db/production.sqlite3-shm"
+  mv "$tmp/db/labels.json" "$tmp/labels.json"
+  rm -rf "${SEEDS:?}/$name"
+  mv "$tmp" "$SEEDS/$name"
+  echo "seed: $name -> ${SEEDS#"$ROOT"/}/$name ($(du -sh "$SEEDS/$name" | cut -f1))" >&2
+}
+
+case "${1:-}" in
+  build)
+    shift
+    names=("$@"); [ ${#names[@]} -gt 0 ] || mapfile -t names < <(all_seeds)
+    for name in "${names[@]}"; do build "$name"; done ;;
+  list)
+    for name in $(all_seeds); do
+      if [ -f "$SEEDS/$name/db/production.sqlite3" ]; then echo "$name built"; else echo "$name -"; fi
+    done ;;
+  *)
+    sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 1 ;;
+esac

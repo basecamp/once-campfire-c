@@ -1,0 +1,1350 @@
+{
+  "fixtures": {
+    "cookies": {
+      "A": "session_token=eyJfcmFpbHMiOnsibWVzc2FnZSI6IkluVk9ia3hUTWpsaFpVRlJNV3RCVVRacGFXSkNVbmhuWlNJPSIsImV4cCI6bnVsbCwicHVyIjoiY29va2llLnNlc3Npb25fdG9rZW4ifX0%3D--b18ce4513b01b7291d4c0798c3b554ca9005e6ba",
+      "B": "session_token=eyJfcmFpbHMiOnsibWVzc2FnZSI6IkltRnFTbTFRU2paR2FuQTRlbUpqVEhZMmJUZEtZMDFSZVNJPSIsImV4cCI6bnVsbCwicHVyIjoiY29va2llLnNlc3Npb25fdG9rZW4ifX0%3D--2d7312de24389e4c9417a938b6a07187b8287606"
+    },
+    "tokens": {
+      "A_ID": "773523959",
+      "A_ROOMS_SIGNED": "IloybGtPaTh2WTJGdGNHWnBjbVV2VlhObGNpODNOek0xTWpNNU5Uazpyb29tcyI=--b04ae70e174c5788e66ab6de8abaffe17d5a24d3bef07287cf027a438c44a568",
+      "B_ID": "773523960",
+      "CLOSED_ID": "699448331",
+      "CLOSED_MESSAGES_SIGNED": "IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPa05zYjNObFpDODJPVGswTkRnek16RTptZXNzYWdlcyI=--3aba2a6466c4468ba51417ed9ba33338a41f35974f34e7c8cabf79c676d115fe",
+      "MESSAGE_ID": "933434638",
+      "ROOMS_SIGNED": "InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c",
+      "ROOM_ID": "699448330",
+      "ROOM_MESSAGES_SIGNED": "IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88"
+    },
+    "rows": {
+      "memberships": [
+        {
+          "id": 142918545,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:16:00",
+          "involvement": "everything",
+          "room_id": 699448325,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:16:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 146174848,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:00:00",
+          "involvement": "mentions",
+          "room_id": 654632876,
+          "unread_at": null,
+          "updated_at": "2026-03-01 13:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 181790929,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:04:00",
+          "involvement": "everything",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:04:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 198590975,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:14:00",
+          "involvement": "everything",
+          "room_id": 186869642,
+          "unread_at": null,
+          "updated_at": "2026-03-02 11:02:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 211379269,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:09:00",
+          "involvement": "nothing",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:09:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 239841951,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:12:00",
+          "involvement": "everything",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:12:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 449028908,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:13:00",
+          "involvement": "everything",
+          "room_id": 186869642,
+          "unread_at": null,
+          "updated_at": "2026-03-02 11:03:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 505016279,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:07:00",
+          "involvement": "everything",
+          "room_id": 486777696,
+          "unread_at": null,
+          "updated_at": "2026-03-02 15:40:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 515358788,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:05:00",
+          "involvement": "everything",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:05:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 658335620,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:03:00",
+          "involvement": "mentions",
+          "room_id": 654632876,
+          "unread_at": "2026-03-01 13:00:00",
+          "updated_at": "2026-03-01 13:00:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 690221570,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:10:00",
+          "involvement": "everything",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:10:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 741303990,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:02:00",
+          "involvement": "everything",
+          "room_id": 654632876,
+          "unread_at": null,
+          "updated_at": "2026-03-01 12:50:00",
+          "user_id": 773523953
+        },
+        {
+          "id": 765383822,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:17:00",
+          "involvement": "everything",
+          "room_id": 340026324,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:17:00",
+          "user_id": 394959859
+        },
+        {
+          "id": 774341722,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:06:00",
+          "involvement": "everything",
+          "room_id": 486777696,
+          "unread_at": "2026-03-02 15:40:00",
+          "updated_at": "2026-03-02 15:40:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 812357801,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:18:00",
+          "involvement": "everything",
+          "room_id": 340026324,
+          "unread_at": null,
+          "updated_at": "2026-03-02 12:00:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 897066373,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:01:00",
+          "involvement": "everything",
+          "room_id": 654632876,
+          "unread_at": null,
+          "updated_at": "2026-03-01 13:00:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 944797859,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:15:00",
+          "involvement": "nothing",
+          "room_id": 699448325,
+          "unread_at": "2026-03-02 14:00:00",
+          "updated_at": "2026-03-02 14:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 963867642,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:08:00",
+          "involvement": "mentions",
+          "room_id": 486777696,
+          "unread_at": null,
+          "updated_at": "2026-02-28 22:00:00",
+          "user_id": 394959859
+        },
+        {
+          "id": 1021579652,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-04 16:11:00",
+          "involvement": "everything",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-04 16:11:00",
+          "user_id": 773523953
+        },
+        {
+          "id": 1021579655,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-22 16:00:00",
+          "involvement": "mentions",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-01-22 16:00:00",
+          "user_id": 773523955
+        },
+        {
+          "id": 1021579656,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-22 16:00:00",
+          "involvement": "mentions",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-22 16:00:00",
+          "user_id": 773523955
+        },
+        {
+          "id": 1021579657,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-23 16:00:00",
+          "involvement": "mentions",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-01-23 16:00:00",
+          "user_id": 773523956
+        },
+        {
+          "id": 1021579658,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-23 16:00:00",
+          "involvement": "mentions",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-01-23 16:00:00",
+          "user_id": 773523956
+        },
+        {
+          "id": 1021579661,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-26 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448326,
+          "unread_at": null,
+          "updated_at": "2026-01-26 16:00:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 1021579662,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-26 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448326,
+          "unread_at": null,
+          "updated_at": "2026-01-26 16:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 1021579663,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "invisible",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 1021579664,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 1021579665,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 394959859
+        },
+        {
+          "id": 1021579666,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 1021579667,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 773523953
+        },
+        {
+          "id": 1021579669,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 773523955
+        },
+        {
+          "id": 1021579670,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-27 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-01-27 16:00:00",
+          "user_id": 773523956
+        },
+        {
+          "id": 1021579681,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-28 16:00:00",
+          "involvement": "mentions",
+          "room_id": 699448328,
+          "unread_at": null,
+          "updated_at": "2026-01-28 16:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 1021579682,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-29 16:00:00",
+          "involvement": "everything",
+          "room_id": 699448329,
+          "unread_at": "2026-03-02 13:00:00",
+          "updated_at": "2026-03-02 13:00:00",
+          "user_id": 127326141
+        },
+        {
+          "id": 1021579683,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-29 16:00:00",
+          "involvement": "everything",
+          "room_id": 699448329,
+          "unread_at": null,
+          "updated_at": "2026-03-02 13:00:00",
+          "user_id": 149087659
+        },
+        {
+          "id": 1021579684,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-29 16:00:00",
+          "involvement": "everything",
+          "room_id": 699448329,
+          "unread_at": null,
+          "updated_at": "2026-01-29 16:00:00",
+          "user_id": 773523953
+        },
+        {
+          "id": 1021579685,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-29 16:00:00",
+          "involvement": "everything",
+          "room_id": 699448329,
+          "unread_at": null,
+          "updated_at": "2026-03-02 13:00:00",
+          "user_id": 712064548
+        },
+        {
+          "id": 1021579687,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-30 16:00:00",
+          "involvement": "mentions",
+          "room_id": 654632876,
+          "unread_at": null,
+          "updated_at": "2026-03-01 13:00:00",
+          "user_id": 773523956
+        },
+        {
+          "id": 1021579688,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-01-30 16:01:00",
+          "involvement": "mentions",
+          "room_id": 654632876,
+          "unread_at": null,
+          "updated_at": "2026-03-01 13:00:00",
+          "user_id": 773523955
+        },
+        {
+          "id": 1021579692,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.591",
+          "involvement": "mentions",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.591",
+          "user_id": 773523959
+        },
+        {
+          "id": 1021579693,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.591",
+          "involvement": "mentions",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.591",
+          "user_id": 773523959
+        },
+        {
+          "id": 1021579694,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.591",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.591",
+          "user_id": 773523959
+        },
+        {
+          "id": 1021579695,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.730",
+          "involvement": "mentions",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.730",
+          "user_id": 773523960
+        },
+        {
+          "id": 1021579696,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.730",
+          "involvement": "mentions",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.730",
+          "user_id": 773523960
+        },
+        {
+          "id": 1021579697,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.730",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.730",
+          "user_id": 773523960
+        },
+        {
+          "id": 1021579698,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.868",
+          "involvement": "mentions",
+          "room_id": 104393281,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.868",
+          "user_id": 773523961
+        },
+        {
+          "id": 1021579699,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.868",
+          "involvement": "mentions",
+          "room_id": 201306877,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.868",
+          "user_id": 773523961
+        },
+        {
+          "id": 1021579700,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.868",
+          "involvement": "mentions",
+          "room_id": 699448327,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.868",
+          "user_id": 773523961
+        },
+        {
+          "id": 1021579701,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.876",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 773523959
+        },
+        {
+          "id": 1021579702,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.876",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.876",
+          "user_id": 773523960
+        },
+        {
+          "id": 1021579703,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 127326141
+        },
+        {
+          "id": 1021579704,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 149087659
+        },
+        {
+          "id": 1021579705,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 394959859
+        },
+        {
+          "id": 1021579706,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 712064548
+        },
+        {
+          "id": 1021579707,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 773523953
+        },
+        {
+          "id": 1021579708,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 773523956
+        },
+        {
+          "id": 1021579709,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 773523958
+        },
+        {
+          "id": 1021579712,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.882",
+          "involvement": "mentions",
+          "room_id": 699448330,
+          "unread_at": "2026-09-26 13:09:15.920972",
+          "updated_at": "2026-09-26 13:09:15.934477",
+          "user_id": 773523961
+        },
+        {
+          "id": 1021579713,
+          "connected_at": null,
+          "connections": 0,
+          "created_at": "2026-09-26 13:09:15.885",
+          "involvement": "mentions",
+          "room_id": 699448331,
+          "unread_at": null,
+          "updated_at": "2026-09-26 13:09:15.885",
+          "user_id": 773523961
+        }
+      ],
+      "messages": [
+        {
+          "id": 933434638,
+          "client_message_id": "channels-golden-1",
+          "created_at": "2026-09-26 13:09:15.920972",
+          "creator_id": 773523960,
+          "room_id": 699448330,
+          "updated_at": "2026-09-26 13:09:15.927704"
+        }
+      ],
+      "rooms": [
+        {
+          "id": 104393281,
+          "created_at": "2026-01-03 16:00:00",
+          "creator_id": 127326141,
+          "name": "All Pets",
+          "type": "Rooms::Open",
+          "updated_at": "2026-01-03 16:00:00"
+        },
+        {
+          "id": 186869642,
+          "created_at": "2026-01-03 20:00:00",
+          "creator_id": 127326141,
+          "name": null,
+          "type": "Rooms::Direct",
+          "updated_at": "2026-03-02 11:03:00"
+        },
+        {
+          "id": 201306877,
+          "created_at": "2026-01-03 17:00:00",
+          "creator_id": 127326141,
+          "name": "HQ",
+          "type": "Rooms::Open",
+          "updated_at": "2026-01-03 17:00:00"
+        },
+        {
+          "id": 340026324,
+          "created_at": "2026-01-03 22:00:00",
+          "creator_id": 712064548,
+          "name": null,
+          "type": "Rooms::Direct",
+          "updated_at": "2026-03-02 12:00:00"
+        },
+        {
+          "id": 486777696,
+          "created_at": "2026-01-03 18:00:00",
+          "creator_id": 127326141,
+          "name": "All Talk",
+          "type": "Rooms::Closed",
+          "updated_at": "2026-03-02 15:55:00"
+        },
+        {
+          "id": 654632876,
+          "created_at": "2026-01-03 19:00:00",
+          "creator_id": 127326141,
+          "name": "Designers",
+          "type": "Rooms::Closed",
+          "updated_at": "2026-03-02 15:53:00"
+        },
+        {
+          "id": 699448325,
+          "created_at": "2026-01-03 21:00:00",
+          "creator_id": 127326141,
+          "name": null,
+          "type": "Rooms::Direct",
+          "updated_at": "2026-03-02 14:00:00"
+        },
+        {
+          "id": 699448326,
+          "created_at": "2026-01-26 16:00:00",
+          "creator_id": 712064548,
+          "name": "Quiet Corner",
+          "type": "Rooms::Closed",
+          "updated_at": "2026-01-26 16:00:00"
+        },
+        {
+          "id": 699448327,
+          "created_at": "2026-01-27 16:00:00",
+          "creator_id": 127326141,
+          "name": "Archive",
+          "type": "Rooms::Open",
+          "updated_at": "2026-01-27 16:00:00"
+        },
+        {
+          "id": 699448328,
+          "created_at": "2026-01-28 16:00:00",
+          "creator_id": 127326141,
+          "name": "Broken",
+          "type": "Rooms::Closed",
+          "updated_at": "2026-03-02 10:00:00"
+        },
+        {
+          "id": 699448329,
+          "created_at": "2026-01-29 16:00:00",
+          "creator_id": 127326141,
+          "name": null,
+          "type": "Rooms::Direct",
+          "updated_at": "2026-03-02 13:00:00"
+        },
+        {
+          "id": 699448330,
+          "created_at": "2026-09-26 13:09:15.873453",
+          "creator_id": 773523959,
+          "name": "Channels",
+          "type": "Rooms::Open",
+          "updated_at": "2026-09-26 13:09:15.931629"
+        },
+        {
+          "id": 699448331,
+          "created_at": "2026-09-26 13:09:15.884750",
+          "creator_id": 773523961,
+          "name": "Channels Private",
+          "type": "Rooms::Closed",
+          "updated_at": "2026-09-26 13:09:15.884750"
+        }
+      ],
+      "sessions": [
+        {
+          "id": 481019662,
+          "created_at": "2026-09-26 13:09:15.946703",
+          "ip_address": "8.8.8.8",
+          "last_active_at": "2026-09-26 13:09:15.946752",
+          "token": "uNnLS29aeAQ1kAQ6iibBRxge",
+          "updated_at": "2026-09-26 13:09:15.946703",
+          "user_agent": "golden",
+          "user_id": 773523959
+        },
+        {
+          "id": 481019663,
+          "created_at": "2026-09-26 13:09:15.953022",
+          "ip_address": "8.8.8.8",
+          "last_active_at": "2026-09-26 13:09:15.953043",
+          "token": "ajJmPJ6Fjp8zbcLv6m7JcMQy",
+          "updated_at": "2026-09-26 13:09:15.953022",
+          "user_agent": "golden",
+          "user_id": 773523960
+        }
+      ],
+      "users": [
+        {
+          "id": 127326141,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-01-02 16:00:00",
+          "email_address": "david@37signals.com",
+          "name": "David",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 1,
+          "status": 0,
+          "updated_at": "2026-01-02 16:00:00"
+        },
+        {
+          "id": 149087659,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-01-02 17:00:00",
+          "email_address": "jason@37signals.com",
+          "name": "Jason",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 1,
+          "status": 0,
+          "updated_at": "2026-01-25 16:00:00"
+        },
+        {
+          "id": 394959859,
+          "bio": null,
+          "bot_token": "BenderBot123",
+          "created_at": "2026-01-02 20:00:00",
+          "email_address": null,
+          "name": "Bender Bot",
+          "password_digest": null,
+          "role": 2,
+          "status": 0,
+          "updated_at": "2026-01-02 20:00:00"
+        },
+        {
+          "id": 712064548,
+          "bio": "Programmer",
+          "bot_token": null,
+          "created_at": "2026-01-02 19:00:00",
+          "email_address": "kevin@37signals.com",
+          "name": "Kevin",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-01-02 19:00:00"
+        },
+        {
+          "id": 773523953,
+          "bio": "Designer",
+          "bot_token": null,
+          "created_at": "2026-01-02 18:00:00",
+          "email_address": "jz@37signals.com",
+          "name": "JZ",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-01-02 18:00:00"
+        },
+        {
+          "id": 773523954,
+          "bio": "Support",
+          "bot_token": null,
+          "created_at": "2026-01-21 16:00:00",
+          "email_address": "rita-deactivated-00000000-0000-4000-8000-000000000000@37signals.com",
+          "name": "Rita Lopez",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 0,
+          "status": 1,
+          "updated_at": "2026-01-31 16:00:00"
+        },
+        {
+          "id": 773523955,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-01-22 16:00:00",
+          "email_address": "mallory@example.com",
+          "name": "Mallory Banned",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 0,
+          "status": 2,
+          "updated_at": "2026-02-02 16:00:00"
+        },
+        {
+          "id": 773523956,
+          "bio": null,
+          "bot_token": "DeployBot456",
+          "created_at": "2026-01-23 16:00:00",
+          "email_address": null,
+          "name": "Deploy Bot",
+          "password_digest": null,
+          "role": 2,
+          "status": 0,
+          "updated_at": "2026-01-25 16:01:00"
+        },
+        {
+          "id": 773523957,
+          "bio": null,
+          "bot_token": "OldBot789abc",
+          "created_at": "2026-01-24 16:00:00",
+          "email_address": null,
+          "name": "Old Bot",
+          "password_digest": null,
+          "role": 2,
+          "status": 1,
+          "updated_at": "2026-02-01 16:00:00"
+        },
+        {
+          "id": 773523958,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-02-03 16:00:00",
+          "email_address": "lou@37signals.com",
+          "name": "Lonely Lou",
+          "password_digest": "$2a$12$Gz1V3e1PgXe5HFJ5lLlH8eP5BlvdNLdGGdQyacJSn7rvquw4Lt0ue",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-02-03 16:00:00"
+        },
+        {
+          "id": 773523959,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-09-26 13:09:15.583487",
+          "email_address": "channels-a@example.com",
+          "name": "Channel Tester",
+          "password_digest": "$2a$12$4lwJXRXqkvg5owTwpuj.tesr4yopZsB2JO7chWeIUJ/JvWNmJNamS",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-09-26 13:09:15.583487"
+        },
+        {
+          "id": 773523960,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-09-26 13:09:15.728254",
+          "email_address": "channels-b@example.com",
+          "name": "Channel Peer",
+          "password_digest": "$2a$12$hsn2bAJANEJcVg2qtgkAA.MR6wzikrEhqbe/98kD6IS7hDwFQLOZK",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-09-26 13:09:15.728254"
+        },
+        {
+          "id": 773523961,
+          "bio": null,
+          "bot_token": null,
+          "created_at": "2026-09-26 13:09:15.866168",
+          "email_address": "channels-c@example.com",
+          "name": "Channel Outsider",
+          "password_digest": "$2a$12$IelewWBpROn0.Tf1gcfqY.DUfOBmNzIAAGCNBL7eHoirFUNsUNxy6",
+          "role": 0,
+          "status": 0,
+          "updated_at": "2026-09-26 13:09:15.866168"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "step": "connect A",
+      "frames": {
+        "A": [
+          "{\"type\":\"welcome\"}"
+        ]
+      }
+    },
+    {
+      "step": "connect B",
+      "frames": {
+        "B": [
+          "{\"type\":\"welcome\"}"
+        ]
+      }
+    },
+    {
+      "step": "connect without a cookie",
+      "frames": {
+        "X": [
+          "{\"type\":\"disconnect\",\"reason\":\"unauthorized\",\"reconnect\":false}",
+          "close Some((1000, \"\"))"
+        ]
+      }
+    },
+    {
+      "step": "A heartbeat",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"HeartbeatChannel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A base channel",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ApplicationCable::Channel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A reads",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ReadRoomsChannel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A unreads",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"UnreadRoomsChannel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A presence",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}",
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ReadRoomsChannel\\\"}\",\"message\":{\"room_id\":699448330}}"
+        ]
+      }
+    },
+    {
+      "step": "A presence in a room A isn't in",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":699448331}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A presence with a non-numeric room",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":\\\"abc\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A presence with a numeric string room",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":\\\"699448330\\\"}\",\"type\":\"confirm_subscription\"}",
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ReadRoomsChannel\\\"}\",\"message\":{\"room_id\":699448330}}"
+        ]
+      }
+    },
+    {
+      "step": "A room",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room A isn't in",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448331}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room without an id",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A typing",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "B typing",
+      "frames": {
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A starts typing",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523959,\"name\":\"Channel Tester\"}}}"
+        ],
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523959,\"name\":\"Channel Tester\"}}}"
+        ]
+      }
+    },
+    {
+      "step": "B stops typing",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"stop\",\"user\":{\"id\":773523960,\"name\":\"Channel Peer\"}}}"
+        ],
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"stop\",\"user\":{\"id\":773523960,\"name\":\"Channel Peer\"}}}"
+        ]
+      }
+    },
+    {
+      "step": "A performs an unknown typing action",
+      "frames": {}
+    },
+    {
+      "step": "A room messages",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room messages for a room A isn't in",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPa05zYjNObFpDODJPVGswTkRnek16RTptZXNzYWdlcyI=--3aba2a6466c4468ba51417ed9ba33338a41f35974f34e7c8cabf79c676d115fe\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room messages without a name",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room messages with a forged name",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--0000\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A room messages with the rooms name",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A turbo rooms",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A turbo own rooms",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VlhObGNpODNOek0xTWpNNU5Uazpyb29tcyI=--b04ae70e174c5788e66ab6de8abaffe17d5a24d3bef07287cf027a438c44a568\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A turbo guarded room messages",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A turbo forged",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--0000\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A presence present",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ReadRoomsChannel\\\"}\",\"message\":{\"room_id\":699448330}}"
+        ]
+      }
+    },
+    {
+      "step": "A presence refresh",
+      "frames": {}
+    },
+    {
+      "step": "A unreads subscribed again",
+      "frames": {}
+    },
+    {
+      "step": "unread fanout",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"UnreadRoomsChannel\\\"}\",\"message\":{\"roomId\":699448330}}",
+          "{\"identifier\":\"{\\\"channel\\\":\\\"UnreadRoomsChannel\\\"}\",\"message\":{\"roomId\":699448330}}"
+        ]
+      }
+    },
+    {
+      "step": "message removed",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"message\":\"\\u003cturbo-stream action=\\\"remove\\\" target=\\\"message_channels-golden-1\\\"\\u003e\\u003c/turbo-stream\\u003e\"}"
+        ]
+      }
+    },
+    {
+      "step": "B presence",
+      "frames": {
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A typing again",
+      "frames": {
+        "A": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523959,\"name\":\"Channel Tester\"}}}"
+        ],
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523959,\"name\":\"Channel Tester\"}}}"
+        ]
+      }
+    },
+    {
+      "step": "revoke A",
+      "frames": {
+        "A": [
+          "{\"type\":\"disconnect\",\"reason\":\"remote\",\"reconnect\":true}",
+          "close Some((1000, \"\"))"
+        ]
+      }
+    },
+    {
+      "step": "reconnect A",
+      "frames": {
+        "A2": [
+          "{\"type\":\"welcome\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 presence",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"PresenceChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 room",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 typing",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 room messages",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomMessagesChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 turbo guarded room messages",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 turbo rooms",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "A2 unreads",
+      "frames": {
+        "A2": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"UnreadRoomsChannel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      }
+    },
+    {
+      "step": "B typing after A left",
+      "frames": {
+        "B": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523960,\"name\":\"Channel Peer\"}}}"
+        ]
+      }
+    },
+    {
+      "step": "deactivate B",
+      "frames": {
+        "B": [
+          "{\"type\":\"disconnect\",\"reason\":\"remote\",\"reconnect\":false}",
+          "close Some((1000, \"\"))"
+        ]
+      }
+    },
+    {
+      "step": "reconnect B",
+      "frames": {
+        "B2": [
+          "{\"type\":\"disconnect\",\"reason\":\"unauthorized\",\"reconnect\":false}",
+          "close Some((1000, \"\"))"
+        ]
+      }
+    }
+  ]
+}

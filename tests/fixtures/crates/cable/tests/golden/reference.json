@@ -1,0 +1,169 @@
+{
+  "tokens": {
+    "CLOSED_ROOM_ID": "699448331",
+    "ROOMS_SIGNED": "InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c",
+    "ROOM_ID": "699448330",
+    "ROOM_MESSAGES_SIGNED": "IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88",
+    "USER_ID": "773523958",
+    "USER_NAME": "Cable Tester"
+  },
+  "sessions": {
+    "authenticated": [
+      {
+        "step": "connect",
+        "frames": [
+          "upgrade 101 protocol=actioncable-v1-json",
+          "{\"type\":\"welcome\"}"
+        ]
+      },
+      {
+        "step": "subscribe heartbeat",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"HeartbeatChannel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe heartbeat again",
+        "frames": []
+      },
+      {
+        "step": "subscribe member room",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe non-member room",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448331}\",\"type\":\"reject_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe unknown channel",
+        "frames": []
+      },
+      {
+        "step": "subscribe base channel",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"ApplicationCable::Channel\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe turbo rooms",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--60a2ff565fb2226042c779b5711156db1d1cc48f89e6f59c94e4bf1da3f0945c\\\"}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe turbo forged",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"InJvb21zIg==--0000\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe turbo unsigned",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe turbo guarded room messages",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"Turbo::StreamsChannel\\\",\\\"signed_stream_name\\\":\\\"IloybGtPaTh2WTJGdGNHWnBjbVV2VW05dmJYTTZPazl3Wlc0dk5qazVORFE0TXpNdzptZXNzYWdlcyI=--380c9b288ee92e798a4af7165a43e54bda7c597219a27b815e3278cf183d4d88\\\"}\",\"type\":\"reject_subscription\"}"
+        ]
+      },
+      {
+        "step": "subscribe typing",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "perform typing start",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"TypingNotificationsChannel\\\",\\\"room_id\\\":699448330}\",\"message\":{\"action\":\"start\",\"user\":{\"id\":773523958,\"name\":\"Cable Tester\"}}}"
+        ]
+      },
+      {
+        "step": "perform unknown action",
+        "frames": []
+      },
+      {
+        "step": "perform default receive",
+        "frames": []
+      },
+      {
+        "step": "unsubscribe typing",
+        "frames": []
+      },
+      {
+        "step": "perform after unsubscribe",
+        "frames": []
+      },
+      {
+        "step": "unknown command",
+        "frames": []
+      },
+      {
+        "step": "invalid json",
+        "frames": []
+      },
+      {
+        "step": "ping",
+        "frames": [
+          "{\"type\":\"ping\",\"message\":<unix>}"
+        ]
+      }
+    ],
+    "cross origin": [
+      {
+        "step": "connect",
+        "frames": [
+          "http 404 Page not found"
+        ]
+      }
+    ],
+    "plain http": [
+      {
+        "step": "get",
+        "frames": [
+          "http 404 text/plain; charset=utf-8 Page not found"
+        ]
+      }
+    ],
+    "remote disconnect": [
+      {
+        "step": "connect",
+        "frames": [
+          "upgrade 101 protocol=actioncable-v1-json",
+          "{\"type\":\"welcome\"}"
+        ]
+      },
+      {
+        "step": "subscribe member room",
+        "frames": [
+          "{\"identifier\":\"{\\\"channel\\\":\\\"RoomChannel\\\",\\\"room_id\\\":699448330}\",\"type\":\"confirm_subscription\"}"
+        ]
+      },
+      {
+        "step": "sign out",
+        "frames": [
+          "{\"type\":\"disconnect\",\"reason\":\"remote\",\"reconnect\":true}",
+          "close Some((1000, \"\"))",
+          "end"
+        ]
+      }
+    ],
+    "unauthenticated": [
+      {
+        "step": "connect",
+        "frames": [
+          "upgrade 101 protocol=actioncable-v1-json",
+          "{\"type\":\"disconnect\",\"reason\":\"unauthorized\",\"reconnect\":false}",
+          "close Some((1000, \"\"))",
+          "end"
+        ]
+      }
+    ]
+  }
+}

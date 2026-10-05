@@ -1,0 +1,1576 @@
+# Screen inventory. Format: parity/SCREENS.md. Seeds and labels: parity/seeds/README.md.
+#
+# Conventions and extensions to SCREENS.md used here (the capture engine should implement them):
+#
+#   {{table.label}}   interpolated in path, steps, headers and request bodies from
+#                     parity/.seed/<seed>/labels.json (ids, and strings like transfers.david).
+#   as: <label>       sign in through /session/new with emails.<label> and passwords.all.
+#   user_agent: name  a key of parity/seeds/user_agents.yml (or a literal UA string).
+#   headers: {...}    extra request headers for every request of the state.
+#   expect_status: N  HTTP status of the main document (default 200).
+#   accept_dialogs: true  accept turbo_confirm (window.confirm) dialogs instead of dismissing them.
+#   clock: advancing  the browser's Date advances with the harness's fake-time ticks instead of
+#                     staying at the seed instant (timers run on fake time either way).
+#   notifications: granted  the browser has notification permission and a push subscription (the
+#                     default is permission denied, with no subscription).
+#   kind: fragment    not a page (turbo-stream, JSON, SVG, layout-less HTML): no screenshot, compare
+#                     the response (status, content type, normalized body) only.
+#   request: {method, body, headers}  for fragments that aren't plain GETs.
+#   mutates: true     the state changes the server's state (the database, the sign-in rate limit's
+#                     counter), or its broadcasts would reach other captures (typing): each capture
+#                     runs on fresh servers of its own. Visiting a room marks it read for that user
+#                     (PresenceChannel#present), so states that open a room where their user has
+#                     unread messages are marked too: otherwise every sidebar showing that room
+#                     would depend on which captures ran first.
+#   masks: {values, pixels}  values a server makes up at random while the state runs (SCREENS.md,
+#                     "Masks"): each value is read from the page and becomes «name» in the text
+#                     layers; pixels lists elements painted over in the screenshot.
+#   Steps beyond SCREENS.md:
+#     type: {selector, text}     key presses (Playwright pressSequentially), for the Lexxy editor
+#     upload: {selector, files}  set files on an <input type=file>; paths are relative to the repo
+#     scroll: {selector, to}     scroll an element to top|bottom
+#     hold_requests: "POST **/messages"  leave matching requests pending (in-flight states)
+#     goto: path                 navigate (same interpolation as path)
+#
+# Every state runs at the seed clock (labels clock.now) unless it says otherwise: the server under
+# libfaketime/Clock, the browser under page.clock.setFixedTime.
+#
+# External images referenced by seeded opengraph embeds must be served by the harness (no network):
+#   https://example.com/og/**                -> reference/test/fixtures/files/moon.jpg
+#   https://pbs.twimg.com/profile_images/**  -> reference/test/fixtures/files/moon.jpg
+
+# ================================================================================================
+# Unauthenticated
+# ================================================================================================
+
+- id: auth/sign_in
+  path: /session/new
+  covers: [layouts/application, sessions/new, accounts/_help_contact]
+
+- id: auth/sign_in/error
+  path: /session/new
+  expect_status: 200
+  mutates: true    # each POST spends the sign-in rate limit (10 per 3 minutes per IP)
+  steps:
+    - fill: { selector: "#email_address", text: "david@37signals.com" }
+    - fill: { selector: "#password", text: "wrong-password" }
+    - click: "button[name=log_in]"
+    - pause_animations_at: 500
+  covers: [sessions/new, layouts/application]
+
+- id: auth/sign_in/rate_limited
+  path: /session/new
+  mutates: true
+  steps:
+    # SessionsController rate_limit: 10 per 3 minutes, the 11th renders the rejection with 429
+    - { fill: { selector: "#email_address", text: "nobody@example.com" } }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - { fill: { selector: "#password", text: "x" } }
+    - { click: "button[name=log_in]" }
+    - pause_animations_at: 500
+  covers: [sessions/new]
+
+- id: auth/sign_in/banned_ip
+  path: /session/new
+  headers: { X-Forwarded-For: "{{ips.banned}}" }
+  steps:
+    # BlockBannedRequests only rejects non-GET requests: the form renders, the POST gets 429
+    - fill: { selector: "#email_address", text: "david@37signals.com" }
+    - fill: { selector: "#password", text: "{{passwords.all}}" }
+    - click: "button[name=log_in]"
+  covers: [sessions/new]
+
+- id: auth/sign_in/custom_styles
+  seed: custom_styles
+  path: /session/new
+  covers: [sessions/new, accounts/_help_contact]
+
+- id: auth/first_run
+  seed: first_run
+  path: /first_run
+  covers: [first_runs/show]
+
+- id: auth/first_run/from_sign_in
+  seed: first_run
+  path: /session/new           # SessionsController#ensure_user_exists redirects to /first_run
+  covers: [first_runs/show]
+
+- id: auth/first_run/filled
+  seed: first_run
+  path: /first_run
+  steps:
+    - fill: { selector: "#user_name", text: "Ada Admin" }
+    - fill: { selector: "#user_email_address", text: "ada@example.com" }
+    - fill: { selector: "#user_password", text: "secret123456" }
+  covers: [first_runs/show]
+
+- id: auth/first_run/completed
+  seed: first_run
+  path: /first_run
+  mutates: true
+  steps:
+    - fill: { selector: "#user_name", text: "Ada Admin" }
+    - fill: { selector: "#user_email_address", text: "ada@example.com" }
+    - fill: { selector: "#user_password", text: "secret123456" }
+    - click: "button[type=submit]"
+    - wait_for: "#message-area"
+  # Creating the account generates a random join code (Account::Joinable#generate_join_code), which
+  # the invitation shows as the join URL, its QR code link, copy and share buttons.
+  masks:
+    values:
+      join_code: { selector: "#invite_url", attribute: value, match: "/join/([^/?#]+)$" }
+    pixels: ["#invite_url", "a[href^='/qr_code/']"]
+  covers: [rooms/show, rooms/show/_invitation, accounts/_invite]
+
+- id: auth/join
+  path: /join/{{join_codes.signal}}
+  covers: [users/new, accounts/_help_contact]
+
+- id: auth/join/invalid_code
+  path: /join/not-a-code
+  expect_status: 404
+  covers: []
+
+- id: auth/join/completed
+  path: /join/{{join_codes.signal}}
+  mutates: true
+  steps:
+    - fill: { selector: "#user_name", text: "Nora New" }
+    - fill: { selector: "#user_email_address", text: "nora@example.com" }
+    - fill: { selector: "#user_password", text: "secret123456" }
+    - click: "button[type=submit]"
+    - wait_for: "#message-area"
+  covers: [rooms/show]
+
+- id: auth/join/existing_email
+  path: /join/{{join_codes.signal}}
+  steps:
+    # UsersController#create rescues RecordNotUnique into the sign-in form, prefilled
+    - fill: { selector: "#user_name", text: "Another David" }
+    - fill: { selector: "#user_email_address", text: "david@37signals.com" }
+    - fill: { selector: "#user_password", text: "secret123456" }
+    - click: "button[type=submit]"
+    - wait_for: "#email_address"
+  covers: [sessions/new]
+
+- id: auth/transfer/valid
+  path: /session/transfers/{{transfers.david}}
+  mutates: true
+  steps:
+    - wait_for: "#message-area"   # auto-submits, signs in, lands in the last room
+  covers: [sessions/transfers/show, rooms/show]
+
+- id: auth/transfer/expired
+  path: /session/transfers/{{transfers.david_expired}}
+  # The form auto-submits (PUT) and the answer is a 400 with an empty body, which Turbo doesn't
+  # render: the page stays as it was. Readiness waits for the submission to finish.
+  covers: [sessions/transfers/show]
+
+- id: auth/signed_out_redirect
+  path: /rooms/{{rooms.designers}}   # require_authentication stores return_to and redirects
+  covers: [sessions/new]
+
+- id: auth/incompatible_browser
+  user_agent: chrome_outdated
+  path: /session/new
+  expect_status: 200
+  covers: [sessions/incompatible_browser]
+
+- id: auth/incompatible_browser/apple_messages
+  user_agent: apple_messages
+  path: /session/new
+  covers: [sessions/incompatible_browser]
+
+- id: errors/404
+  as: david
+  path: /users/999999999
+  expect_status: 404
+  covers: []
+
+- id: errors/404/static
+  path: /404.html
+  covers: []
+
+- id: errors/422/static
+  path: /422.html
+  covers: []
+
+- id: errors/500/static
+  path: /500.html
+  covers: []
+
+- id: errors/502/static
+  path: /502.html
+  covers: []
+
+# ================================================================================================
+# Rooms
+# ================================================================================================
+
+- id: rooms/show/designers
+  as: david
+  path: /rooms/{{rooms.designers}}
+  covers:
+    - layouts/application
+    - layouts/_lightbox
+    - layouts/action_text/contents/_content
+    - rooms/show
+    - rooms/show/_nav
+    - rooms/show/_composer
+    - rooms/involvements/_bell
+    - rooms/involvements/show
+    - pwa/_browser_settings
+    - pwa/_system_settings
+    - pwa/_install_instructions
+    - messages/_template
+    - messages/_message
+    - messages/_presentation
+    - messages/_actions
+    - messages/boosts/_boosts
+    - messages/boosts/_boost
+    - users/_mention
+    - action_text/attachables/_opengraph_embed
+    - users/sidebars/show
+    - users/sidebars/rooms/_direct
+    - users/sidebars/rooms/_direct_placeholder
+    - users/sidebars/rooms/_shared
+
+- id: rooms/show/designers/member
+  as: kevin      # a member (not admin) in a room someone else created
+  mutates: true  # reads designers for Kevin
+  path: /rooms/{{rooms.designers}}
+  covers: [rooms/show, messages/_message, users/sidebars/show]
+
+- id: rooms/show/designers/custom_styles
+  seed: custom_styles
+  as: david
+  path: /rooms/{{rooms.designers}}
+  covers: [rooms/show, rooms/show/_nav, layouts/application]
+
+- id: rooms/show/designers/custom_styles/member
+  seed: custom_styles
+  as: kevin
+  mutates: true  # reads designers for Kevin
+  path: /rooms/{{rooms.designers}}
+  covers: [rooms/show]
+
+- id: rooms/show/original_with_invitation
+  as: david
+  path: /rooms/{{rooms.pets}}
+  covers: [rooms/show/_invitation, accounts/_invite]
+
+- id: rooms/show/original_with_invitation/member
+  as: jason
+  path: /rooms/{{rooms.pets}}
+  covers: [rooms/show/_invitation, accounts/_invite]
+
+- id: rooms/show/empty
+  as: kevin
+  path: /rooms/{{rooms.quiet}}
+  covers: [rooms/show]
+
+- id: rooms/show/closed
+  as: david
+  path: /rooms/{{rooms.watercooler}}
+  mutates: true    # reads watercooler for David
+  covers: [rooms/show]
+
+- id: rooms/show/open
+  as: kevin
+  path: /rooms/{{rooms.hq}}
+  covers: [rooms/show]
+
+- id: rooms/show/busy/last_page
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}
+  covers: [rooms/show, messages/_message]
+
+- id: rooms/show/busy/scrolled_to_previous_page
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}
+  steps:
+    - scroll: { selector: ".messages", to: top }       # the MessagePaginator scroller
+    - wait_for: '[data-message-id="{{messages.busy_082}}"]'
+  covers: [messages/index]
+
+- id: rooms/show/busy/top_of_pagination
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}/@{{messages.busy_001}}   # page_around the oldest: 0 before, 40 after
+  covers: [rooms/show]
+
+- id: rooms/show/busy/page_around_middle
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}/@{{messages.busy_060}}   # the full window: 40 + 1 + 40
+  covers: [rooms/show]
+
+- id: rooms/show/busy/page_around_newest
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}/@{{messages.thirteenth}} # 40 before, 0 after
+  covers: [rooms/show]
+
+- id: rooms/show/busy/scrolled_to_next_page
+  as: david
+  mutates: true    # reads watercooler for David
+  path: /rooms/{{rooms.watercooler}}/@{{messages.busy_001}}
+  steps:
+    - scroll: { selector: ".messages", to: bottom }
+    - wait_for: '[data-message-id="{{messages.busy_042}}"]'
+  covers: [messages/index]
+
+- id: rooms/show/direct
+  as: david
+  path: /rooms/{{rooms.david_and_jason}}
+  covers: [rooms/show, rooms/show/_nav]
+
+- id: rooms/show/direct/group
+  as: david
+  mutates: true    # reads group_direct for David
+  path: /rooms/{{rooms.group_direct}}
+  covers: [rooms/show, users/sidebars/rooms/_direct]
+
+- id: rooms/show/direct/with_bot
+  as: kevin
+  path: /rooms/{{rooms.bender_and_kevin}}
+  covers: [rooms/show]
+
+- id: rooms/show/non_member
+  as: kevin
+  path: /rooms/{{rooms.watercooler}}   # redirects home with "Room not found or inaccessible"
+  steps:
+    - pause_animations_at: 500
+  covers: [layouts/application, rooms/show]
+
+- id: rooms/show/unrenderable_message
+  as: david
+  path: /rooms/{{rooms.broken}}
+  covers: [messages/_unrenderable]
+
+- id: rooms/involvement/mentions
+  as: david
+  notifications: granted
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.mentions"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/everything
+  as: david
+  notifications: granted
+  path: /rooms/{{rooms.pets}}
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.everything"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/nothing
+  as: david
+  notifications: granted
+  path: /rooms/{{rooms.hq}}
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.nothing"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/invisible
+  as: david
+  notifications: granted
+  path: /rooms/{{rooms.archive}}
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.invisible"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/direct_nothing
+  as: david
+  mutates: true    # reads david_and_kevin for David
+  notifications: granted
+  path: /rooms/{{rooms.david_and_kevin}}
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.nothing"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/cycled
+  as: david
+  notifications: granted
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.mentions"
+    - click: "#nav turbo-frame[id^=involvement_] button"
+    - wait_for: "#nav turbo-frame[id^=involvement_] button.everything"
+  covers: [rooms/involvements/show]
+
+- id: rooms/involvement/fragment
+  kind: fragment
+  as: david
+  path: /rooms/{{rooms.designers}}/involvement
+  covers: [rooms/involvements/show]
+
+- id: rooms/refresh/fragment
+  kind: fragment
+  as: david
+  path: /rooms/{{rooms.designers}}/refresh?since=1772380800000   # 2026-03-01 16:00 UTC
+  headers: { Accept: "text/vnd.turbo-stream.html" }
+  covers: [rooms/refreshes/show.turbo_stream, messages/_message]
+
+- id: messages/index/fragment
+  kind: fragment
+  as: david
+  path: /rooms/{{rooms.watercooler}}/messages?before={{messages.busy_060}}
+  covers: [messages/index, messages/_message]
+
+- id: messages/show/fragment
+  kind: fragment
+  as: david
+  path: /rooms/{{rooms.designers}}/messages/{{messages.plain}}
+  covers: [messages/show, messages/_message]
+
+# ================================================================================================
+# Messages: every presentation, deep-linked (page_around + scrollIntoView + highlight)
+# ================================================================================================
+
+- id: messages/plain
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.plain}}
+  covers: [messages/_message, messages/_presentation]
+
+- id: messages/threaded
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.threaded}}
+  covers: [messages/_message]
+
+- id: messages/long
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.long}}
+  covers: [messages/_presentation, layouts/action_text/contents/_content]
+
+- id: messages/emoji_only
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.emoji}}
+  covers: [messages/_message]
+
+- id: messages/code_with_language
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.code}}
+  covers: [messages/_presentation]
+
+- id: messages/code_without_language
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.code_plain}}
+  covers: [messages/_presentation]
+
+- id: messages/table
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.table}}
+  covers: [messages/_presentation]
+
+- id: messages/formatting
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.formatting}}
+  covers: [messages/_presentation]
+
+- id: messages/mention
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.mention}}
+  covers: [users/_mention]
+
+- id: messages/mention/mentioned
+  as: kevin      # the mention is of Kevin: message--mentioned
+  mutates: true  # reads designers for Kevin
+  path: /rooms/{{rooms.designers}}/@{{messages.mention}}
+  covers: [users/_mention]
+
+- id: messages/mention_marshal_era_sgid
+  as: david      # the Rails 7 SGID resolves to David, so it's also highlighted for him
+  path: /rooms/{{rooms.designers}}/@{{messages.mention_marshal}}
+  covers: [users/_mention]
+
+- id: messages/sound_with_image
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.sound_image}}
+  covers: [messages/_presentation]
+
+- id: messages/sound_with_text
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.sound_text}}
+  covers: [messages/_presentation]
+
+- id: messages/opengraph_embed
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.opengraph}}
+  covers: [action_text/attachables/_opengraph_embed]
+
+- id: messages/solo_unfurled_link
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.solo_unfurl}}
+  covers: [action_text/attachables/_opengraph_embed]
+
+- id: messages/opengraph_trix_twitter_avatar
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.opengraph_trix_tweet}}
+  covers: [action_text/attachables/_opengraph_embed]
+
+- id: messages/autolinked
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.autolink}}
+  covers: [messages/_presentation]
+
+- id: messages/image
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.image}}
+  covers: [messages/_presentation]
+
+- id: messages/image_downscaled
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.image_large}}
+  covers: [messages/_presentation]
+
+- id: messages/video
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.video}}
+  covers: [messages/_presentation]
+
+- id: messages/file
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.file}}
+  covers: [messages/_presentation]
+
+- id: messages/file_unvariable_image
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.file_bmp}}
+  covers: [messages/_presentation]
+
+- id: messages/from_bot
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.bot}}
+  covers: [messages/_message]
+
+- id: messages/from_deactivated_user
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.by_deactivated_user}}
+  covers: [messages/_message]
+
+- id: messages/edited
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  covers: [messages/_message]
+
+- id: messages/boosts/none
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  covers: [messages/boosts/_boosts]
+
+- id: messages/boosts/one
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.boosted_one}}
+  covers: [messages/boosts/_boosts, messages/boosts/_boost]
+
+- id: messages/boosts/many
+  as: kevin
+  mutates: true  # reads designers for Kevin
+  path: /rooms/{{rooms.designers}}/@{{messages.boosted_many}}
+  covers: [messages/boosts/_boosts, messages/boosts/_boost]
+
+- id: messages/boosts/yours
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.boosted_by_david}}
+  covers: [messages/boosts/_boost]
+
+- id: messages/boosts/text_boost
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.first}}
+  covers: [messages/boosts/_boost]
+
+# ================================================================================================
+# Interactions
+# ================================================================================================
+
+- id: interactions/actions_menu
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.plain}}
+  steps:
+    - hover: '[data-message-id="{{messages.plain}}"] .message__body'
+    - click: '[data-message-id="{{messages.plain}}"] .message__options-btn'
+    - wait_for: '[data-message-id="{{messages.plain}}"] .message__actions-menu'
+  covers: [messages/_actions]
+
+- id: interactions/actions_menu/attachment
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.image}}
+  steps:
+    - click: '[data-message-id="{{messages.image}}"] .message__options-btn'
+    - wait_for: '[data-message-id="{{messages.image}}"] .message__actions-menu'
+  covers: [messages/_actions]
+
+- id: interactions/actions_menu/hover_only
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.plain}}
+  steps:
+    - hover: '[data-message-id="{{messages.plain}}"] .message__body'
+  covers: [messages/_actions]
+
+- id: interactions/boost_picker
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  # A message without boosts hides its inline .boost__action (messages.css .message__boost-inline);
+  # the picker opens from "New boost" in the actions menu.
+  steps:
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] input.input--boost'
+  covers: [messages/boosts/new]
+
+- id: interactions/boost_picker/filled
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  steps:
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
+    - fill: { selector: '[data-message-id="{{messages.unboosted}}"] input.input--boost', text: "Great!" }
+  covers: [messages/boosts/new]
+
+- id: interactions/boost_picker/cancelled
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  steps:
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] input.input--boost'
+    - press: "Escape"
+    - wait_for: '[data-message-id="{{messages.unboosted}}"]:not(:has(input.input--boost))'
+  covers: [messages/boosts/index, messages/boosts/_boosts]
+
+- id: interactions/boost_created
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  mutates: true
+  steps:
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__boost-btn'
+    - fill: { selector: '[data-message-id="{{messages.unboosted}}"] input.input--boost', text: "Great!" }
+    - press: "Enter"
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item'
+  covers: [messages/boosts/index, messages/boosts/_boost]
+
+- id: interactions/quick_boost
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  mutates: true
+  steps:
+    - click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.unboosted}}"] .quick-boosts button[data-emoji]'
+    - wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item'
+  covers: [messages/boosts/index, messages/boosts/_boost]
+
+- id: interactions/boost_delete_revealed
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.boosted_by_david}}
+  steps:
+    - click: '#boost_{{boosts.david_on_boosted_by_david}} [data-boost-delete-target=content]'
+  covers: [messages/boosts/_boost]
+
+- id: interactions/edit_form
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  steps:
+    - click: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btn'
+    - wait_for: '[data-message-id="{{messages.edited}}"] .message__body-content--editing'
+  covers: [messages/edit]
+
+- id: interactions/edit_form/attachment
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.image}}
+  steps:
+    - click: '[data-message-id="{{messages.image}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.image}}"] .message__edit-btn'
+    - wait_for: '[data-message-id="{{messages.image}}"] .message__body-content--editing'
+  covers: [messages/edit]
+
+- id: interactions/edit_form/with_mention
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.mention}}
+  steps:
+    - click: '[data-message-id="{{messages.mention}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.mention}}"] .message__edit-btn'
+    - wait_for: '[data-message-id="{{messages.mention}}"] .message__body-content--editing'
+  covers: [messages/edit]
+
+- id: interactions/edit_form/cancelled
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  steps:
+    - click: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btn'
+    - wait_for: '[data-message-id="{{messages.edited}}"] .message__body-content--editing'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-close-btn'
+    - wait_for: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+  covers: [messages/show]
+
+- id: interactions/edit_saved
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  mutates: true
+  steps:
+    - click: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btn'
+    - type: { selector: '[data-message-id="{{messages.edited}}"] .lexxy-editor__content', text: " Confirmed." }
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btns button[type=submit].btn--reversed'
+    - wait_for: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+  covers: [messages/show]
+
+- id: interactions/message_deleted
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  mutates: true
+  accept_dialogs: true
+  steps:
+    - click: '[data-message-id="{{messages.edited}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btn'
+    - click: '[data-message-id="{{messages.edited}}"] .message__edit-btns .btn--negative'
+    - wait_for: 'body:not(:has([data-message-id="{{messages.edited}}"]))'
+  covers: [messages/destroy.turbo_stream]
+
+- id: interactions/composer/empty_focused
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - click: "#composer .lexxy-editor__content"
+  covers: [rooms/show/_composer]
+
+- id: interactions/composer/with_text
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Hello from the parity harness" }
+  covers: [rooms/show/_composer]
+
+- id: interactions/composer/rich_text_toolbar
+  as: david
+  path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [desktop, laptop] }   # composer.css shows the button at >= 100ch with a fine pointer
+  steps:
+    - click: ".composer__rich-text-btn"
+    - type: { selector: "#composer .lexxy-editor__content", text: "Formatted" }
+  covers: [rooms/show/_composer]
+
+- id: interactions/composer/attachment_preview
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - upload: { selector: "#composer input[type=file]", files: [reference/test/fixtures/files/moon.jpg] }
+    - wait_for: "#composer .composer__filelist > *"
+  covers: [rooms/show/_composer]
+
+- id: interactions/composer/attachment_preview_file
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - upload: { selector: "#composer input[type=file]", files: [reference/test/fixtures/files/pixel.bmp] }
+    - wait_for: "#composer .composer__filelist > *"
+  covers: [rooms/show/_composer]
+
+- id: interactions/composer/upload_in_progress
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - hold_requests: "POST **/rooms/{{rooms.designers}}/messages"
+    - upload: { selector: "#composer input[type=file]", files: [reference/test/fixtures/files/moon.jpg] }
+    - click: "#composer button[name=send]"
+    - pause_animations_at: 500
+  covers: [rooms/show/_composer, messages/_template]
+
+- id: interactions/composer/sent
+  as: david
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Sent from the parity harness" }
+    - click: "#composer button[name=send]"
+    - wait_for: '.message:not([id^="message_$"]) .message__body-content:has-text("Sent from the parity harness")'
+  covers: [messages/create.turbo_stream, messages/_message]
+
+- id: interactions/composer/sent_by_keyboard
+  as: david
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  # composer_controller.js submits on Enter only off touch devices (on them Enter is a newline)
+  matrix: { viewports: [desktop, laptop] }
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Sent from the parity harness" }
+    - press: "Enter"
+    - wait_for: '.message:not([id^="message_$"]) .message__body-content:has-text("Sent from the parity harness")'
+  covers: [messages/create.turbo_stream, messages/_message]
+
+- id: interactions/composer/sent_attachment
+  as: david
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - upload: { selector: "#composer input[type=file]", files: [reference/test/fixtures/files/moon.jpg] }
+    - click: "#composer button[name=send]"
+    - wait_for: ".message--me .message__attachment"
+  covers: [messages/create.turbo_stream]
+
+- id: interactions/composer/play_sound
+  as: david
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "/play crickets" }
+    - click: "#composer button[name=send]"
+    - wait_for: ".message--me .sound"
+  covers: [messages/create.turbo_stream, messages/_presentation]
+
+- id: interactions/mention_autocomplete/results
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Hi @Ke" }
+    - wait_for: ".lexxy-prompt-menu--visible .lexxy-prompt-menu__item"
+  covers: [autocompletable/users/index, autocompletable/users/_prompt_item]
+
+- id: interactions/mention_autocomplete/all
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "@" }
+    - wait_for: ".lexxy-prompt-menu--visible .lexxy-prompt-menu__item"
+  covers: [autocompletable/users/index, autocompletable/users/_prompt_item]
+
+- id: interactions/mention_autocomplete/empty
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "@zzz" }
+    - wait_for: ".lexxy-prompt-menu--visible.lexxy-prompt-menu--empty, .lexxy-prompt-menu__item--empty"
+  covers: [autocompletable/users/index]
+
+- id: interactions/mention_autocomplete/inserted
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - type: { selector: "#composer .lexxy-editor__content", text: "Hi @Ke" }
+    - wait_for: ".lexxy-prompt-menu--visible .lexxy-prompt-menu__item"
+    - press: "Enter"
+    - wait_for: "#composer .mention"
+  covers: [autocompletable/users/_prompt_item, users/_mention]
+
+- id: autocompletable/users/fragment
+  kind: fragment
+  as: david
+  path: /autocompletable/users?room_id={{rooms.designers}}&filter=a
+  covers: [autocompletable/users/index, autocompletable/users/_prompt_item]
+
+- id: autocompletable/users/json
+  kind: fragment
+  as: david
+  path: /autocompletable/users.json?query=j
+  covers: [autocompletable/users/index.json, autocompletable/users/_user.json]
+
+- id: interactions/lightbox
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.image_large}}
+  steps:
+    - click: '[data-message-id="{{messages.image_large}}"] [data-action~="lightbox#open"]'
+    - wait_for: "dialog.lightbox[open]"
+  covers: [layouts/_lightbox]
+
+- id: interactions/phone_sidebar
+  as: david
+  path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [phone] }   # the toggle only shows below 100ch, which the tablet width straddles per engine
+  steps:
+    - wait_for: "#user_sidebar .sidebar__toggle"
+    - click: "#user_sidebar .sidebar__toggle"
+  covers: [users/sidebars/show]
+
+- id: interactions/translation_menu
+  path: /session/new
+  steps:
+    - click: "details:has(.language-list-menu) summary"
+  covers: [sessions/new]
+
+- id: interactions/copy_link
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.plain}}
+  steps:
+    - click: '[data-message-id="{{messages.plain}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.plain}}"] [data-controller=copy-to-clipboard]'
+  covers: [messages/_actions]
+
+- id: interactions/reply
+  as: david
+  path: /rooms/{{rooms.designers}}/@{{messages.plain}}
+  steps:
+    - click: '[data-message-id="{{messages.plain}}"] .message__options-btn'
+    - click: '[data-message-id="{{messages.plain}}"] [data-action="reply#reply"]'
+  covers: [messages/_actions, rooms/show/_composer]
+
+- id: interactions/flash_notice
+  as: david
+  path: /users/me/profile
+  mutates: true
+  steps:
+    - fill: { selector: "#user_bio", text: "Founder" }
+    - click: "form:has(#user_bio) button[type=submit]"
+    - wait_for: ".flash"
+    - pause_animations_at: 500
+  covers: [layouts/application, users/profiles/show]
+
+- id: interactions/flash_alert
+  as: kevin
+  path: /rooms/{{rooms.watercooler}}
+  steps:
+    - wait_for: ".flash"
+    - pause_animations_at: 500
+  covers: [layouts/application]
+
+- id: interactions/sidebar/unread
+  as: david      # watercooler, the David/Kevin ping and the group ping are unread
+  path: /rooms/{{rooms.designers}}
+  steps:
+    - wait_for: "#user_sidebar .sidebar__container"
+  covers: [users/sidebars/show, users/sidebars/rooms/_shared, users/sidebars/rooms/_direct]
+
+- id: interactions/sidebar/read_after_visit
+  as: david
+  path: /rooms/{{rooms.watercooler}}
+  mutates: true
+  steps:
+    - wait_for: '#user_sidebar [data-room-id="{{rooms.watercooler}}"]:not(.unread)'
+  covers: [users/sidebars/show]
+
+- id: interactions/sidebar/new_ping
+  as: david
+  path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [desktop, laptop] }   # the sidebar is always open at >= 100ch
+  steps:
+    - click: "#user_sidebar .direct__new"
+    - wait_for: "#direct_rooms_control .autocomplete__input input"
+  covers: [rooms/directs/new, users/autocompletables/_template]
+
+- id: interactions/sidebar/new_ping/touch
+  as: david
+  path: /rooms/{{rooms.designers}}
+  matrix: { viewports: [phone] }     # below 100ch the sidebar opens with its toggle first (the tablet width straddles 100ch per engine)
+  steps:
+    - click: "#user_sidebar .sidebar__toggle"
+    - click: "#user_sidebar .direct__new"
+    - wait_for: "#direct_rooms_control .autocomplete__input input"
+  covers: [rooms/directs/new, users/autocompletables/_template]
+
+# lib/autocomplete/base_autocomplete_handler.js asks for JSON only in the Rust app's override: Rails
+# answers its plain fetch with HTML and the suggestion list stays empty, so there's no Rails page to
+# compare the new-ping suggestions with.
+
+- id: interactions/notifications_help
+  as: david
+  path: /rooms/{{rooms.designers}}
+  steps:
+    # With notification permission denied, the bell opens the help dialog
+    - click: "[data-notifications-target=bell]"
+    - wait_for: "dialog[data-notifications-target=notAllowedNotice][open]"
+  covers: [rooms/involvements/_bell, pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions]
+
+- id: interactions/pwa_install/default
+  as: david
+  path: /users/me/profile
+  user_agent: safari_mac
+  steps:
+    - click: ".pwa__instructions summary"
+  covers: [pwa/_install_instructions]
+
+# PWA install instructions (profile page) and notification help (the bell's dialog), per platform.
+# The server picks the branch from the User-Agent (ApplicationPlatform); see parity/seeds/README.md.
+
+- { id: pwa/install/safari_mac,      as: david, path: /users/me/profile, user_agent: safari_mac,      steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
+- { id: pwa/install/safari_ios,      as: david, path: /users/me/profile, user_agent: safari_ios,      matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
+# Reference bug, reproduced on purpose: the Edge branch of pwa/_install_instructions references
+# install-edge.svg, which isn't in app/assets, so any page rendering it answers 500.
+- { id: pwa/install/firefox_android, as: david, path: /users/me/profile, user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
+- { id: pwa/install/opera_linux,     as: david, path: /users/me/profile, user_agent: opera_linux,     steps: [ { click: ".pwa__instructions summary" } ], covers: [pwa/_install_instructions] }
+- { id: pwa/install/absent_chrome,   as: david, path: /users/me/profile, user_agent: chrome_mac,      covers: [pwa/_install_instructions] }
+- { id: pwa/install/absent_firefox,  as: david, path: /users/me/profile, user_agent: firefox_mac,     covers: [pwa/_install_instructions] }
+
+- { id: pwa/notifications_help/chrome_mac,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_mac,      steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
+- { id: pwa/notifications_help/chrome_windows,  as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_windows,  steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
+- { id: pwa/notifications_help/chrome_android,  as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_android,  matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+# Chrome on iOS gets no visible help at all: _browser_settings skips iOS, _install_instructions
+# skips every Chrome, and _system_settings is hidden in the browser.
+- { id: pwa/notifications_help/chrome_ios,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: chrome_ios,      matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { wait_for: "dialog[open]" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+- { id: pwa/notifications_help/safari_mac,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: safari_mac,      steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
+- { id: pwa/notifications_help/safari_ios,      as: david, path: "/rooms/{{rooms.designers}}", user_agent: safari_ios,      matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.pwa__instructions summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+- { id: pwa/notifications_help/firefox_mac,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_mac,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
+- { id: pwa/notifications_help/firefox_windows, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_windows, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings] }
+- { id: pwa/notifications_help/firefox_android, as: david, path: "/rooms/{{rooms.designers}}", user_agent: firefox_android, matrix: { viewports: [phone] }, steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+- { id: pwa/notifications_help/opera_linux,     as: david, path: "/rooms/{{rooms.designers}}", user_agent: opera_linux,     steps: [ { click: "[data-notifications-target=bell]" }, { click: "dialog[open] details.notifications-help:not(.hide-in-browser) summary" } ], covers: [pwa/_browser_settings, pwa/_system_settings, pwa/_install_instructions] }
+
+- id: pwa/manifest
+  kind: fragment
+  path: /webmanifest.json
+  covers: [pwa/manifest.json]
+
+- id: pwa/manifest/custom_styles
+  kind: fragment
+  seed: custom_styles
+  path: /webmanifest.json
+  covers: [pwa/manifest.json]
+
+- id: pwa/service_worker
+  kind: fragment
+  path: /service-worker.js
+  covers: [pwa/service_worker.js]
+
+# ================================================================================================
+# Settings
+# ================================================================================================
+
+- id: account/edit/admin
+  as: david
+  path: /account/edit
+  covers: [accounts/edit, accounts/_invite, accounts/users/_user]
+
+- id: account/edit/member
+  as: kevin
+  path: /account/edit
+  covers: [accounts/edit, accounts/_invite, accounts/users/_user]
+
+- id: account/edit/with_logo
+  seed: custom_styles
+  as: david
+  path: /account/edit
+  covers: [accounts/edit]
+
+- id: account/edit/with_logo/member
+  seed: custom_styles
+  as: kevin
+  path: /account/edit
+  covers: [accounts/edit]
+
+- id: account/edit/restricted_room_creation
+  seed: restricted
+  as: david
+  path: /account/edit
+  covers: [accounts/edit]
+
+- id: account/edit/crowd
+  seed: crowd
+  as: david
+  path: /account/edit
+  covers: [accounts/edit, accounts/users/_next_page_container]
+
+- id: account/edit/crowd/next_page
+  seed: crowd
+  as: david
+  path: /account/edit
+  steps:
+    - scroll: { selector: "#account_users", to: bottom }
+    - wait_for: '#account_users li:has-text("Zhou")'
+  covers: [accounts/users/index.turbo_stream, accounts/users/_user]
+
+- id: account/users/next_page/fragment
+  kind: fragment
+  seed: crowd
+  as: david
+  path: /account/users?page=2&format=turbo_stream
+  covers: [accounts/users/index.turbo_stream, accounts/users/_user]
+
+- id: account/edit/saved
+  as: david
+  path: /account/edit
+  mutates: true
+  steps:
+    - fill: { selector: "#account_name", text: "37signals HQ" }
+    - press: "Enter"
+    - wait_for: ".flash"
+    - pause_animations_at: 500
+  covers: [accounts/edit, layouts/application]
+
+- id: account/bots
+  as: david
+  path: /account/bots
+  covers: [accounts/bots/index, accounts/bots/_bot]
+
+- id: account/bots/new
+  as: david
+  path: /account/bots/new
+  covers: [accounts/bots/new, accounts/bots/_form]
+
+- id: account/bots/edit/with_webhook
+  as: david
+  path: /account/bots/{{users.bender}}/edit
+  covers: [accounts/bots/edit, accounts/bots/_form]
+
+- id: account/bots/edit/with_avatar
+  as: david
+  path: /account/bots/{{users.deploy_bot}}/edit
+  covers: [accounts/bots/edit, accounts/bots/_form]
+
+- id: account/custom_styles/empty
+  as: david
+  path: /account/custom_styles/edit
+  covers: [accounts/custom_styles/edit]
+
+- id: account/custom_styles/filled
+  seed: custom_styles
+  as: david
+  path: /account/custom_styles/edit
+  covers: [accounts/custom_styles/edit]
+
+- id: rooms/opens/new
+  as: david
+  path: /rooms/opens/new
+  covers: [rooms/opens/new, rooms/opens/_form, rooms/opens/_user, rooms/layouts/_new, rooms/layouts/_form]
+
+- id: rooms/opens/new/member
+  as: kevin
+  path: /rooms/opens/new
+  covers: [rooms/opens/new, rooms/opens/_form]
+
+- id: rooms/opens/new/crowd
+  seed: crowd
+  as: david
+  path: /rooms/opens/new
+  covers: [rooms/opens/_form]
+
+- id: rooms/opens/new/restricted_member
+  seed: restricted
+  as: kevin
+  path: /rooms/opens/new
+  expect_status: 403
+  covers: []
+
+- id: rooms/opens/edit/admin
+  as: david
+  path: /rooms/opens/{{rooms.pets}}/edit
+  covers: [rooms/opens/edit, rooms/opens/_form, rooms/opens/_user, rooms/layouts/_edit, rooms/layouts/_form]
+
+- id: rooms/opens/edit/member
+  as: kevin
+  path: /rooms/opens/{{rooms.hq}}/edit
+  covers: [rooms/opens/edit, rooms/opens/_form, rooms/opens/_user, rooms/layouts/_edit, rooms/layouts/_form]
+
+- id: rooms/opens/edit/crowd
+  seed: crowd
+  as: david
+  path: /rooms/opens/{{rooms.pets}}/edit
+  covers: [rooms/opens/_form]
+
+- id: rooms/opens/edit/filtered
+  seed: crowd
+  as: david
+  path: /rooms/opens/{{rooms.pets}}/edit
+  steps:
+    - type: { selector: "#search", text: "Zhou" }
+  covers: [rooms/opens/_form]
+
+- id: rooms/closeds/new
+  as: david
+  path: /rooms/closeds/new
+  covers: [rooms/closeds/new, rooms/closeds/_form, rooms/closeds/_user, rooms/layouts/_new, rooms/layouts/_form]
+
+- id: rooms/closeds/new/crowd
+  seed: crowd
+  as: david
+  path: /rooms/closeds/new
+  covers: [rooms/closeds/_form]
+
+- id: rooms/closeds/edit/admin
+  as: david
+  path: /rooms/closeds/{{rooms.designers}}/edit
+  covers: [rooms/closeds/edit, rooms/closeds/_form, rooms/closeds/_user, rooms/layouts/_edit, rooms/layouts/_form]
+
+- id: rooms/closeds/edit/member
+  as: kevin
+  path: /rooms/closeds/{{rooms.designers}}/edit
+  covers: [rooms/closeds/edit, rooms/closeds/_form, rooms/closeds/_user, rooms/layouts/_edit, rooms/layouts/_form]
+
+- id: rooms/closeds/edit/member_creator
+  as: kevin
+  path: /rooms/closeds/{{rooms.quiet}}/edit
+  covers: [rooms/closeds/edit, rooms/closeds/_form, rooms/closeds/_user]
+
+- id: rooms/closeds/edit/from_open
+  as: david      # the switch on an open room's settings: the same room as closed
+  path: /rooms/closeds/{{rooms.pets}}/edit
+  covers: [rooms/closeds/edit, rooms/closeds/_form]
+
+- id: rooms/opens/edit/from_closed
+  as: david
+  path: /rooms/opens/{{rooms.designers}}/edit
+  covers: [rooms/opens/edit, rooms/opens/_form]
+
+- id: rooms/directs/edit
+  as: david
+  path: /rooms/directs/{{rooms.david_and_jason}}/edit
+  covers: [rooms/directs/edit]
+
+- id: rooms/directs/edit/group
+  as: david
+  path: /rooms/directs/{{rooms.group_direct}}/edit
+  covers: [rooms/directs/edit]
+
+- id: rooms/directs/new
+  as: david
+  path: /rooms/directs/new     # normally loaded into the sidebar's turbo frame
+  covers: [rooms/directs/new, users/autocompletables/_template]
+
+- id: users/profile
+  as: david
+  path: /users/me/profile
+  covers: [users/profiles/show, users/profiles/_membership, users/profiles/_transfer, pwa/_install_instructions]
+
+- id: users/profile/with_avatar
+  as: jason
+  path: /users/me/profile
+  covers: [users/profiles/show, users/profiles/_membership, users/profiles/_transfer]
+
+- id: users/profile/member
+  as: kevin
+  path: /users/me/profile
+  covers: [users/profiles/show, users/profiles/_membership]
+
+- id: users/profile/custom_styles
+  seed: custom_styles
+  as: david
+  path: /users/me/profile
+  covers: [users/profiles/show]
+
+- id: users/profile/avatar_uploaded
+  as: david
+  path: /users/me/profile
+  mutates: true
+  steps:
+    - upload: { selector: "label.btn.input--file:not(.avatar) input[type=file]", files: [reference/test/fixtures/files/moon.jpg] }
+    - wait_for: ".flash"
+    - pause_animations_at: 500
+  covers: [users/profiles/show, layouts/application]
+
+- id: users/profile/qr_code
+  as: david
+  path: /users/me/profile
+  mutates: true    # the QR code encodes a transfer URL whose expiry is the server's now + 4h, to the ms
+  steps:
+    - click: 'a[href^="/qr_code/"]'
+  covers: [users/profiles/_transfer]
+
+- id: users/show/self
+  as: david
+  path: /users/{{users.david}}
+  covers: [users/show, users/profiles/_transfer]
+
+- id: users/show/admin_viewing_member
+  as: david
+  path: /users/{{users.kevin}}
+  covers: [users/show, users/profiles/_transfer, users/_ban_button]
+
+- id: users/show/member_viewing_admin
+  as: kevin
+  path: /users/{{users.david}}
+  covers: [users/show]
+
+- id: users/show/with_avatar
+  as: kevin
+  path: /users/{{users.jason}}
+  covers: [users/show]
+
+- id: users/show/bot
+  as: kevin
+  path: /users/{{users.bender}}
+  covers: [users/show]
+
+- id: users/show/bot_deactivated
+  as: david
+  path: /users/{{users.old_bot}}
+  covers: [users/show]
+
+- id: users/show/deactivated
+  as: david
+  path: /users/{{users.rita}}
+  covers: [users/show]
+
+- id: users/show/banned
+  as: david
+  path: /users/{{users.mallory}}
+  covers: [users/show, users/_ban_button]
+
+- id: users/avatar/initials
+  kind: fragment
+  as: david      # Users::AvatarsController requires authentication
+  path: /users/{{avatar_tokens.david}}/avatar
+  covers: [users/avatars/show.svg]
+
+- id: users/avatar/image
+  kind: fragment
+  as: david
+  path: /users/{{avatar_tokens.jason}}/avatar
+  covers: []
+
+- id: users/push_subscriptions
+  as: david
+  path: /users/me/push_subscriptions
+  covers: [users/push_subscriptions/index, users/push_subscriptions/_push_subscription]
+
+- id: users/push_subscriptions/none
+  as: jz
+  path: /users/me/push_subscriptions
+  covers: [users/push_subscriptions/index, users/push_subscriptions/_push_subscription]
+
+- id: search/empty
+  as: kevin      # no recent searches, no query
+  path: /searches
+  covers: [searches/index]
+
+- id: search/recent
+  as: david
+  path: /searches
+  covers: [searches/index]
+
+- id: search/results
+  as: david
+  path: /searches?q=Borgias
+  covers: [searches/index, messages/_message]
+
+- id: search/results/many
+  as: david
+  path: /searches?q=wifi
+  covers: [searches/index, messages/_message]
+
+- id: search/no_results
+  as: david
+  path: /searches?q=zebra
+  covers: [searches/index]
+
+- id: search/submitted
+  as: kevin
+  path: /searches
+  mutates: true
+  steps:
+    - fill: { selector: "#q", text: "launch" }     # designers messages Kevin can reach
+    - press: "Enter"
+    - wait_for: "#search-results .message"
+  covers: [searches/index]
+
+- id: search/custom_styles
+  seed: custom_styles
+  as: david
+  path: /searches?q=wifi
+  covers: [searches/index]
+
+- id: welcome/no_rooms
+  as: loner
+  path: /
+  covers: [welcome/show, users/sidebars/show]
+
+# ================================================================================================
+# Real time: two (or three) browser contexts; the captured one is B
+# ================================================================================================
+
+- id: realtime/message_sent
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Live from Jason" } }
+    - { actor: a, click: "#composer button[name=send]" }
+    - { actor: b, wait_for: '.message:has-text("Live from Jason")' }
+  covers: [messages/_message]
+
+- id: realtime/attachment_sent
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - { actor: a, upload: { selector: "#composer input[type=file]", files: [reference/test/fixtures/files/moon.jpg] } }
+    - { actor: a, click: "#composer button[name=send]" }
+    - { actor: b, wait_for: '.message:last-child .message__attachment' }
+  covers: [messages/_message, messages/_presentation]
+
+- id: realtime/message_edited
+  actors: { a: david, b: kevin }
+  capture: b
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  mutates: true
+  steps:
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__options-btn' }
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__edit-btn' }
+    - { actor: a, type: { selector: '[data-message-id="{{messages.edited}}"] .lexxy-editor__content', text: " Really." } }
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__edit-btns button[type=submit].btn--reversed' }
+    - { actor: b, wait_for: '[data-message-id="{{messages.edited}}"]:has-text("Really.")' }
+  covers: [messages/_presentation]
+
+- id: realtime/message_deleted
+  actors: { a: david, b: kevin }
+  capture: b
+  path: /rooms/{{rooms.designers}}/@{{messages.edited}}
+  mutates: true
+  accept_dialogs: true
+  steps:
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__options-btn' }
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__edit-btn' }
+    - { actor: a, click: '[data-message-id="{{messages.edited}}"] .message__edit-btns .btn--negative' }
+    - { actor: b, wait_for: 'body:not(:has([data-message-id="{{messages.edited}}"]))' }
+  covers: []
+
+- id: realtime/boosted
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}/@{{messages.unboosted}}
+  mutates: true
+  steps:
+    - { actor: a, click: '[data-message-id="{{messages.unboosted}}"] .message__options-btn' }
+    - { actor: a, click: '[data-message-id="{{messages.unboosted}}"] .quick-boosts button[data-emoji]' }
+    - { actor: b, wait_for: '[data-message-id="{{messages.unboosted}}"] .boost-item' }
+  covers: [messages/boosts/_boost]
+
+- id: realtime/boost_removed
+  actors: { a: david, b: kevin }
+  capture: b
+  path: /rooms/{{rooms.designers}}/@{{messages.boosted_by_david}}
+  mutates: true
+  steps:
+    - { actor: a, click: '#boost_{{boosts.david_on_boosted_by_david}} [data-boost-delete-target=content]' }
+    - { actor: a, click: '#boost_{{boosts.david_on_boosted_by_david}} .boost__delete' }
+    - { actor: b, wait_for: 'body:not(:has(#boost_{{boosts.david_on_boosted_by_david}}))' }
+  covers: []
+
+- id: realtime/typing/one
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true   # Jason's typing broadcasts reach every capture with designers open
+  steps:
+    - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Thinking" } }
+    - { actor: b, wait_for: ".typing-indicator--active" }
+    - pause_animations_at: 0
+  covers: [rooms/show/_composer]
+
+- id: realtime/typing/many
+  actors: { a: jason, c: jz, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true   # Jason's typing broadcasts reach every capture with designers open
+  steps:
+    - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Thinking" } }
+    - { actor: c, type: { selector: "#composer .lexxy-editor__content", text: "Me too" } }
+    - { actor: b, wait_for: ".typing-indicator--active" }
+    - pause_animations_at: 0
+  covers: [rooms/show/_composer]
+
+- id: realtime/unread_in_sidebar
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - { actor: a, goto: "/rooms/{{rooms.pets}}" }
+    - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "Pets news" } }
+    - { actor: a, click: "#composer button[name=send]" }
+    - { actor: b, wait_for: '#user_sidebar [data-room-id="{{rooms.pets}}"].unread' }
+  covers: [users/sidebars/rooms/_shared]
+
+- id: realtime/new_room_in_sidebar
+  actors: { a: david, b: kevin }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  steps:
+    - { actor: a, goto: /rooms/opens/new }
+    - { actor: a, fill: { selector: "#room_name", text: "Launch" } }
+    - { actor: a, click: "form button[type=submit].btn--reversed" }
+    - { actor: b, wait_for: '#user_sidebar #shared_rooms a:has-text("Launch")' }
+  covers: [users/sidebars/rooms/_shared]
+
+- id: realtime/removed_from_room
+  actors: { a: david, b: kevin }
+  capture: b
+  path: /rooms/{{rooms.designers}}
+  mutates: true
+  # Losing the membership closes Kevin's cable connection (Membership after_destroy_commit ->
+  # reset_remote_connections); ActionCable's ConnectionMonitor reconnects once its Date-based
+  # staleness check says so, which a frozen Date never does.
+  clock: advancing
+  steps:
+    - { actor: a, goto: "/rooms/closeds/{{rooms.designers}}/edit" }
+    - { actor: a, click: 'li[data-value="kevin"] label.switch' }
+    - { actor: a, click: "form button[type=submit].btn--reversed" }
+    - { actor: b, wait_for: '#user_sidebar:not(:has([data-room-id="{{rooms.designers}}"]))' }
+  covers: []
+
+- id: realtime/room_deleted_then_send
+  actors: { a: kevin, b: david }
+  capture: b
+  path: /rooms/{{rooms.quiet}}
+  mutates: true
+  accept_dialogs: true
+  steps:
+    - { actor: a, goto: "/rooms/closeds/{{rooms.quiet}}/edit" }
+    - { actor: a, click: 'button[aria-label^="Delete"]' }
+    - { actor: b, type: { selector: "#composer .lexxy-editor__content", text: "Anyone here?" } }
+    - { actor: b, click: "#composer button[name=send]" }
+    - { actor: b, wait_for: "#composer-frame .shake" }
+  covers: [messages/room_not_found]
+
+- id: realtime/presence_read
+  actors: { a: jason, b: david }
+  capture: b
+  path: /rooms/{{rooms.watercooler}}
+  mutates: true
+  steps:
+    - { actor: a, type: { selector: "#composer .lexxy-editor__content", text: "You are here" } }
+    - { actor: a, click: "#composer button[name=send]" }
+    - { actor: b, wait_for: '.message:has-text("You are here")' }
+  covers: [messages/_message]
+
+# ================================================================================================
+# Bot API responses (JSON). Not screens: compared as fragments.
+# ================================================================================================
+
+- id: bot_api/messages/index
+  kind: fragment
+  path: /rooms/{{rooms.watercooler}}/{{bot_keys.bender}}/messages
+  covers: [messages/by_bots/index.json, messages/_message.json, users/_user.json]
+
+- id: bot_api/messages/index/before
+  kind: fragment
+  path: /rooms/{{rooms.watercooler}}/{{bot_keys.bender}}/messages?before={{messages.busy_060}}
+  covers: [messages/by_bots/index.json, messages/_message.json]
+
+- id: bot_api/messages/update
+  kind: fragment
+  mutates: true
+  path: /rooms/{{rooms.watercooler}}/{{bot_keys.bender}}/messages/{{messages.bot_in_watercooler}}
+  request: { method: PUT, headers: { Content-Type: "application/json" }, body: '{"message":{"body":"Build 1043 passed (edited)"}}' }
+  covers: [messages/by_bots/show.json, messages/_message.json, users/_user.json]
+
+- id: bot_api/boosts/create
+  kind: fragment
+  mutates: true
+  expect_status: 201
+  path: /rooms/{{rooms.watercooler}}/{{bot_keys.bender}}/messages/{{messages.thirteenth}}/boosts
+  request: { method: POST, headers: { Content-Type: "text/plain" }, body: "🤖" }
+  covers: [messages/boosts/by_bots/show.json, messages/boosts/_boost.json, users/_user.json]
