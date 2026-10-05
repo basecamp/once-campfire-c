@@ -120,10 +120,31 @@ CF_TEST(mandatory_disconnect_user_write_returns_ok) {
 
 /* ---- the subscription install gate under data-version churn ---------------- */
 
+/* Generous finite cap for a helper thread to participate (and to complete a
+ * handshaked step). A freshly created thread can be scheduled late; waiting
+ * explicitly makes participation deterministic and fails the case, at this
+ * cap, if the thread never runs — instead of letting an assertion pass
+ * vacuously or a window go untested. */
+#define WIRING_THREAD_WAIT_MS 20000
+
+/* Wait, bounded, until `counter` reaches `want`; false at the deadline. */
+static bool wiring_wait_counter(_Atomic int64_t *counter, int64_t want,
+                                int timeout_ms) {
+    int64_t deadline = ct_now_ms() + timeout_ms;
+    while (ct_now_ms() < deadline) {
+        if (atomic_load_explicit(counter, memory_order_relaxed) >= want) {
+            return true;
+        }
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    return atomic_load_explicit(counter, memory_order_relaxed) >= want;
+}
+
 typedef struct {
     chan_fixture *f;
     _Atomic bool stop;
-    _Atomic int calls;
+    _Atomic int64_t calls;
     cf_err last;
 } wiring_churn;
 
@@ -159,6 +180,13 @@ CF_TEST(subscribe_install_gate_answers_under_version_churn) {
     pthread_t thread;
     CF_REQUIRE(pthread_create(&thread, NULL, wiring_churn_main, &churn) == 0);
 
+    /* Deterministic participation: at least one committed, version-advancing
+     * write has happened before the subscription phase starts, so the gate
+     * is genuinely exercised under churn and the final calls check cannot
+     * pass vacuously. A thread that never runs fails here at the cap (and
+     * again below), never hangs and never passes with zero calls. */
+    CF_CHECK(wiring_wait_counter(&churn.calls, 1, WIRING_THREAD_WAIT_MS));
+
     int confirmed = 0, rejected = 0;
     for (int i = 0; i < 20; i++) {
         /* A real model read (find_room) lengthens the capture-to-install
@@ -191,8 +219,9 @@ CF_TEST(subscribe_install_gate_answers_under_version_churn) {
     pthread_join(thread, NULL);
     CF_CHECK(atomic_load(&churn.calls) > 0);
     CF_CHECK(churn.last == CF_OK);
-    fprintf(stderr, "  version churn: %d confirmed, %d rejected, %d writes\n",
-            confirmed, rejected, atomic_load(&churn.calls));
+    fprintf(stderr,
+            "  version churn: %d confirmed, %d rejected, %lld writes\n",
+            confirmed, rejected, (long long)atomic_load(&churn.calls));
 
     chan_disconnect(&c);
     chan_fixture_close(&f);
@@ -212,6 +241,8 @@ typedef struct {
     _Atomic int64_t target;
     _Atomic bool stop;
     _Atomic int64_t calls;
+    _Atomic int64_t jz_calls;    /* completed with target == JZ */
+    _Atomic int64_t kevin_calls; /* completed with target == KEVIN */
 } wiring_hammer;
 
 static void *wiring_hammer_main(void *arg) {
@@ -221,6 +252,13 @@ static void *wiring_hammer_main(void *arg) {
                                             memory_order_relaxed);
         (void)cf_cable_disconnect_user(hammer->cable, user, true);
         atomic_fetch_add_explicit(&hammer->calls, 1, memory_order_relaxed);
+        if (user == CHAN_JZ) {
+            atomic_fetch_add_explicit(&hammer->jz_calls, 1,
+                                      memory_order_relaxed);
+        } else if (user == CHAN_KEVIN) {
+            atomic_fetch_add_explicit(&hammer->kevin_calls, 1,
+                                      memory_order_relaxed);
+        }
     }
     return NULL;
 }
@@ -234,6 +272,8 @@ CF_TEST(socket_lifetime_survives_a_revocation_hammer) {
     atomic_init(&hammer.target, CHAN_KEVIN); /* no Kevin connections */
     atomic_init(&hammer.stop, false);
     atomic_init(&hammer.calls, 0);
+    atomic_init(&hammer.jz_calls, 0);
+    atomic_init(&hammer.kevin_calls, 0);
     pthread_t thread;
     CF_REQUIRE(pthread_create(&thread, NULL, wiring_hammer_main, &hammer) == 0);
 
@@ -250,13 +290,26 @@ CF_TEST(socket_lifetime_survives_a_revocation_hammer) {
         CF_CHECK(chan_confirm(&c, presence));
 
         /* Abrupt peer close, then aim the barrier at JZ: the slot is still
-         * unrevoked when the socket run ends and frees the socket. */
+         * unrevoked when the socket run ends and frees the socket. Wait,
+         * bounded, for a JZ-aimed call to complete so the window is really
+         * hit, then hand back to KEVIN and wait for a KEVIN-aimed call. The
+         * hammer thread is sequential, so the completed KEVIN call proves no
+         * delayed JZ call can leak into the next iteration and revoke a fresh
+         * connection before its confirm. A hammer that stops participating
+         * fails at the wait instead of leaving the window untested. */
         close(c.run.peer_fd);
         c.run.peer_fd = -1;
+        int64_t want = atomic_load_explicit(&hammer.jz_calls,
+                                            memory_order_relaxed) + 1;
         atomic_store_explicit(&hammer.target, CHAN_JZ, memory_order_relaxed);
-        usleep(300);
+        CF_REQUIRE(wiring_wait_counter(&hammer.jz_calls, want,
+                                       WIRING_THREAD_WAIT_MS));
+        want = atomic_load_explicit(&hammer.kevin_calls,
+                                    memory_order_relaxed) + 1;
         atomic_store_explicit(&hammer.target, CHAN_KEVIN,
                               memory_order_relaxed);
+        CF_REQUIRE(wiring_wait_counter(&hammer.kevin_calls, want,
+                                       WIRING_THREAD_WAIT_MS));
 
         ct_run_join(&c.run);
         close(c.run.fd);
