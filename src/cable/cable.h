@@ -122,8 +122,23 @@ typedef cf_err (*cf_cable_on_text_fn)(void *user, cf_cable_socket *socket,
 typedef struct {
     cf_cable_authenticate_fn authenticate;
     void *authenticate_user;
+    /* Owner thread, once authentication succeeded and before the welcome
+     * frame: attach the application loop and install the connection's
+     * authorization result (C03). A non-CF_OK result refuses the connection
+     * (the unauthorized disconnect path). Optional. */
+    cf_err (*on_open)(void *user, cf_cable_socket *socket);
+    void *on_open_user;
     cf_cable_on_text_fn on_text;
     void *on_text_user;
+    /* Owner thread, once per poll iteration and again after the wake eventfd
+     * was drained: consume pending revocation control (C03). Optional. */
+    void (*service)(void *user);
+    void *service_user;
+    /* Owner thread, once the connection has stopped and before the socket
+     * releases itself: detach anything that can still send to this socket, so
+     * no foreign send observes freed memory (C03 lifetime). Optional. */
+    void (*on_close)(void *user, cf_cable_socket *socket);
+    void *on_close_user;
 } cf_cable_hooks;
 
 /* Per-connection transport counters ("must be counted", D-C04). frames_sent
@@ -186,6 +201,22 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
 cf_err cf_cable_socket_send_text(cf_cable_socket *socket, cf_span text);
 cf_err cf_cable_socket_send_frame(cf_cable_socket *socket,
                                   cf_cable_frame *frame);
+
+/* Write the socket's poll eventfd (the C03 wake callback). Lock-free and safe
+ * from any thread, but the caller must guarantee the socket outlives the
+ * call: production loops unregister their revocation slot before the socket
+ * is freed (on_close), so a barrier cannot wake a freed socket. */
+void cf_cable_socket_wake(cf_cable_socket *socket);
+
+/* Owner thread: begin the reference close (1000 close frame queued after
+ * everything already pending, then wait for the peer's close, bounded by
+ * close_timeout). Used by the C03 revoke path. */
+void cf_cable_socket_request_close(cf_cable_socket *socket);
+
+/* True when the head outbound node is an application frame partially sent
+ * (some bytes accepted, not all), so a disconnect frame must not interleave.
+ * Owner thread (the C03 frame_partial callback). */
+bool cf_cable_socket_frame_partial(const cf_cable_socket *socket);
 
 /* ---- server: the /cable front mount --------------------------------------- */
 

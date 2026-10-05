@@ -669,6 +669,37 @@ static void socket_drain_wake(struct cf_cable_socket *s) {
     }
 }
 
+/* One consistent snapshot of the queue state that senders mutate under the
+ * socket mutex (out queue, pending bytes, progress clock, cap flag). The
+ * owner loop reads it once per iteration; every access to those fields is
+ * under the mutex. */
+static void socket_queue_state(struct cf_cable_socket *s, size_t *pending,
+                               bool *has_out, uint64_t *last_progress,
+                               bool *cap_hit) {
+    pthread_mutex_lock(&s->mutex);
+    if (pending != NULL) *pending = s->pending_bytes;
+    if (has_out != NULL) *has_out = s->out_head != NULL;
+    if (last_progress != NULL) *last_progress = s->last_progress_ms;
+    if (cap_hit != NULL) *cap_hit = s->queue_cap_hit;
+    pthread_mutex_unlock(&s->mutex);
+}
+
+void cf_cable_socket_wake(cf_cable_socket *socket) {
+    if (socket == NULL) return;
+    socket_wake(socket);
+}
+
+bool cf_cable_socket_frame_partial(const cf_cable_socket *socket) {
+    if (socket == NULL) return false;
+    cf_cable_socket *s = (cf_cable_socket *)socket;
+    pthread_mutex_lock(&s->mutex);
+    struct cf_cable_out *head = s->out_head;
+    bool partial = head != NULL && head->sent != 0 &&
+                   head->sent < head->header_len + head->payload_len;
+    pthread_mutex_unlock(&s->mutex);
+    return partial;
+}
+
 static void frame_header(unsigned opcode, bool compressed, size_t len,
                          unsigned char out[10], size_t *out_len) {
     out[0] = (unsigned char)(0x80 | (compressed ? 0x40 : 0) | opcode);
@@ -754,6 +785,19 @@ static cf_err queue_control(struct cf_cable_socket *s, unsigned opcode,
     return out_queue(s, opcode, buf, false);
 }
 
+void cf_cable_socket_request_close(cf_cable_socket *socket) {
+    if (socket == NULL) return;
+    /* The reference close is a normal 1000 close frame after everything
+     * already queued, then a bounded wait for the peer's close. Owner
+     * thread only. */
+    unsigned char close_code[2] = {0x03, 0xE8}; /* 1000 */
+    (void)queue_control(socket, OP_CLOSE, (cf_span){close_code, 2});
+    socket->closing = true;
+    socket->wait_peer_close = true;
+    socket->close_deadline_ms =
+        cf_monotonic_ms() + socket->limits.close_timeout_ms;
+}
+
 static void node_finish_stats(struct cf_cable_socket *s,
                               struct cf_cable_out *node) {
     s->stats.frames_sent++;
@@ -789,8 +833,8 @@ static void socket_flush(struct cf_cable_socket *s) {
         if (n > 0) {
             node->sent += (size_t)n;
             uint64_t now = cf_monotonic_ms();
-            s->last_progress_ms = now;
             pthread_mutex_lock(&s->mutex);
+            s->last_progress_ms = now;
             s->pending_bytes -= (size_t)n;
             pthread_mutex_unlock(&s->mutex);
             if (node->sent == node->header_len + node->payload_len) {
@@ -841,8 +885,11 @@ cf_err cf_cable_socket_send_frame(struct cf_cable_socket *socket,
             return out_queue(socket, OP_TEXT, deflated, true);
         }
         /* Compression is not worth failing a message over; the frame goes
-         * uncompressed and the attempt is counted. */
+         * uncompressed and the attempt is counted. The counter is guarded by
+         * the socket mutex because senders run on foreign threads. */
+        pthread_mutex_lock(&socket->mutex);
         socket->stats.deflate_failures++;
+        pthread_mutex_unlock(&socket->mutex);
     }
     return out_queue(socket, OP_TEXT, cf_buf_retain(frame->text), false);
 }
@@ -1279,6 +1326,14 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
     }
     (void)user_id;
 
+    /* The wiring attaches its application loop here, while the socket is live
+     * and before any output; refusing the connection takes the unauthorized
+     * path (C03's connection install gate). */
+    if (authenticated && s->hooks.on_open != NULL &&
+        s->hooks.on_open(s->hooks.on_open_user, s) != CF_OK) {
+        authenticated = false;
+    }
+
     /* Bytes the client pipelined after the handshake request are consumed
      * before anything the socket reads later. */
     if (config->pending_len != 0) {
@@ -1323,17 +1378,30 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
     /* Consume pipelined frames before waiting for new socket input. */
     if (s->in.len != 0) (void)reader_feed(s);
 
-    while (!s->finished && !s->transport_failed && !s->queue_cap_hit) {
+    for (;;) {
+        /* One locked snapshot per iteration: the out queue, the pending bytes,
+         * the progress clock and the cap flag are shared with foreign senders
+         * and are only ever read or written under the socket mutex. */
+        size_t pending = 0;
+        bool has_out = false, cap_hit = false;
+        uint64_t last_progress = 0;
+        socket_queue_state(s, &pending, &has_out, &last_progress, &cap_hit);
+        if (s->finished || s->transport_failed || cap_hit) break;
+
+        /* Consume pending revocation control even when nothing else is ready
+         * (C03), then again right after a wake is observed. */
+        if (s->hooks.service != NULL) s->hooks.service(s->hooks.service_user);
+
         uint64_t now = cf_monotonic_ms();
         if (s->closing) {
             if (s->wait_peer_close) {
                 if (now >= s->close_deadline_ms) break;
-            } else if (s->pending_bytes == 0) {
+            } else if (pending == 0) {
                 break;
             }
         } else {
-            if (s->pending_bytes > 0 &&
-                now - s->last_progress_ms >= s->limits.write_timeout_ms) {
+            if (pending > 0 &&
+                now - last_progress >= s->limits.write_timeout_ms) {
                 s->stats.write_timeout_closes++;
                 break;
             }
@@ -1358,8 +1426,8 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
                                 ? s->close_deadline_ms - now
                                 : 0;
             if (left < (uint64_t)timeout) timeout = (int)left;
-        } else if (!s->closing && s->pending_bytes > 0) {
-            uint64_t left = s->last_progress_ms + s->limits.write_timeout_ms;
+        } else if (!s->closing && pending > 0) {
+            uint64_t left = last_progress + s->limits.write_timeout_ms;
             left = left > now ? left - now : 0;
             if (left < (uint64_t)timeout) timeout = (int)left;
         }
@@ -1369,7 +1437,7 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
         pf[0].fd = s->fd;
         pf[0].events = POLLIN;
         pf[0].revents = 0;
-        if (s->pending_bytes > 0 || s->out_head != NULL) {
+        if (pending > 0 || has_out) {
             pf[0].events |= POLLOUT;
         }
         pf[1].fd = s->wake_fd;
@@ -1383,8 +1451,14 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
         }
         if (pr == 0) continue;
 
-        if (pf[1].revents != 0) socket_drain_wake(s);
-        if (s->queue_cap_hit) break;
+        if (pf[1].revents != 0) {
+            socket_drain_wake(s);
+            if (s->hooks.service != NULL) {
+                s->hooks.service(s->hooks.service_user);
+            }
+            socket_queue_state(s, NULL, NULL, NULL, &cap_hit);
+            if (cap_hit) break;
+        }
         if (pf[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
             /* Drain what was already buffered, then finish. */
             if (pf[0].revents & POLLIN) {
@@ -1403,15 +1477,29 @@ cf_err cf_cable_socket_run(const cf_cable_socket_config *config,
     }
 
     /* Complete the close handshake best-effort: flush what is left. */
-    if (!s->transport_failed && !s->queue_cap_hit) socket_flush(s);
+    bool cap_hit_final = false;
+    socket_queue_state(s, NULL, NULL, NULL, &cap_hit_final);
+    if (!s->transport_failed && !cap_hit_final) socket_flush(s);
 
 done:
+    /* Detach anything that may still send to this socket (the C03 loop)
+     * before the memory is released: after this returns no foreign send can
+     * observe the freed socket. */
+    if (s->hooks.on_close != NULL) {
+        s->hooks.on_close(s->hooks.on_close_user, s);
+    }
     socket_close_queue(s);
+    if (stats != NULL) {
+        /* Under the mutex: counters written by foreign senders (queued,
+         * queue-cap, deflate failures) are synchronized with this read. */
+        pthread_mutex_lock(&s->mutex);
+        *stats = s->stats;
+        pthread_mutex_unlock(&s->mutex);
+    }
     pthread_mutex_destroy(&s->mutex);
     close(s->wake_fd);
     cf_builder_dispose(&s->in);
     cf_builder_dispose(&s->msg);
-    if (stats != NULL) *stats = s->stats;
     free(s);
     return result;
 }

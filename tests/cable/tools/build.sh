@@ -71,7 +71,16 @@ src/models/search.c src/models/session.c src/models/sound.c src/models/user.c \
 src/models/webhook.c"
 AUTH="src/auth/crypto.c src/auth/json.c src/auth/message.c src/auth/tokens.c \
 src/auth/password.c src/auth/session.c src/auth/before.c src/auth/rate.c"
-CABLE="src/cable/socket.c src/cable/protocol.c"
+CABLE="src/cable/socket.c src/cable/protocol.c src/cable/pubsub.c \
+src/cable/channels.c src/cable/broadcasts.c src/cable/revocation.c"
+# A02 production views/presenters: the C02 broadcast tests render the exact
+# Turbo payloads through cf_broadcast_partials_views.
+PRESENTERS="src/presenters/accounts.c src/presenters/layout.c \
+src/presenters/messages.c src/presenters/rooms.c"
+VIEWS="src/views/ctx.c src/views/first_run.c src/views/layout.c \
+src/views/messages.c src/views/model.c src/views/pwa.c src/views/render.c \
+src/views/rooms.c src/views/session.c src/views/translations.c \
+src/views/view_assets.c src/views/welcome.c"
 # R02 production rich-text sources (Makefile RICHTEXT_SRCS); the test-only
 # tests/models/support/richtext.c double was deleted when this landed.
 RICHTEXT="src/richtext/rt_attach.c src/richtext/rt_autolink.c src/richtext/rt_content.c \
@@ -111,7 +120,7 @@ compile_all() {
         objs+=("$obj")
     done
 }
-compile_all $LIB_SRCS $MODELS $AUTH $CABLE $SUPPORT
+compile_all $LIB_SRCS $MODELS $AUTH $CABLE $PRESENTERS $VIEWS $SUPPORT
 
 PICO="$OUT/obj/picohttpparser.o"
 if [ ! -f "$PICO" ] || [ vendor/src/picohttpparser/picohttpparser.c -nt "$PICO" ]; then
@@ -123,7 +132,9 @@ tests=("$@")
 if [ ${#tests[@]} -eq 0 ]; then
     tests=(test_cable_protocol test_cable_frames test_cable_deflate
             test_cable_queue test_cable_handshake test_cable_session
-            test_cable_loop)
+            test_cable_loop test_cable_channels test_cable_pubsub
+            test_cable_broadcasts test_cable_live test_cable_revocation
+            test_cable_wiring)
 fi
 
 failed=0

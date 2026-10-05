@@ -320,8 +320,14 @@ static inline void *ct_run_main(void *arg) {
     return NULL;
 }
 
-static inline bool ct_run_start(ct_run *run, const cf_cable_hooks *hooks,
-                                const cf_cable_limits *limits, bool deflate) {
+/* Start a run with a caller-supplied request (headers the authenticate hook
+ * reads). `request` must stay valid until cf_cable_socket_run's authenticate
+ * call; the caller keeps it in the test frame. */
+static inline bool ct_run_start_with_request(ct_run *run,
+                                             const cf_cable_hooks *hooks,
+                                             const cf_cable_limits *limits,
+                                             bool deflate,
+                                             const cf_cable_request *request) {
     memset(run, 0, sizeof *run);
     int fds[2];
     if (!ct_socketpair(fds)) return false;
@@ -334,13 +340,22 @@ static inline bool ct_run_start(ct_run *run, const cf_cable_hooks *hooks,
     } else {
         cf_cable_limits_default(&run->limits);
     }
-    run->request.method = CF_GET;
+    if (request != NULL) {
+        run->request = *request;
+    } else {
+        run->request.method = CF_GET;
+    }
     if (pthread_create(&run->thread, NULL, ct_run_main, run) != 0) {
         close(fds[0]);
         close(fds[1]);
         return false;
     }
     return true;
+}
+
+static inline bool ct_run_start(ct_run *run, const cf_cable_hooks *hooks,
+                                const cf_cable_limits *limits, bool deflate) {
+    return ct_run_start_with_request(run, hooks, limits, deflate, NULL);
 }
 
 /* Join the run thread (the peer must have been closed or the socket shut
