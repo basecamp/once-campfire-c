@@ -1,6 +1,7 @@
 /* Minimal C test framework for the Campfire port (F02).
  *
- * Header-only, no external dependencies, Linux x86_64 + C11 + gcc/clang.
+ * Header-only, no external dependencies, Linux x86_64 + C11 + clang and the
+ * pinned Fil-C 0.685 pizfix driver (vendor/DEPS.json / vendor/README.md).
  *
  * Usage
  * -----
@@ -14,10 +15,25 @@
  *
  *   CF_TEST_MAIN()          // exactly once per test binary
  *
- * Each CF_TEST registers a case in its own translation unit, so a test binary
- * may spread cases over several .c files as long as each includes this header
- * and exactly one file defines CF_TEST_MAIN().  A binary with cases but no
- * CF_TEST_MAIN() fails to link instead of running nothing.
+ * Each CF_TEST registers a case from its own translation unit, so a test
+ * binary may spread cases over several .c files as long as each includes this
+ * header and exactly one file defines CF_TEST_MAIN().
+ *
+ * Registration
+ * ------------
+ * CF_TEST registers a case through two mechanisms, and CF_TEST_MAIN() runs
+ * each case exactly once:
+ *   1. the case lands in the "cf_test_cases" section, so an ordinary clang
+ *      link synthesizes __start_cf_test_cases/__stop_cf_test_cases; and
+ *   2. a constructor calls cf_test_register(), appending the case to a linked
+ *      list before main().
+ * CF_TEST_MAIN() prefers the section table whenever it is non-empty
+ * (ordinary clang) and otherwise uses the constructor list.  The fallback is
+ * required by Fil-C 0.685, whose compiler drops custom section attributes:
+ * its binaries have no section table and would otherwise register zero
+ * cases.  A binary with cases but no CF_TEST_MAIN() fails to link under both
+ * compilers, because each constructor references cf_test_register(), which
+ * only the CF_TEST_MAIN() translation unit defines.
  *
  * Runner
  * ------
@@ -44,6 +60,7 @@
 
 #include <setjmp.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef void (*cf_test_fn)(void);
@@ -53,18 +70,35 @@ struct cf_test_case {
     cf_test_fn fn;
 };
 
-/* Cases land in the "cf_test_cases" output section; the linker synthesizes
- * __start_cf_test_cases / __stop_cf_test_cases.  The weak declarations keep a
- * binary with no cases linkable (the runner then reports an error). */
+/* Constructor-registration list node; used only by CF_TEST_MAIN(). */
+struct cf_test_node {
+    const struct cf_test_case *tc;
+    struct cf_test_node *next;
+};
+
+/* Cases land in the "cf_test_cases" output section (ordinary clang/gcc) and
+ * register through a constructor (also under Fil-C 0.685, which drops custom
+ * sections).  The weak __start_/__stop_ declarations keep a binary with no
+ * case section linkable: the runner then uses the constructor list, and an
+ * empty constructor list is reported as no cases (exit 2). */
 #define CF_TEST(name)                                                        \
     static void cf_test_##name(void);                                        \
     static const struct cf_test_case cf_test_case_##name                     \
         __attribute__((used, section("cf_test_cases"))) = {                  \
             #name, cf_test_##name};                                          \
+    static void cf_test_ctor_##name(void) __attribute__((constructor));      \
+    static void cf_test_ctor_##name(void) {                                  \
+        cf_test_register(&cf_test_case_##name);                              \
+    }                                                                        \
     static void cf_test_##name(void)
 
 extern const struct cf_test_case __start_cf_test_cases[] __attribute__((weak));
 extern const struct cf_test_case __stop_cf_test_cases[] __attribute__((weak));
+
+/* Defined by the CF_TEST_MAIN() translation unit and called by every CF_TEST
+ * constructor before main().  It is undefined in a binary with cases but no
+ * CF_TEST_MAIN(), which is therefore a link error. */
+extern void cf_test_register(const struct cf_test_case *tc);
 
 /* Shared runner state, defined by the CF_TEST_MAIN() translation unit. */
 extern int cf_test_failed_checks;
@@ -92,6 +126,19 @@ extern int cf_test_main(int argc, char **argv);
     int cf_test_aborting = 0;                                                \
     jmp_buf cf_test_abort;                                                   \
                                                                              \
+    static struct cf_test_node *cf_test_ctor_head;                           \
+                                                                             \
+    void cf_test_register(const struct cf_test_case *tc) {                   \
+        struct cf_test_node *node = malloc(sizeof *node);                    \
+        if (node == NULL) {                                                  \
+            fprintf(stderr, "cf_test: cannot register case %s\n", tc->name); \
+            exit(2);                                                         \
+        }                                                                    \
+        node->tc = tc;                                                       \
+        node->next = cf_test_ctor_head;                                      \
+        cf_test_ctor_head = node;                                            \
+    }                                                                        \
+                                                                             \
     void cf_test_note_failure(const char *file, int line, const char *expr,  \
                               int fatal) {                                   \
         printf("    %s:%d: %s\n", file, line, expr);                         \
@@ -107,6 +154,27 @@ extern int cf_test_main(int argc, char **argv);
                strstr(name, filter) != NULL;                                 \
     }                                                                        \
                                                                              \
+    static void cf_test_run_one(const struct cf_test_case *c,                \
+                                const char *filter, int *matched,            \
+                                int *passed, int *failed) {                  \
+        if (!cf_test_match(c->name, filter)) {                               \
+            return;                                                          \
+        }                                                                    \
+        (*matched)++;                                                        \
+        cf_test_failed_checks = 0;                                           \
+        cf_test_aborting = 0;                                                \
+        if (setjmp(cf_test_abort) == 0) {                                    \
+            c->fn();                                                         \
+        }                                                                    \
+        if (cf_test_failed_checks == 0) {                                    \
+            printf("PASS %s\n", c->name);                                    \
+            (*passed)++;                                                     \
+        } else {                                                             \
+            printf("FAIL %s\n", c->name);                                    \
+            (*failed)++;                                                     \
+        }                                                                    \
+    }                                                                        \
+                                                                             \
     int cf_test_main(int argc, char **argv) {                                \
         const char *filter = NULL;                                           \
         if (argc > 2) {                                                      \
@@ -117,32 +185,27 @@ extern int cf_test_main(int argc, char **argv);
             filter = argv[1];                                                \
         }                                                                    \
                                                                              \
+        int matched = 0;                                                     \
+        int passed = 0;                                                      \
+        int failed = 0;                                                      \
+                                                                             \
         const struct cf_test_case *case_start = __start_cf_test_cases;       \
         const struct cf_test_case *case_stop = __stop_cf_test_cases;         \
-        if (case_start == NULL || case_start == case_stop) {                 \
+        int have_section = case_start != NULL && case_start != case_stop;    \
+        if (!have_section && cf_test_ctor_head == NULL) {                    \
             fprintf(stderr, "cf_test: no test cases registered\n");          \
             return 2;                                                        \
         }                                                                    \
                                                                              \
-        int matched = 0;                                                     \
-        int passed = 0;                                                      \
-        int failed = 0;                                                      \
-        for (const struct cf_test_case *c = case_start; c < case_stop; c++) { \
-            if (!cf_test_match(c->name, filter)) {                           \
-                continue;                                                    \
+        if (have_section) {                                                  \
+            for (const struct cf_test_case *c = case_start; c < case_stop;   \
+                 c++) {                                                      \
+                cf_test_run_one(c, filter, &matched, &passed, &failed);      \
             }                                                                \
-            matched++;                                                       \
-            cf_test_failed_checks = 0;                                       \
-            cf_test_aborting = 0;                                            \
-            if (setjmp(cf_test_abort) == 0) {                                \
-                c->fn();                                                     \
-            }                                                                \
-            if (cf_test_failed_checks == 0) {                                \
-                printf("PASS %s\n", c->name);                                \
-                passed++;                                                    \
-            } else {                                                         \
-                printf("FAIL %s\n", c->name);                                \
-                failed++;                                                    \
+        } else {                                                             \
+            for (const struct cf_test_node *n = cf_test_ctor_head;           \
+                 n != NULL; n = n->next) {                                   \
+                cf_test_run_one(n->tc, filter, &matched, &passed, &failed);  \
             }                                                                \
         }                                                                    \
                                                                              \
