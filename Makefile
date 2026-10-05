@@ -68,7 +68,9 @@ RICHTEXT_SRCS := \
 	src/richtext/rt_uri.c \
 	src/richtext/rt_util.c
 
-CABLE_SRCS := src/cable/socket.c src/cable/protocol.c
+CABLE_SRCS := src/cable/socket.c src/cable/protocol.c \
+	src/cable/pubsub.c src/cable/channels.c src/cable/broadcasts.c \
+	src/cable/revocation.c
 JOBS_SRCS := src/jobs/queue.c
 STORAGE_SRCS := src/storage/files.c src/storage/process.c
 
@@ -88,6 +90,25 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/routes.c \
 	src/assets.c \
 	src/views/escape.c \
+	src/views/ctx.c \
+	src/views/render.c \
+	src/views/translations.c \
+	src/views/view_assets.c \
+	src/views/layout.c \
+	src/views/session.c \
+	src/views/first_run.c \
+	src/views/welcome.c \
+	src/views/rooms.c \
+	src/views/messages.c \
+	src/views/pwa.c \
+	src/views/model.c \
+	src/presenters/accounts.c \
+	src/presenters/layout.c \
+	src/presenters/messages.c \
+	src/presenters/rooms.c \
+	src/actions/first_runs.c \
+	src/actions/sessions.c \
+	src/actions/welcome.c \
 	$(AUTH_SRCS) \
 	$(MODEL_SRCS) \
 	$(RICHTEXT_SRCS) \
@@ -140,7 +161,11 @@ FILC ?= /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filc
 
 STRICT_FLAGS := -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
 	-Wall -Wextra -Werror -pthread
-APP_CPPFLAGS := -Isrc -Itests
+# Application version baked at build time (views.h CF_VIEWS_APP_VERSION).
+APP_VERSION ?= 0.1.0
+APP_CPPFLAGS := -Isrc -Itests -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"'
+# Same flags without the version define (golden buckets redefine it).
+APP_TEST_CPPFLAGS := $(filter-out -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"',$(APP_CPPFLAGS))
 
 # ---------- build variants --------------------------------------------------
 MODE ?= dev
@@ -183,7 +208,7 @@ DEP_INCLUDES += $(MODE_DEP_INCLUDES)
 # Section folding: the live app links the routes/assets + auth subset that
 # exists today; unreferenced functions (auth paths awaiting R02/models) must
 # drop instead of causing undefined references. The full set joins with R02.
-APP_CPPFLAGS += -ffunction-sections -fdata-sections
+APP_CPPFLAGS += -ffunction-sections -fdata-sections -Itests/views
 MODE_LDFLAGS += -Wl,--gc-sections
 
 BUILD_ROOT := build
@@ -212,6 +237,8 @@ UNIT_TEST_SRCS := \
 	tests/db/test_time.c \
 	tests/http/test_params.c \
 	tests/views/test_escape.c \
+	tests/views/test_presenters.c \
+	tests/views/test_presenters_messages.c \
 	tests/routes/test_routes_table.c \
 	tests/routes/test_routes_recognition.c \
 	tests/routes/test_builtins.c \
@@ -225,6 +252,12 @@ UNIT_TEST_SRCS := \
 	tests/cable/test_cable_queue.c \
 	tests/cable/test_cable_session.c \
 	tests/cable/test_cable_loop.c \
+	tests/cable/test_cable_channels.c \
+	tests/cable/test_cable_wiring.c \
+	tests/cable/test_cable_broadcasts.c \
+	tests/cable/test_cable_pubsub.c \
+	tests/cable/test_cable_revocation.c \
+	tests/cable/test_cable_live.c \
 	tests/jobs/test_jobs.c \
 	tests/jobs/test_jobs_writer.c \
 	tests/storage/test_files.c \
@@ -288,6 +321,42 @@ APP_DOUBLE_OBJ := $(MODE_OBJ)/tests/app/support/route_double.o
 APP_HARNESS_OBJ := $(MODE_OBJ)/tests/app/support/serve_harness.o
 APP_NOROUTE_OBJS := $(filter-out $(MODE_OBJ)/src/routes.o,$(APP_LIB_OBJS))
 APP_ALL_TEST_BINS := $(APP_DOUBLE_TEST_BINS) $(APP_SERVE_TEST_BIN) $(APP_WIRING_TEST_BIN)
+
+# Views render-suite bucket: one binary built from six case TUs plus the
+# support harness (test_main.c carries its CF_TEST_MAIN; static_root_double.c
+# replaces cf_static_root so routes.o/assets.o are excluded from the link).
+VIEWS_MAIN_SRC := tests/views/support/test_main.c
+VIEWS_SUPPORT_SRCS := \
+	tests/views/support/golden.c \
+	tests/views/support/golden_b.c \
+	tests/views/support/facts.c \
+	tests/views/support/static_root_double.c
+VIEWS_BUCKET_SRCS := \
+	tests/views/test_sessions.c \
+	tests/views/test_first_run.c \
+	tests/views/test_welcome.c \
+	tests/views/test_layout.c \
+	tests/views/test_rooms.c \
+	tests/views/test_messages.c
+VIEWS_TEST_BIN := $(TESTS_DIR)/views/test_views
+VIEWS_MAIN_OBJ := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_MAIN_SRC))
+VIEWS_SUPPORT_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_SUPPORT_SRCS))
+VIEWS_BUCKET_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(VIEWS_BUCKET_SRCS))
+APP_NOROUTE_ASSETS_OBJS := $(filter-out $(MODE_OBJ)/src/routes.o \
+	$(MODE_OBJ)/src/assets.o,$(APP_LIB_OBJS))
+# Golden buckets compare against fixtures captured with the reference's
+# "parity" build version, so they link a parity-compiled presenters/layout.c
+# (the same pattern as static_root_double.c).
+PARITY_LAYOUT_OBJ := $(MODE_OBJ)/tests/support/presenters_layout_parity.o
+APP_GOLDEN_BUCKET_OBJS := $(filter-out $(MODE_OBJ)/src/presenters/layout.o,\
+	$(APP_NOROUTE_ASSETS_OBJS)) $(PARITY_LAYOUT_OBJ)
+
+# Controller action tests: route-double + views support + no-routes library.
+ACTIONS_TEST_SRCS := \
+	tests/actions/first_runs_test.c \
+	tests/actions/welcome_test.c \
+	tests/actions/sessions_test.c
+ACTIONS_TEST_BINS := $(patsubst tests/%.c,$(TESTS_DIR)/%,$(ACTIONS_TEST_SRCS))
 
 # Auth test binaries use the route double's test helpers (auth_env.h) instead
 # of src/routes.c, so they link the no-routes library plus the double.
@@ -421,6 +490,12 @@ $(MODE_OBJ)/%.o: %.c
 	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(APP_CPPFLAGS) \
 		$(DEP_INCLUDES) -MMD -MP -c $< -o $@
 
+# Golden-bucket parity object: presenters/layout.c with the captured version.
+$(PARITY_LAYOUT_OBJ): src/presenters/layout.c | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(APP_TEST_CPPFLAGS) $(DEP_INCLUDES) \
+		-DCF_VIEWS_APP_VERSION='"parity"' -MMD -MP -c $< -o $@
+
 $(MODE_OBJ)/tests/%.o: tests/%.c
 	@mkdir -p $(dir $@)
 	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(APP_CPPFLAGS) \
@@ -457,12 +532,36 @@ $(HTTP_TEST_BINS): $(TESTS_DIR)/http/%: $(MODE_OBJ)/tests/http/%.o \
 		$(APP_LIB_OBJS) $(MODE_DEP_LIBS) -lm -o $@
 
 
+$(VIEWS_TEST_BIN): $(VIEWS_BUCKET_OBJS) $(VIEWS_MAIN_OBJ) $(VIEWS_SUPPORT_OBJS) \
+		$(APP_GOLDEN_BUCKET_OBJS) $(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) -Itests/views \
+		$(VIEWS_BUCKET_OBJS) $(VIEWS_MAIN_OBJ) $(VIEWS_SUPPORT_OBJS) \
+		$(APP_GOLDEN_BUCKET_OBJS) $(MODE_DEP_LIBS) -lm -o $@
+
+$(ACTIONS_TEST_BINS): $(TESTS_DIR)/actions/%: $(MODE_OBJ)/tests/actions/%.o \
+		$(APP_DOUBLE_OBJ) $(VIEWS_SUPPORT_OBJS) $(APP_GOLDEN_BUCKET_OBJS) \
+		$(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) -Itests/views \
+		$(MODE_OBJ)/tests/actions/$*.o $(APP_DOUBLE_OBJ) \
+		$(VIEWS_SUPPORT_OBJS) $(APP_GOLDEN_BUCKET_OBJS) \
+		$(MODE_DEP_LIBS) -lm -o $@
+
 # Auth binaries: route-double helpers + the no-routes app library.
 $(AUTH_TEST_BINS): $(TESTS_DIR)/auth/%: $(MODE_OBJ)/tests/auth/%.o \
 		$(APP_DOUBLE_OBJ) $(APP_NOROUTE_OBJS) $(MODE_DEP_LIBS) | check-cc
 	@mkdir -p $(dir $@)
 	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) \
 		$(MODE_OBJ)/tests/auth/$*.o $(APP_DOUBLE_OBJ) \
+		$(APP_NOROUTE_OBJS) $(MODE_DEP_LIBS) -lm -o $@
+
+# Cable broadcasts tests exercise dispatch with the route-double helpers.
+$(TESTS_DIR)/cable/test_cable_broadcasts: $(MODE_OBJ)/tests/cable/test_cable_broadcasts.o \
+		$(APP_DOUBLE_OBJ) $(APP_NOROUTE_OBJS) $(MODE_DEP_LIBS) | check-cc
+	@mkdir -p $(dir $@)
+	$(MODE_CC) $(STRICT_FLAGS) $(MODE_CFLAGS) $(MODE_LDFLAGS) \
+		$(MODE_OBJ)/tests/cable/test_cable_broadcasts.o $(APP_DOUBLE_OBJ) \
 		$(APP_NOROUTE_OBJS) $(MODE_DEP_LIBS) -lm -o $@
 
 # A00 app binaries: the classic set uses the route double instead of routes.c.
@@ -494,10 +593,12 @@ $(APP_WIRING_TEST_BIN): $(MODE_OBJ)/tests/app/test_dispatch_wiring.o \
 # Every test binary runs even when an earlier one fails; the aggregate exit
 # is nonzero if any binary, or the app checks, failed.
 test-impl: $(BIN) $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) \
-		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS) $(TEST_OBJS)
+		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS) $(VIEWS_TEST_BIN) \
+		$(ACTIONS_TEST_BINS) $(TEST_OBJS)
 	@fail=0; \
 	for t in $(UNIT_TEST_BINS) $(HTTP_TEST_BINS) \
-		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS); do \
+		$(APP_ALL_TEST_BINS) $(AUTH_TEST_BINS) $(VIEWS_TEST_BIN) \
+		$(ACTIONS_TEST_BINS); do \
 		echo "-- $$t"; \
 		$(RUN_ENV) "$$t" || fail=1; \
 	done; \
@@ -537,4 +638,5 @@ tsan-impl: $(TSAN_TEST_BINS) $(TSAN_HTTP_TEST_BINS) $(TSAN_APP_TEST_BINS) $(TSAN
 -include $(MODE_OBJ)/tests/app/*.d $(MODE_OBJ)/tests/app/support/*.d \
 	$(MODE_OBJ)/tests/auth/*.d $(MODE_OBJ)/tests/richtext/*.d \
 	$(MODE_OBJ)/tests/cable/*.d $(MODE_OBJ)/tests/jobs/*.d \
-	$(MODE_OBJ)/tests/storage/*.d
+	$(MODE_OBJ)/tests/storage/*.d $(MODE_OBJ)/tests/actions/*.d \
+	$(MODE_OBJ)/tests/views/*.d $(MODE_OBJ)/tests/views/support/*.d

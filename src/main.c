@@ -15,10 +15,14 @@
  * request delivered at any point stays pending until consumed. */
 #include "app.h"
 #include "app_internal.h"
+#include "cable/channels.h"
+#include "cable/revocation.h"
+#include "db/writer.h"
 #include "cf.h"
 #include "config.h"
 #include "http/http.h"
 #include "richtext.h"
+#include "views.h"
 
 #include <errno.h>
 #include <netdb.h>
@@ -181,6 +185,16 @@ int main(int argc, char **argv) {
         cf_richtext_configure(richtext_secret);
     }
 
+    /* A02: load the pinned asset manifest + import map once at boot; every
+     * asset-bearing render needs them (cf_views_assets_configure falls back
+     * to cf_static_root() when passed NULL). */
+    if (cf_views_assets_configure(NULL) != CF_OK) {
+        fprintf(stderr,
+                "campfire: startup failed: view assets (static root)\n");
+        cf_app_destroy(app);
+        return 1;
+    }
+
     if (cf_app_start(app) != CF_OK) {
         fprintf(stderr,
                 "campfire: startup failed: writer or request workers\n");
@@ -188,11 +202,58 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* C02: the application cable (channels, subscriptions, broadcasts) and
+     * its /cable front mount. The loop upgrade seam owns the WebSocket
+     * transport; authentication and command dispatch are this cable's
+     * hooks. */
+    cf_cable *cable = NULL;
+    cf_cable_server *cable_server = NULL;
+    {
+        cf_cable_config cable_config;
+        memset(&cable_config, 0, sizeof cable_config);
+        cable_config.app = app;
+        if (cf_cable_create(&cable_config, &cable) != CF_OK) {
+            fprintf(stderr, "campfire: startup failed: cable creation\n");
+            cf_app_stop(app);
+            cf_app_destroy(app);
+            return 1;
+        }
+        cf_cable_server_config cable_server_config;
+        cf_cable_server_config_default(&cable_server_config);
+        /* D-C07: the scheme comes from the listener; TLS lands with P01. */
+        cable_server_config.assume_ssl = !cfg->disable_ssl;
+        cf_cable_server_hooks(cable, &cable_server_config.hooks);
+        if (cf_cable_server_create(&cable_server_config, &cable_server) !=
+            CF_OK) {
+            fprintf(stderr,
+                    "campfire: startup failed: cable server creation\n");
+            cf_cable_destroy(cable);
+            cf_app_stop(app);
+            cf_app_destroy(app);
+            return 1;
+        }
+        /* C03: the writer's mandatory DISCONNECT_USER consumer (04 C03). A
+         * committed sign-out/ban/deactivation returns only after every
+         * affected connection acknowledged its revocation. */
+        if (cf_writer_set_control_handler(app, cf_cable_revocation_handler,
+                                          cable) != CF_OK) {
+            fprintf(stderr,
+                    "campfire: startup failed: revocation handler\n");
+            cf_cable_server_destroy(cable_server);
+            cf_cable_destroy(cable);
+            cf_app_stop(app);
+            cf_app_destroy(app);
+            return 1;
+        }
+    }
+
     char errbuf[128];
     int listen_fd = cf_serve_listen(cfg, errbuf, sizeof errbuf);
     if (listen_fd < 0) {
         fprintf(stderr, "campfire: startup failed: listen on %s:%u: %s\n",
                 cfg->host, cfg->port, errbuf);
+        cf_cable_server_destroy(cable_server);
+        cf_cable_destroy(cable);
         cf_app_stop(app);
         cf_app_destroy(app);
         return 1;
@@ -206,6 +267,8 @@ int main(int argc, char **argv) {
         free(loops);
         free(loop_threads);
         close(listen_fd);
+        cf_cable_server_destroy(cable_server);
+        cf_cable_destroy(cable);
         cf_app_stop(app);
         cf_app_destroy(app);
         return 1;
@@ -226,6 +289,8 @@ int main(int argc, char **argv) {
         loop_config.app = app;
         loop_config.admit = cf_app_admit;
         loop_config.admit_user = app;
+        loop_config.upgrade = cf_cable_server_upgrade;
+        loop_config.upgrade_user = cable_server;
         if (cf_http_loop_create(&loop_config, &loops[i]) != CF_OK) {
             fprintf(stderr, "campfire: startup failed: loop %zu creation\n",
                     i);
@@ -267,12 +332,21 @@ int main(int argc, char **argv) {
 
 shutdown:
     /* Stop accepting and drain admitted tasks first (H01), then stop the
-     * workers, then destroy the loops; cf_app_destroy frees app/config. */
+     * workers, then destroy the loops; cf_app_destroy frees app/config. The
+     * cable server joins every connection thread (whose exit detaches its
+     * subscription loop) while the writer is still up, so disconnect
+     * presence effects can run; the cable itself is released last. */
     for (size_t i = 0; i < loops_created; i++) {
         cf_http_loop_stop(loops[i]);
     }
     for (size_t i = 0; i < threads_created; i++) {
         (void)pthread_join(loop_threads[i], NULL);
+    }
+    if (cable_server != NULL) cf_cable_server_destroy(cable_server);
+    if (cable != NULL &&
+        cf_cable_stop(cable, 5000) != CF_OK) {
+        fprintf(stderr,
+                "campfire: shutdown: cable loops did not drain in time\n");
     }
     cf_app_stop(app);
     for (size_t i = 0; i < loops_created; i++) {
@@ -282,6 +356,7 @@ shutdown:
     free(loops);
     free(loop_threads);
     cf_app_destroy(app); /* joins any remaining worker before freeing state */
+    if (cable != NULL) cf_cable_destroy(cable);
     fprintf(stderr, "campfire: shutdown: complete\n");
     return exit_code;
 }
