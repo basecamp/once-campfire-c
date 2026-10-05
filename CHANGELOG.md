@@ -9,8 +9,10 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
 
 Phase status: **F03 DONE, F01 DONE** (Fil-C axis closed), **D01 IN_PROGRESS**
 (db-core + frozen headers done; model bodies next), **H02 PARTIAL** (multipart
-awaits S01), **R01 DONE**. Milestone **M0 (reproducible foundation) is DONE**
-for the core dependency set; media probes remain open for S03.
+awaits S01), **R01 DONE**. Milestone **M0 remains open** pending the
+independent review's clean-checkout reproducibility findings (dependency probe
+sources; fixture-verification inputs); media probes remain open for S03.
+Open review findings are tracked in the roadmap's disposition table.
 
 ### Verification (independent verifiers on every task; defects found and re-verified)
 - Fil-C 0.685 drops custom section data, so `tests/cf_test.h` case registration
@@ -28,8 +30,10 @@ for the core dependency set; media probes remain open for S03.
   corpus re-derived exactly (1961 successes, 794 matched errors, exactly one
   spec-mandated depth divergence — the 99-bracket vector under the depth-32 C
   limit), 241/241 adversarial checks pass, reverts reproduce the defects.
-- Suite: **86 cf_test cases** green under dev, bench, ASan/UBSan, TSan and
-  Fil-C (core 4, config 15, app 6, db 3+7+5+3, params 20, views 27).
+- Suite: **86 registered cases** green under dev, bench, ASan/UBSan and Fil-C
+  (core 4, config 15, app 6, db 3+7+5+3, params 20, views 27); the focused
+  TSan target executes 21 registered cases plus the standalone buffer program,
+  not all 86.
 
 ### Added — database core (D01)
 - `src/db/schema.c` + embedded `schema_sql.h` (provenance SHA-256): fresh
