@@ -5,6 +5,115 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 2c: remaining controllers, review repairs, A01/A02 completion
+
+### Controllers (routes rebound from the dev-501 placeholder)
+- **A-rooms** (96/97/101/104): show/index/destroy with reference bodies; the
+  destroy broadcast is byte-equal to the pinned `action_tag` + protocol +
+  `json::encode` rule (HTML-entity escaping included) and ordered
+  write → broadcast → redirect; Turbo-Frame page/frame variants.
+- **A-messages** (76-83, 137, 138, 140-144): index/create/edit/show/update/
+  destroy; canonical bodies through `cf_richtext_canonical_body`; ETag digests
+  recomputed from the pinned preimages (insertion order matters, verified
+  independently).
+- **A-users-bans** (55/56): ban/unban with the DISCONNECT effects; the
+  first_run leak and welcome integer-cast divergences from the Phase 2b
+  verification are repaired.
+
+### Phases 1-2 independent review repairs (INDEPENDENT-REVIEW.md)
+- **P12-01** stale authorization: `rooms#destroy` and ban/unban revalidate the
+  actor (status/role), room membership/ownership and the target inside the
+  write transaction before the first mutation. Controlled-race tests reproduce
+  the review's two scenarios pre-fix; independent verification 28/28 probes and
+  falsification flips 18 red. (p12-01-stale-authz.md, p12-01-verify.md)
+- **P12-02** WebSocket admission: upgrades now hold a lifetime connection lease
+  (released exactly once via the existing abandon CAS; unreserved upgrades are
+  refused) and each loop runs exactly one bounded reactor thread over epoll with
+  one DB reader — no per-connection threads/readers. The review's one-slot probe
+  goes from 4 sockets/4 extra threads to 14/14 with 1 thread per socket rework.
+  **P12-02b conformance** then moved upgrade-auth/subscribe/model onto the
+  bounded request-worker pool through the frozen `cf_app_submit_worker` seam
+  (install via the C03 gate; full queue refuses/rejects), reduced revocations to
+  one preallocated control slot per loop, added live output-budget coverage and
+  documented the enforced stop order. Independent verification: strace
+  attribution (all DB syscalls on worker/writer threads), injected 400 ms DB
+  delays leaving other sockets ≤42 ms, exactly-once closures, 24-socket
+  per-loop slot accounting, all falsifications red. (p12-02-*.md)
+- **P12-03**: route tests read committed `tests/fixtures/contracts` copies
+  (clean-checkout failure fixed).
+- **P12-04** crypto queue: every `crypt_r` now runs on a refcounted bounded
+  queue (`CF_CRYPTO_WORKERS` workers, 32 pending, counted blocking backpressure,
+  drain/join shutdown with counted discards) at the bcrypt boundary, so
+  sign-in, the unknown-account dummy and setup hashing all queue without a read
+  transaction held. Independent verification measured the worker bound, the
+  saturation semantics, shutdown and two-app refcounting, with falsifications.
+  (p12-04-crypto-queue.md, p12-04-verify.md)
+- **Turbo-Frame predicate**: the first Phase 2c repair misread
+  `HeaderValue::to_str` (Unicode whitespace vs the pin's visible-ASCII+HTAB byte
+  gate). All five action helpers now implement the exact predicate; adversarial
+  re-verification over 9,119 vectors — including a Rust oracle executing the
+  cached pinned http 1.5.0 crate — shows 0 mismatches, and the fuzz/dispatch
+  probes are clean. (p2c-turbo-frame-ascii*.md)
+- **Header-gate sweep** (defect-class ruling recorded in the roadmap): every
+  request-header read the pin performs through `to_str` now treats any byte
+  outside HTAB/visible-ASCII as absent — UA readability, CSRF Origin and
+  Sec-Fetch-Site, Cookie drop-whole, Accept/Content-Type/X-Requested-With,
+  If-None-Match/If-Modified-Since, assets Accept-Encoding, richtext
+  `request_host` with the pin's localhost fallback, Content-Type HTAB, the
+  HTTP/1.0 absent-Host base_url, and the Cable handshake headers. Version
+  zero-segment ordering fixed (`1 == 1.0`; 352/352 corpus comparisons).
+  Independent verification: 0 mismatches vs a Rust `to_str` oracle over 4,814
+  vectors, wire probes per site, all falsifications red. Mapped error responses
+  were confirmed to carry no X-Version/X-Rev per the pin. (a01-a02-completion-r2.md,
+  header-gate-sweep*.md, cable-handshake-gate.md)
+
+### A01/A02 completion (review completion gaps)
+- useragent/ApplicationPlatform ported to `src/auth/{user_agent,platform}` with
+  the pinned corpus copied to `tests/fixtures/ua` (385 cases × 16 fields, 0
+  mismatches; hostile-input fuzz clean). `X-Version` is set on every dispatched
+  response from the Makefile-baked `CF_APP_VERSION`; `X-Rev` only when a
+  nonempty `CF_GIT_REVISION` define exists. `allow_browser` renders
+  `sessions/incompatible_browser` (page/frame/own-layout exactly per the pin,
+  200 text/html for any format, never 406); absent/blank/unreadable UAs are
+  never blocked and get the pin's empty-parse facts. `cf_ctx_platform` feeds
+  every layout call site; the declared-but-undefined `cf_auth_key_derive` is
+  gone.
+
+### Phase-exit acceptance and late findings
+- **V01 two-browser acceptance** landed as runnable cases under
+  `tests/integration/cases` (E2E-01 setup/sign-in/room/post/live delivery/
+  edit-delete live; E2E-03 ban/revoke with a connected peer and a refused
+  replay), driving the installed `agent-browser` CLI via the stdlib runner —
+  no Chromium download. Both pass, stable across reruns. Search and
+  profile-logout browser steps are deferred to M4/V02 with their packets
+  (A-searches, A-users-profiles; both dev-501 by design), recorded as a ruled
+  acceptance scope.
+- **`_method` override was never applied before routing** (found by V01;
+  UI edit/delete/logout forms mis-routed). `cf_ctx_create` now computes
+  `cf_effective_method` first and carries the effective verb through routing,
+  CSRF and actions on a shallow request copy; POST+`_method=HEAD` serializes
+  byte-identical to wire HEAD via a narrow write-back at the H01 seam.
+- **`src/cf.h` contract restoration** (pre-commit check): the completion pass
+  had added an include and two `cf_ctx` fields to the frozen shared header;
+  the platform now lives in A00's `private_state` with a context.h
+  setter/getter, and `src/cf.h` is declaration-identical to `contracts/api.h`
+  again (preprocessed-diff proof).
+
+### Test harness
+- TSan target now covers the actions and auth buckets plus the Cable live
+  reactor tests (21 binaries / 258 cases when extended; suites grow with the
+  repair cases).
+- Cable live waits are deadline-polling with a falsifiable 20 s cap (was fixed
+  3-5 s deadlines that expired under oversubscription); the remaining
+  load-only races (24-socket two-loop accept spread, churn/hammer helper
+  synchronization in test_cable_wiring.c) were made deterministic with
+  bounded handshakes — falsified to still fail, never pass vacuously.
+
+### Verification snapshot
+- End-of-phase gate: dev 868/868, sanitize 868/868 (ASan/UBSan/LSan clean),
+  Fil-C 868/868, TSan 287/287 (0 warnings), bench 868/868, V01 integration
+  2/2. Evidence: docs/devel/IMPLEMENTATION-ROADMAP.md and docs/devel/evidence/.
+
 ## 2026-10-05 — Phase 2b: views, Cable channels/revocation, first controllers (A02, C02, C03, A-welcome, A-first_runs, A-sessions)
 
 ### Verification (independent verifiers; every finding repaired and re-verified)
