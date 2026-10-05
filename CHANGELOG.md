@@ -5,6 +5,78 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — Phase 3: body cache and first pinned comparison (K01, B01.initial)
+
+### K01 — complete-body cache with explicit keys/snapshot/version rules
+- **K01a**: `cf_gzip` (deterministic level 6, mtime 0, exact byte vectors) and
+  Accept-Encoding selection (q-values, wildcard, explicit q=0, 406 when both
+  codings are forbidden) derived from the pinned app-layer deflater; 8+11
+  focused cases, 89 select assertions, 12 falsification mutations
+  (K01a.md).
+- **K01b**: `src/cache.{c,h}` — fixed 4096-bucket chained table, one mutex +
+  FIFO, keyed HMAC-SHA256 hash truncated to 64 bits, exact budget accounting
+  (bucket array + key capacity + entry metadata + body allocation), 1 MiB
+  entry / 2048-byte key caps, oversized bypass, lazy stale eviction,
+  version-mutex admission, hit/miss/bypass/stale/eviction/version-reject/
+  duplicate counters; 16+2 cases across clang/gcc/LTO/Fil-C/ASan/TSan with 12
+  falsification mutations (K01b.md).
+- **K01c**: key encoding for the spec's seven fields (versioned length+bytes,
+  absence != empty), the context round API (lookup/304/406/gzip/Vary/
+  admission), app lifecycle wiring, and call-site admission for all four
+  admitted handlers (rooms#show, messages#index, users/sidebars#show,
+  searches#index) after a per-handler body-input audit found no uncovered
+  input; 26 falsification mutations; CACHE-01..06 correctness mapped
+  (K01c.md). Documented: body-hash ETag/304/storage stay cache-scoped while
+  encoding negotiation is always on (pin-derived); uncached admitted routes
+  still lack the pin's weak body ETag and no Cache-Control is emitted.
+- **Pulled-forward prerequisites** (ruled to make cache admission and the
+  pinned benchmark preflight complete): A-users-sidebars (route 57, page +
+  frame renders byte-identical to the Rust goldens with no masks),
+  A-searches (145-147, incl. the pinned 771-range query sanitizer and scoped
+  search), A-users-avatars show (53; token/404, bot, initials-SVG fallback,
+  freshness/304/Cache-Control; the attachment-variant arm is a documented
+  fail-loudly blocked arm pending S02/S03; route 54 stays deferred).
+- **Two defects found by the pinned harness and fixed**: a ~41 ms keep-alive
+  stall (Nagle holding the body send; fixed with TCP_NODELAY on accepted
+  sockets — exactly the pin's own front server — plus a hyper-matching
+  vectored flush) and gzip coupled to the cache flag (now always-on
+  representation; storage/304 remain cache-scoped).
+
+### B01.initial — pinned comparison harness and first measurements
+- Harness pinned from `basecamp/once-campfire-elixir` @ `b6b82e50` (the
+  README-medians commit) with a sha256 manifest + verifier; `bench/run-c`
+  adapter (C app + Dockerfile) validated live; deterministic seed importer
+  (schema + fixtures, hash recorded; avatar attachment omitted per the ruled
+  fallback — disclosed). Reference images built and pinned:
+  `campfire-rust:app` @ `1ea6d6f` (digest e21301de…), `campfire-reference:app`
+  (Rails) @ `90b3300` (digest 3a498870…); both pass the pinned preflight.
+- Two arms (CF_CACHE_BYTES 0 / 64 MiB), apps `c,rust,reference`, 3
+  interleaved reps (order reversed per rep), HTTP suite, 1/16/64 clients,
+  2 s warmup / 8 s measured; raw outputs + DIGEST/env/load accounting under
+  `bench/results/7a4c24e877c1+landed42-{uncached,cache}/` (B01b.md).
+
+| c=16 req/s (median of 3) | C off | C on | Rust | Rails |
+|---|---:|---:|---:|---:|
+| room_show | 144 | 6,744 | 28,225 | 223 |
+| messages_page | 158 | 6,427 | 30,315 | 345 |
+| sidebar | 774 | 7,045 | 32,619 | 606 |
+| search | 431 | 7,054 | 30,992 | 389 |
+| post_message | 3,223 | 3,763 | 43,735 | 950 |
+| /up | 71,907 | 174,128 | 105,760 | 3,896 |
+
+- Cache delta on C: 44-54x (room), 40-44x (messages), 9-10x (sidebar), 16-17x
+  (search); CPU/success ~25-31 ms -> ~0.55 ms. **All 18 reps are
+  load-caveated**: host load1 at the gate was 6.0-11.1 (gate 1.5, 0 reps
+  qualified) because the project owner's parallel Phase 4 build kept the host
+  busy; relative comparisons are interleaved under the same load, but absolute
+  numbers await the quiet-window rerun (two invocations, setup complete).
+  Rust's row is its production image with its own server-side cache enabled
+  (not togglable by the harness), so C-uncached vs Rails-uncached is the fair
+  like-for-like and C-cache vs Rust is the each-at-its-best pair. C has no
+  media/S02 features, the avatar row is the disclosed fallback SVG, the seed
+  is a synthesis, and cable/upload/cold/slow/Fil-C rows are B01.final. No
+  "fastest" claim: preliminary, provenance-complete dataset only.
+
 ## 2026-10-05 — Phase 2c: remaining controllers, review repairs, A01/A02 completion
 
 ### Controllers (routes rebound from the dev-501 placeholder)
