@@ -1,0 +1,31 @@
+{
+  "name": "gumbo",
+  "pinned_commit": "8cfb9daae9ee4a0837508eab43c40fbc8c4138c9",
+  "checked_out_commit": "8cfb9daae9ee4a0837508eab43c40fbc8c4138c9",
+  "repo": "https://github.com/sparklemotion/nokogiri (gumbo-parser subtree at v1.19.4)",
+  "license": "Apache-2.0 (SPDX: Apache-2.0)",
+  "license_file": "vendor/src/gumbo/gumbo-parser/src/README.md; Apache-2.0 headers in gumbo-parser/src/*.[ch] (Nokogiri LICENSE-DEPENDENCIES.md is not part of the sparse subtree checkout)",
+  "fetch_script": "vendor/scripts/gumbo.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/gumbo-filc\nfor f in ascii attribute char_ref error foreign_attrs parser string_buffer string_piece svg_attrs svg_tags tag tag_lookup token_buffer tokenizer utf8 util vector; do \"$FILC\" -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/$f.c -o obj/$f.o; done\nar rcs libgumbo.a obj/*.o\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src probe.c libgumbo.a -o probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/gumbo-filc/libgumbo.a",
+      "size": 2306306,
+      "sha256": "72e039c7f11d78013a6e2b4ba4a72ad663d43ec12f31e3d398f4b529c5b6fdd6"
+    },
+    {
+      "path": "vendor/build/gumbo-filc/probe",
+      "size": 1697184,
+      "sha256": "aa7b248635c437ec052a01df85cc7b8b168797626dd1b3ded5012e1e1e95dc55"
+    }
+  ],
+  "probe_command": "vendor/build/gumbo-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "ok: doc1: parse status OK\nok: doc1: no document error\nok: doc1: root element is <html>\nok: doc1: html has 2 children\nok: doc1: first child is <head>\nok: doc1: second child is <body>\nok: doc1: head > title > \"Hi\"\nok: doc1: body first child is <p>\nok: doc1: p has 2 attributes\nok: doc1: p attribute class=\"a\"\nok: doc1: p attribute id=\"b\"\nok: doc1: p has 3 children\nok: doc1: p text \"Hi \"\nok: doc1: p child <b>\nok: doc1: b > \"world\"\nok: doc1: p trailing text \"!\"\nok: doc1 serialization -> <html><head><title>Hi</title></head><body><p class=\"a\" id=\"b\">Hi <b>world</b>!</p></body></html>\nok: doc2: gumbo_parse returns output\nok: doc2: parse status OK\nok: doc2: document has <!DOCTYPE html>\nok: doc2: implied <body>\nok: doc2: body > table\nok: doc2: implied <tbody> inserted by HTML5 tree building\nok: doc2: tbody > tr > td\nok: doc2: td > \"cell\"\nok: doc2 serialization -> <html><head></head><body><table><tbody><tr><td>cell</td></tr></tbody></table></body></html>\nprobe_result: READY (0 failure(s))\n\n=== build.sh exit: 0 (set -euo pipefail; probe is its final command) ===\n=== separate probe re-run exit: 0 ===\n",
+  "failure_exact": null,
+  "probe_source_sha256": "dd86a45729cbd8654f6cd4e4e2c90076a990ff83d540af85af086fea6a1ee201",
+  "clang_probe_sha256": "dd86a45729cbd8654f6cd4e4e2c90076a990ff83d540af85af086fea6a1ee201",
+  "probe_rerun_exit": 0,
+  "notes": "The 17 C files listed in upstream gumbo-parser/src/Makefile compiled with upstream flags -std=c99 -Wall -O2 (generated gperf tables committed upstream, nothing regenerated); application flag set for probe.c. Probe is a byte-identical copy of the clang probe (sha256 match); assertions unchanged: doc1 root/head/body/title/p/b/text/attributes and byte-exact serialization, doc2 implied <body>/<tbody> and byte-exact serialization. Fil-C interpreter in probe ELF: pizfix/lib/ld-fil1-x86_64.so. F00 Fil-C probe half. Compiler is the pinned Fil-C 0.685 pizfix distribution (same binary the sibling F00 Fil-C probes invoke as build/bin/filcc; that name is a symlink to build/bin/clang). No clang-built object is linked into any probe: the listed static archive and probe are built entirely with the Fil-C compiler; system ar only packs Fil-C objects. Probe source is a byte-identical copy of the clang probe (probe_source_sha256 equals clang_probe_sha256); no assertion weakened, no upstream source modified (vendor/src tree git status clean after build). Probe re-run as a separate invocation: exit 0, READY. Build and probe transcript: vendor/probes/<name>-filc.log."
+}

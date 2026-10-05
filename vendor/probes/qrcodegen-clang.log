@@ -1,0 +1,35 @@
+== F00 qrcodegen v1.8.0 (commit 720f62bddb7226106071d4728c292cb1df519ceb) clang build+probe log ==
+
+== fetch (vendor/scripts/qrcodegen.sh) ==
+From https://github.com/nayuki/QR-Code-generator
+ * branch            720f62bddb7226106071d4728c292cb1df519ceb -> FETCH_HEAD
+OK: qrcodegen at 720f62bddb7226106071d4728c292cb1df519ceb
+
+== build ==
+$ clang -std=c99 -O2 -Wall -fPIC -c vendor/src/qrcodegen/c/qrcodegen.c -o vendor/build/qrcodegen-clang/qrcodegen.o
+$ ar rcs vendor/build/qrcodegen-clang/libqrcodegen.a vendor/build/qrcodegen-clang/qrcodegen.o
+(compile+archive exit 0, no diagnostics)
+
+== probe build ==
+$ clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/qrcodegen/c vendor/build/qrcodegen-clang/probe.c vendor/build/qrcodegen-clang/libqrcodegen.a -o vendor/build/qrcodegen-clang/probe
+(probe linked, exit 0)
+
+== probe run ==
+$ vendor/build/qrcodegen-clang/probe
+ok: version 1 MEDIUM encode succeeds
+ok: version 1 dimensions: 21 == 4*1+17
+ok: v1: finder top-left
+ok: v1: finder top-right
+ok: v1: finder bottom-left
+ok: v1: separators light
+ok: version 5 HIGH encode succeeds
+ok: version 5 dimensions: 37 == 4*5+17
+ok: v5: finder top-left
+ok: v5: finder top-right
+ok: v5: finder bottom-left
+ok: v5: separators light
+ok: version 5 LOW encode succeeds with size 37
+ok: ECC LOW and HIGH yield different matrices at version 5
+ok: repeated version 5 HIGH encode is deterministic
+probe_result: READY (0 failure(s))
+probe exit: 0

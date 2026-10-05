@@ -1,0 +1,31 @@
+{
+  "name": "qrcodegen",
+  "pinned_commit": "720f62bddb7226106071d4728c292cb1df519ceb",
+  "checked_out_commit": "720f62bddb7226106071d4728c292cb1df519ceb",
+  "repo": "https://github.com/nayuki/QR-Code-generator",
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/qrcodegen/c/qrcodegen.h (MIT header); repo has no standalone LICENSE at v1.8.0",
+  "fetch_script": "vendor/scripts/qrcodegen.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/qrcodegen-filc\n\"$FILC\" -std=c99 -O2 -Wall -fPIC -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c/qrcodegen.c -o qrcodegen.o\nar rcs libqrcodegen.a qrcodegen.o\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c probe.c libqrcodegen.a -o probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/qrcodegen-filc/libqrcodegen.a",
+      "size": 124116,
+      "sha256": "4bc07c8c9444d169921006735e178cf06941b5d5ed52e271904341387ad7e3a4"
+    },
+    {
+      "path": "vendor/build/qrcodegen-filc/probe",
+      "size": 133904,
+      "sha256": "027beeaa145eb9293eae58b663e36e14f686014d07c9caa492d5ec88da6d709a"
+    }
+  ],
+  "probe_command": "vendor/build/qrcodegen-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "+ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -O2 -Wall -fPIC -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c/qrcodegen.c -o qrcodegen.o\n+ ar rcs libqrcodegen.a qrcodegen.o\n+ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c probe.c libqrcodegen.a -o probe\n+ set +x\n=== probe run ===\nok: version 1 MEDIUM encode succeeds\nok: version 1 dimensions: 21 == 4*1+17\nok: v1: finder top-left\nok: v1: finder top-right\nok: v1: finder bottom-left\nok: v1: separators light\nok: version 5 HIGH encode succeeds\nok: version 5 dimensions: 37 == 4*5+17\nok: v5: finder top-left\nok: v5: finder top-right\nok: v5: finder bottom-left\nok: v5: separators light\nok: version 5 LOW encode succeeds with size 37\nok: ECC LOW and HIGH yield different matrices at version 5\nok: repeated version 5 HIGH encode is deterministic\nprobe_result: READY (0 failure(s))\n\n=== build.sh exit: 0 (set -euo pipefail; probe is its final command) ===\n=== separate probe re-run exit: 0 ===\n",
+  "failure_exact": null,
+  "probe_source_sha256": "14c5532f9031cc95d68688640719ed97baef9aefca8a0aa9cb2ffca67435df34",
+  "clang_probe_sha256": "14c5532f9031cc95d68688640719ed97baef9aefca8a0aa9cb2ffca67435df34",
+  "probe_rerun_exit": 0,
+  "notes": "Only c/qrcodegen.c compiled (upstream qrcodegen-demo/test excluded); upstream flags -std=c99 -O2 -Wall preserved for library code, application flag set for probe.c. Probe is a byte-identical copy of the clang probe (sha256 match); assertions unchanged: pinned minVersion=maxVersion, version 1 MEDIUM size 21, version 5 HIGH size 37, all three finder patterns and separators module-checked, ECC LOW vs HIGH differ at version 5, repeated encodes byte-identical. Fil-C interpreter in probe ELF: pizfix/lib/ld-fil1-x86_64.so. F00 Fil-C probe half. Compiler is the pinned Fil-C 0.685 pizfix distribution (same binary the sibling F00 Fil-C probes invoke as build/bin/filcc; that name is a symlink to build/bin/clang). No clang-built object is linked into any probe: the listed static archive and probe are built entirely with the Fil-C compiler; system ar only packs Fil-C objects. Probe source is a byte-identical copy of the clang probe (probe_source_sha256 equals clang_probe_sha256); no assertion weakened, no upstream source modified (vendor/src tree git status clean after build). Probe re-run as a separate invocation: exit 0, READY. Build and probe transcript: vendor/probes/<name>-filc.log."
+}

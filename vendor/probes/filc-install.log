@@ -1,0 +1,252 @@
+=== F00 Fil-C 0.685 install log ===
+date_utc: 2026-10-05T01:27:53Z
+host: Linux 7.1.0-0.rc7.260611g9716c086c8e8.50.fc45.x86_64 x86_64 GNU/Linux  kernel: 7.1.0-0.rc7.260611g9716c086c8e8.50.fc45.x86_64
+target install root: /home/msaraiva/.local/fil-c/0.685
+df -h /home at start:
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p3  1.8T  1.2T  512G  69% /home
+
+$ sha256sum /tmp/filc-0.685-linux-x86_64.tar.xz /tmp/optfil-0.685-linux-x86_64.tar.xz
+d12bd30c33f18179a9355b32ea44ba61dcc0342c7d77d1ac2548852e64994727  /tmp/filc-0.685-linux-x86_64.tar.xz
+f7d2d73b17ee9bfff0859ca15b3ca9c10e8501f8d891b0dfa961e81f0390e788  /tmp/optfil-0.685-linux-x86_64.tar.xz
+expected from GitHub API release v0.685:
+  filc-0.685-linux-x86_64.tar.xz   d12bd30c33f18179a9355b32ea44ba61dcc0342c7d77d1ac2548852e64994727  size 77045600
+  optfil-0.685-linux-x86_64.tar.xz f7d2d73b17ee9bfff0859ca15b3ca9c10e8501f8d891b0dfa961e81f0390e788  size 274092224
+
+$ cd /home/msaraiva/.local/fil-c/0.685
+$ tar -xJf /tmp/filc-0.685-linux-x86_64.tar.xz
+
+real	0m1.975s
+user	0m1.905s
+sys	0m0.271s
+exit_code=0
+$ tar -xJf /tmp/optfil-0.685-linux-x86_64.tar.xz
+
+real	0m0.165s
+user	0m0.040s
+sys	0m0.177s
+exit_code=0
+$ ls -la /home/msaraiva/.local/fil-c/0.685
+total 0
+drwxr-xr-x 1 msaraiva msaraiva  96 Oct  4 21:27 .
+drwxr-xr-x 1 msaraiva msaraiva  10 Oct  4 21:26 ..
+drwxr-xr-x 1 msaraiva msaraiva 150 Sep 15 21:43 filc-0.685-linux-x86_64
+drwxr-xr-x 1 msaraiva msaraiva 180 Sep 15 12:27 optfil-0.685-linux-x86_64
+
+=== pizfix setup.sh ===
+$ cd /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64
+$ ./setup.sh
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib/libc.so
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib/libpizlo.so
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib/libc++.so.1.0
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib/libc++abi.so.1.0
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/bin/minilute
++ patchelf --set-interpreter /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib/ld-fil1-x86_64.so pizfix/bin/minilute
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib_test/libpizlo.so
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib_test_gcverify/libpizlo.so
++ patchelf --set-rpath /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib64:/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/lib pizfix/lib_gcverify/libpizlo.so
++ test -f pizfix/bin/sarcasm
++ sed -i '1s|.*|#!/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/pizfix/bin/minilute|' pizfix/bin/sarcasm
++ cd pizfix
++ mkdir os-include
++ cd os-include
++ ln -s /usr/include/linux .
++ test -d /usr/include/x86_64-linux-gnu/asm
++ ln -s /usr/include/asm .
++ ln -s /usr/include/asm-generic .
++ cd ../..
++ set +x
+
+You are all set. Try compiling something with:
+
+    build/bin/clang -o whatever whatever.c -O2 -g
+
+or:
+
+    build/bin/clang++ -o whatever whatever.cpp -O2 -g
+
+Take a look at pizfix/stdfil-include/stdfil.h for Fil-C-specific APIs. You can
+optionally #include <stdfil.h> if you find those APIs useful.
+
+New releases are at: https://github.com/pizlonator/fil-c/releases
+More information on the website: https://fil-c.org/
+
+Have fun and thank you for trying filc-0.685-linux-x86_64.
+exit_code=0
+
+=== /opt/fil payload extraction (setup.sh extracts fil.tar.xz to /opt; we extract to the recorded local path) ===
+$ mkdir -p /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt
+$ cd /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt
+$ tar -xJf ../fil.tar.xz
+
+real	0m7.561s
+user	0m7.148s
+sys	0m1.337s
+exit_code=0
+total 0
+drwxr-xr-x 1 msaraiva msaraiva    76 Sep 15 12:18 .
+drwxr-xr-x 1 msaraiva msaraiva     6 Oct  4 21:28 ..
+drwxr-xr-x 1 msaraiva msaraiva  4572 Sep 15 12:18 bin
+drwxr-xr-x 1 msaraiva msaraiva    80 Sep 15 12:00 etc
+drwxr-xr-x 1 msaraiva msaraiva  4344 Sep 15 12:17 include
+drwxr-xr-x 1 msaraiva msaraiva 10002 Sep 15 12:18 lib
+drwxr-xr-x 1 msaraiva msaraiva   306 Sep 15 12:18 libexec
+drwxr-xr-x 1 msaraiva msaraiva     8 Sep 15 11:41 man
+drwxr-xr-x 1 msaraiva msaraiva  1750 Sep 15 12:18 sbin
+drwxr-xr-x 1 msaraiva msaraiva   310 Sep 15 12:17 share
+drwxr-xr-x 1 msaraiva msaraiva    18 Sep 15 11:53 var
+
+=== optfil deployment: /opt/fil symlink ===
+optfil binaries hardcode interpreter /opt/fil/lib/ld-fil1-x86_64.so (readelf -l);
+the shipped setup.sh requires root and extracts to /opt/fil. Physical tree kept at the
+recorded local path; /opt/fil points at it so the unmodified shipped binaries run.
+$ sudo ln -s /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil /opt/fil
+exit_code=0
+lrwxrwxrwx 1 root root 67 Oct  4 21:28 /opt/fil -> /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil
+
+=== pizfix compiler version ===
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang --version
+clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin
+Build config: +assertions
+exit_code=0
+
+=== optfil compiler version ===
+$ /opt/fil/bin/filcc --version
+clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/fil-c.git bb0d0a64eed297ab8e171002033208fb08ad9941)
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin
+Build config: +assertions
+exit_code=0
+
+=== hello world: pizfix (filc) ===
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -O2 -g -o hello-pizfix hello.c
+compile_exit=0
+$ ./hello-pizfix
+Hello from Fil-C!
+run_exit=0
+
+=== hello world: optfil ===
+$ /opt/fil/bin/filcc -O2 -g -o hello-optfil hello.c
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/Scrt1.o: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/crti.o: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/crtbegin.o: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/filc_crt.o: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lc: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lpizlo: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lyolort: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lyoloc: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lyolom: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lyolort: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find -lyolounwind: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/crtend.o: No such file or directory
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil/bin/ld: cannot find /usr/lib/crtn.o: No such file or directory
+filcc: error: linker command failed with exit code 1 (use -v to see invocation)
+compile_exit=1
+$ ./hello-optfil
+/bin/bash: line 29: ./hello-optfil: No such file or directory
+run_exit=127
+
+=== ELF details of produced binaries (filc is dynamic against the pizfix slice) ===
+--- hello-pizfix
+hello-pizfix: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib/ld-fil1-x86_64.so, with debug_info, not stripped
+      [Requesting program interpreter: /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib/ld-fil1-x86_64.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libpizlo.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libyoloc.so]
+ 0x000000000000001d (RUNPATH)            Library runpath: [/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib]
+--- hello-optfil
+hello-optfil: cannot open `hello-optfil' (No such file or directory)
+readelf: Error: 'hello-optfil': No such file
+readelf: Error: 'hello-optfil': No such file
+
+=== optfil invocation through bind mount /opt/fil ===
+$ bind mount: /dev/nvme0n1p3[/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil] btrfs
+$ /opt/fil/bin/filcc -v -O2 -g -o hello-optfil hello.c   (ld line)
+ "/opt/fil/bin/ld" --hash-style=gnu --eh-frame-hdr -m elf_x86_64 -nostdlib -pie -dynamic-linker /opt/fil/lib/ld-fil1-x86_64.so -o hello-optfil /opt/fil/lib/Scrt1.o /opt/fil/lib/crti.o /opt/fil/lib/crtbegin.o -L/opt/fil/lib -rpath-link /opt/fil/lib /opt/fil/lib/filc_crt.o /tmp/hello-f959e7.o -lc -lpizlo -lyolort -lyoloc -lyolom -lyolort -lyolounwind /opt/fil/lib/crtend.o /opt/fil/lib/crtn.o
+$ ./hello-optfil
+Hello from Fil-C!
+run_exit=0
+
+=== ELF details ===
+--- hello-pizfix
+hello-pizfix: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib/ld-fil1-x86_
+      [Requesting program interpreter: /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib/ld-fil1-x86_64.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libpizlo.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libyoloc.so]
+ 0x000000000000001d (RUNPATH)            Library runpath: [/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib]
+--- hello-optfil
+hello-optfil: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /opt/fil/lib/ld-fil1-x86_64.so, for GNU/Linux 3.2.0, with debug_info, not stripped
+      [Requesting program interpreter: /opt/fil/lib/ld-fil1-x86_64.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6666]
+ 0x0000000000000001 (NEEDED)             Shared library: [libpizlo.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libyolocimpl.so]
+ 0x0000000000000001 (NEEDED)             Shared library: [libyolomimpl.so]
+
+=== application flag recipe: -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread ===
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -O2 -g -o hello-pizfix-flags hello.c
+compile_exit=0
+Hello from Fil-C!
+run_exit=0
+$ /opt/fil/bin/filcc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -O2 -g -o hello-optfil-flags hello.c
+compile_exit=0
+Hello from Fil-C!
+run_exit=0
+
+=== environment variables referenced by the driver (strings) ===
+
+=== disk usage after install ===
+388M	/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64
+1.8G	/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p3  1.8T  1.2T  510G  69% /home
+
+=== optfil deployment fix: bind mount replaces the symlink ===
+Why: filcc-clang-20 resolves its own executable path and requires it to be under the
+literal prefix /opt/fil. With /opt/fil as a symlink, /proc/self/exe resolves to the
+/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil path, the prefix check fails, and the driver falls back to system
+paths (/usr/include, /usr/lib, /lib/ld-fil1-x86_64.so) and fails to link:
+  filcc -v shows: -dynamic-linker /lib/ld-fil1-x86_64.so ... /usr/lib/Scrt1.o ... -L/usr/lib
+  error: cannot find /usr/lib/Scrt1.o, filc_crt.o, -lc, -lpizlo, -lyolort, ...
+With a bind mount, /proc/self/exe stays /opt/fil/bin/filcc-clang-20 and the driver uses
+/opt/fil/lib correctly. Physical files remain at the recorded local path.
+
+$ sudo rm /opt/fil            # remove the intermediate symlink we created
+$ sudo mkdir /opt/fil
+$ sudo mount --bind /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil /opt/fil
+rm: cannot remove '/opt/fil': Is a directory
+exit_code=0
+$ findmnt -no SOURCE,FSTYPE /opt/fil
+/dev/nvme0n1p3[/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil] btrfs
+/dev/nvme0n1p3[/home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil] btrfs
+$ /opt/fil/bin/filcc -v -O2 -g -o hello-optfil hello.c   # ld line now:
+ "/opt/fil/bin/ld" --hash-style=gnu --eh-frame-hdr -m elf_x86_64 -nostdlib -pie -dynamic-linker /opt/fil/lib/ld-fil1-x86_64.so -o hello-optfil /opt/fil/lib/Scrt1.o /opt/fil/lib/crti.o /opt/fil/lib/crtbegin.o -L/opt/fil/lib -rpath-link /opt/fil/lib /opt/fil/lib/filc_crt.o /tmp/hello-19fe41.o -lc -lpizlo -lyolort -lyoloc -lyolom -lyolort -lyolounwind /opt/fil/lib/crtend.o /opt/fil/lib/crtn.o
+$ ./hello-optfil
+Hello from Fil-C!
+run_exit=0
+
+=== pizfix wrapper names ===
+total 148808
+drwxr-xr-x 1 msaraiva msaraiva        72 Sep 15 21:43 .
+drwxr-xr-x 1 msaraiva msaraiva        26 Sep 15 21:43 ..
+lrwxrwxrwx 1 msaraiva msaraiva         8 Sep 15 21:43 clang -> clang-20
+lrwxrwxrwx 1 msaraiva msaraiva         8 Sep 15 21:43 clang++ -> clang-20
+-rwxr-xr-x 1 msaraiva msaraiva 152355536 Sep 15 21:43 clang-20
+lrwxrwxrwx 1 msaraiva msaraiva         8 Sep 15 21:43 fil++ -> clang-20
+lrwxrwxrwx 1 msaraiva msaraiva         8 Sep 15 21:43 filcc -> clang-20
+lrwxrwxrwx 1 msaraiva msaraiva         8 Sep 15 21:43 filcpp -> clang-20
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc --version
+clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)
+exit_code=0
+
+=== SUMMARY ===
+pizfix compiler: /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang (symlinks clang++, filcc, fil++, filcpp -> clang-20)
+optfil compiler: /opt/fil/bin/filcc (fil++ -> filcc-clang-20)
+pizfix hello: compile=0 run=0 output='Hello from Fil-C!'
+optfil hello: compile=0 run=0 output='Hello from Fil-C!'
+app flag recipe (-std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -O2 -g): both compile=0 run=0
+NOTE: /opt/fil is a runtime bind mount; it does not survive reboot. vendor/scripts/filc.sh re-establishes it.

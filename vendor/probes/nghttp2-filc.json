@@ -1,0 +1,31 @@
+{
+  "name": "nghttp2",
+  "pinned_commit": "85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2",
+  "checked_out_commit": "85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2",
+  "repo": "https://github.com/nghttp2/nghttp2",
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/nghttp2/COPYING",
+  "fetch_script": "vendor/scripts/nghttp2.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncmake -S /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/nghttp2 -B /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc -DCMAKE_C_COMPILER=\"$FILC\" -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF\ncmake --build /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc -j$(nproc)\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/nghttp2/lib/includes -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/includes /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe.c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/libnghttp2.a -o /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/nghttp2-filc/lib/libnghttp2.a",
+      "size": 1726472,
+      "sha256": "49453c7d7a15b75ae15edfc8b8303190047eddf1a4471a729aa30b79fa2c1746"
+    },
+    {
+      "path": "vendor/build/nghttp2-filc/probe",
+      "size": 1170456,
+      "sha256": "4b0ecfb720ea62d7cae4d14a2fa2db17c0282e8cf67554f2abb9e66f3d264494"
+    }
+  ],
+  "probe_command": "vendor/build/nghttp2-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "[ 65%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_callbacks.c.o\n[ 70%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_time.c.o\n[ 75%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_ratelim.c.o\n[ 75%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_extpri.c.o\n[ 80%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_mem.c.o\n[ 85%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_http.c.o\n[ 90%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_rcbuf.c.o\n[ 95%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_debug.c.o\n[100%] Building C object lib/CMakeFiles/nghttp2_static.dir/sfparse.c.o\n[100%] Linking C static library libnghttp2.a\n[100%] Built target nghttp2_static\n+ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/nghttp2/lib/includes -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/includes /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe.c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/libnghttp2.a -o /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe\n+ set +x\n=== probe run ===\nok: nghttp2_version() returns info\nok: version_str is 1.70.0\nok: version_num is 0x014600 (1.70.0)\nok: session callbacks allocated\nok: client session created\nok: HPACK deflater initialized\nok: HPACK inflater initialized\nok: HPACK deflate produces a block\nok: HPACK round-trip is :method: GET\nok: HPACK inflate consumes the block\nok: HPACK inflate emits the header\nok: HPACK inflate reports FINAL\nprobe_result: READY (0 failure(s))\n\n=== build.sh exit: 0 (set -euo pipefail; probe is its final command) ===\n=== separate probe re-run exit: 0 ===\n",
+  "failure_exact": null,
+  "probe_source_sha256": "32c145b244efc408e0303a4d1f7634a1d80845caf4dc1466a9d280f428a0481a",
+  "clang_probe_sha256": "32c145b244efc408e0303a4d1f7634a1d80845caf4dc1466a9d280f428a0481a",
+  "probe_rerun_exit": 0,
+  "notes": "Upstream CMake build, library only: CMake identified the Fil-C clang driver (CMAKE_C_COMPILER=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang) and configured/built the static lib; ENABLE_LIB_ONLY=ON disables apps/examples/HPACK tools, BUILD_STATIC_LIBS=ON, BUILD_SHARED_LIBS=OFF, BUILD_TESTING=OFF, ENABLE_WERROR=OFF. Probe is a byte-identical copy of the clang probe (sha256 match); assertions unchanged: nghttp2_version() '1.70.0'/0x014600, client session create/destroy through the callbacks API, HPACK deflater/inflater round-trip of ':method: GET' with the documented drain loop to NGHTTP2_HD_INFLATE_FINAL. Fil-C interpreter in probe ELF: pizfix/lib/ld-fil1-x86_64.so. F00 Fil-C probe half. Compiler is the pinned Fil-C 0.685 pizfix distribution (same binary the sibling F00 Fil-C probes invoke as build/bin/filcc; that name is a symlink to build/bin/clang). No clang-built object is linked into any probe: the listed static archive and probe are built entirely with the Fil-C compiler; system ar only packs Fil-C objects. Probe source is a byte-identical copy of the clang probe (probe_source_sha256 equals clang_probe_sha256); no assertion weakened, no upstream source modified (vendor/src tree git status clean after build). Probe re-run as a separate invocation: exit 0, READY. Build and probe transcript: vendor/probes/<name>-filc.log."
+}

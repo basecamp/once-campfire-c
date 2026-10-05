@@ -1,0 +1,22 @@
+== yyjson Fil-C probe ==
+compiler: clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)
+$ filcc -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -c vendor/src/yyjson/src/yyjson.c -o vendor/build/yyjson-filc/yyjson.o
+$ ar rcs vendor/build/yyjson-filc/libyyjson.a vendor/build/yyjson-filc/yyjson.o
+$ filcc -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/yyjson-filc/probe.c -I vendor/src/yyjson/src vendor/build/yyjson-filc/libyyjson.a -o vendor/build/yyjson-filc/probe
+build_rc=0
+$ vendor/build/yyjson-filc/probe
+parsed object iteration order:
+  [0] zeta type=uint
+  [1] alpha type=uint
+  [2] middle type=array
+  [3] beta type=object
+iteration count=4 expect=4
+invalid_utf8 parse -> REJECTED code=10 msg="invalid UTF-8 encoding in string" pos=7
+NaN literal parse -> REJECTED code=6 msg="unexpected character, expected a JSON value"
+Infinity literal parse -> REJECTED code=6 msg="unexpected character, expected a JSON value"
+1e999 overflow literal parse -> REJECTED code=9 msg="number is infinity when parsed as double"
+writer_output={"b":7,"a":"x\"y","arr":[true,null,3.5]}
+writer_expected={"b":7,"a":"x\"y","arr":[true,null,3.5]}
+writer_NaN -> (null) code=4 msg="nan or inf number is not allowed"
+probe_result=PASS
+probe exit=0

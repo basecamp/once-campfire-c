@@ -1,0 +1,33 @@
+{
+  "name": "sqlite",
+  "repo": "https://sqlite.org",
+  "pinned_commit": "n/a (source archive sqlite-amalgamation-3530400.zip, version 3.53.4)",
+  "checked_out_commit": "n/a (amalgamation archive)",
+  "archive_sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+  "archive_url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+  "license": "Public domain (SPDX: blessing); header blessing 'The author disclaims copyright to this source code... May you do good and not evil'",
+  "license_file": "no LICENSE file inside sqlite-amalgamation-3530400.zip; public-domain dedication in vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.h lines 4-8",
+  "fetch_script": "vendor/scripts/sqlite.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc symlink to build/bin/clang-20)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread -c vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c -o vendor/build/sqlite-filc/sqlite3.o\nar rcs vendor/build/sqlite-filc/libsqlite3.a vendor/build/sqlite-filc/sqlite3.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/sqlite-filc/probe.c -I vendor/src/sqlite/sqlite-amalgamation-3530400 vendor/build/sqlite-filc/libsqlite3.a -lm -o vendor/build/sqlite-filc/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/sqlite-filc/libsqlite3.a",
+      "size": 14157102,
+      "sha256": "7b8092d181f30f27748c1989efaf977730b6225d0293eb2a3ebec9daa7d629ab"
+    },
+    {
+      "path": "vendor/build/sqlite-filc/probe",
+      "size": 10392464,
+      "sha256": "41a3ac63badeb08e6b16924d7c96c1318ef52370c0c0b61ca7243393e61b63d5"
+    }
+  ],
+  "probe_command": "vendor/build/sqlite-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "compile_options count=38\ncompile option ENABLE_FTS5 present=1 (expect 1)\ncompile option THREADSAFE=1 present=1 (expect 1)\nPRAGMA journal_mode=WAL -> wal (expect wal)\nPRAGMA foreign_keys -> 1 (expect 1)\nPRAGMA user_version -> 42 (expect 42)\nFTS5 create+insert ok=1\nFTS5 MATCH 'campfire' -> rowid=1 body=hello campfire\nsqlite3_busy_timeout(1000) then PRAGMA busy_timeout -> 1000 (expect 1000)\nprobe_result=PASS\nprobe exit=0\n",
+  "failure_exact": null,
+  "probe_source_sha256": "9298f8a6101a37dbc46974e0c9bdcf204091f3b1493d799743fa3fef709e016c",
+  "clang_probe_sha256": "9298f8a6101a37dbc46974e0c9bdcf204091f3b1493d799743fa3fef709e016c",
+  "probe_rerun_exit": 0,
+  "notes": "Vendored 3.53.4 amalgamation built entirely with the pinned Fil-C 0.685 pizfix compiler (no clang-built object linked): upstream build flags preserved exactly (-O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread), probe linked the same way as the clang half including -lm for FTS5's log(). Probe source is a byte-identical copy of the clang probe (sha256 match); no assertion weakened. Observed behavior identical to the clang half: sqlite3_libversion()=3.53.4, 38 PRAGMA compile_options including ENABLE_FTS5 and THREADSAFE=1, journal_mode WAL activated on a temp file, foreign_keys=1, user_version 42 round trip, FTS5 CREATE+INSERT+MATCH returns the inserted row, busy_timeout 1000 read back. The Fil-C build also exercises SQLite's pointer-tagging/alignment code paths under Fil-C's memory-safety checks without panics. Fil-C compile of sqlite3.c took ~1m46s. Probe ELF interpreter: pizfix/lib/ld-fil1-x86_64.so. Transcript: vendor/probes/sqlite-filc.log."
+}

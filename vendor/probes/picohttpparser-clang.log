@@ -1,0 +1,16 @@
+== fetch state ==
+465a7ff09fbd3432fe56c673451f5460154d1f07
+== build ==
+clang --version: Homebrew clang version 23.1.2
++ clang -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c
++ clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread probe.c -I ... libpicohttpparser.a -o probe
+== probe ==
+valid_request ret=63 input_len=63
+  consumed=63 method="GET" path="/hello?x=1" minor_version=1 num_headers=2
+  header[0] name_len=4 name="Host" value_len=11 value="example.com"
+  header[1] name_len=6 name="X-Test" value_len=7 value="abc def"
+incomplete_request(10 bytes) ret=-2 (observed)
+malformed_request(no HTTP version) ret=-1 (observed)
+control_char_header ret=-1 (observed, informational)
+probe_result=PASS
+probe exit=0

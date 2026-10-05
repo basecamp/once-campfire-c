@@ -1,0 +1,74 @@
+== F00 gumbo (Nokogiri v1.19.4 gumbo-parser subtree, commit 8cfb9daae9ee4a0837508eab43c40fbc8c4138c9) clang build+probe log ==
+
+== fetch (vendor/scripts/gumbo.sh; sparse checkout gumbo-parser/ only) ==
+From https://github.com/sparklemotion/nokogiri
+ * branch            8cfb9daae9ee4a0837508eab43c40fbc8c4138c9 -> FETCH_HEAD
+OK: gumbo at 8cfb9daae9ee4a0837508eab43c40fbc8c4138c9 (sparse checkout: gumbo-parser/ only)
+
+kept paths:
+vendor/src/gumbo/gumbo-parser
+vendor/src/gumbo/gumbo-parser/CHANGES.md
+vendor/src/gumbo/gumbo-parser/fuzzer
+vendor/src/gumbo/gumbo-parser/gperf-filter.sed
+vendor/src/gumbo/gumbo-parser/Makefile
+vendor/src/gumbo/gumbo-parser/src
+vendor/src/gumbo/gumbo-parser/test
+vendor/src/gumbo/gumbo-parser/THANKS
+
+== build ==
+$ clang -std=c99 -Wall -O2 -fPIC -Isrc -c <each of the 17 upstream src/*.c> ; ar rcs libgumbo.a obj/*.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/ascii.c -o vendor/build/gumbo-clang/obj/ascii.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/attribute.c -o vendor/build/gumbo-clang/obj/attribute.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/char_ref.c -o vendor/build/gumbo-clang/obj/char_ref.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/error.c -o vendor/build/gumbo-clang/obj/error.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/foreign_attrs.c -o vendor/build/gumbo-clang/obj/foreign_attrs.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/parser.c -o vendor/build/gumbo-clang/obj/parser.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/string_buffer.c -o vendor/build/gumbo-clang/obj/string_buffer.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/string_piece.c -o vendor/build/gumbo-clang/obj/string_piece.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/svg_attrs.c -o vendor/build/gumbo-clang/obj/svg_attrs.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/svg_tags.c -o vendor/build/gumbo-clang/obj/svg_tags.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/tag.c -o vendor/build/gumbo-clang/obj/tag.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/tag_lookup.c -o vendor/build/gumbo-clang/obj/tag_lookup.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/token_buffer.c -o vendor/build/gumbo-clang/obj/token_buffer.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/tokenizer.c -o vendor/build/gumbo-clang/obj/tokenizer.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/utf8.c -o vendor/build/gumbo-clang/obj/utf8.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/util.c -o vendor/build/gumbo-clang/obj/util.o
+  clang -std=c99 -Wall -O2 -fPIC -Ivendor/src/gumbo/gumbo-parser/src -c vendor/src/gumbo/gumbo-parser/src/vector.c -o vendor/build/gumbo-clang/obj/vector.o
+  ar rcs vendor/build/gumbo-clang/libgumbo.a vendor/build/gumbo-clang/obj/*.o
+(compile+archive exit 0, no diagnostics)
+
+== probe build ==
+$ clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/gumbo/gumbo-parser/src vendor/build/gumbo-clang/probe.c vendor/build/gumbo-clang/libgumbo.a -o vendor/build/gumbo-clang/probe
+(probe linked, exit 0)
+
+== probe run ==
+$ vendor/build/gumbo-clang/probe
+ok: doc1: gumbo_parse returns output
+ok: doc1: parse status OK
+ok: doc1: no document error
+ok: doc1: root element is <html>
+ok: doc1: html has 2 children
+ok: doc1: first child is <head>
+ok: doc1: second child is <body>
+ok: doc1: head > title > "Hi"
+ok: doc1: body first child is <p>
+ok: doc1: p has 2 attributes
+ok: doc1: p attribute class="a"
+ok: doc1: p attribute id="b"
+ok: doc1: p has 3 children
+ok: doc1: p text "Hi "
+ok: doc1: p child <b>
+ok: doc1: b > "world"
+ok: doc1: p trailing text "!"
+ok: doc1 serialization -> <html><head><title>Hi</title></head><body><p class="a" id="b">Hi <b>world</b>!</p></body></html>
+ok: doc2: gumbo_parse returns output
+ok: doc2: parse status OK
+ok: doc2: document has <!DOCTYPE html>
+ok: doc2: implied <body>
+ok: doc2: body > table
+ok: doc2: implied <tbody> inserted by HTML5 tree building
+ok: doc2: tbody > tr > td
+ok: doc2: td > "cell"
+ok: doc2 serialization -> <html><head></head><body><table><tbody><tr><td>cell</td></tr></tbody></table></body></html>
+probe_result: READY (0 failure(s))
+probe exit: 0

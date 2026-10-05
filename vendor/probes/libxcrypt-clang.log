@@ -1,0 +1,298 @@
+== F00 libxcrypt v4.5.2 (commit db70b42bd7b2a5b00a8580c8dec0aa66791c950a) clang build+probe log ==
+
+== fetch (vendor/scripts/libxcrypt.sh) ==
+From https://github.com/besser82/libxcrypt
+ * branch            db70b42bd7b2a5b00a8580c8dec0aa66791c950a -> FETCH_HEAD
+OK: libxcrypt at db70b42bd7b2a5b00a8580c8dec0aa66791c950a
+
+== bootstrap (./autogen.sh) ==
+autogen: running: git clean -dfX
+autogen: running: autoreconf -fiv -Wall,error
+autoreconf: export WARNINGS=all,error
+autoreconf: Entering directory '.'
+autoreconf: configure.ac: no obvious need to run autopoint
+autoreconf: running: aclocal --force -I build-aux/m4
+autoreconf: configure.ac: tracing
+autoreconf: running: libtoolize --copy --force
+libtoolize: putting auxiliary files in AC_CONFIG_AUX_DIR, 'build-aux/m4-autogen'.
+libtoolize: copying file 'build-aux/m4-autogen/ltmain.sh'
+libtoolize: putting macros in AC_CONFIG_MACRO_DIRS, 'build-aux/m4'.
+libtoolize: copying file 'build-aux/m4/libtool.m4'
+libtoolize: copying file 'build-aux/m4/ltoptions.m4'
+libtoolize: copying file 'build-aux/m4/ltsugar.m4'
+libtoolize: copying file 'build-aux/m4/ltversion.m4'
+libtoolize: copying file 'build-aux/m4/lt~obsolete.m4'
+autoreconf: configure.ac: not using Intltool
+autoreconf: configure.ac: not using Gtkdoc
+autoreconf: configure.ac: no need to run autopoint (confirmed)
+autoreconf: running: aclocal --force -I build-aux/m4
+autoreconf: running: /usr/bin/autoconf --force
+autoreconf: running: /usr/bin/autoheader --force
+autoreconf: running: automake --add-missing --copy --force-missing
+configure.ac:34: installing 'build-aux/m4-autogen/compile'
+configure.ac:33: installing 'build-aux/m4-autogen/config.guess'
+configure.ac:33: installing 'build-aux/m4-autogen/config.sub'
+configure.ac:16: installing 'build-aux/m4-autogen/install-sh'
+configure.ac:16: installing 'build-aux/m4-autogen/missing'
+Makefile.am: installing './INSTALL'
+Makefile.am: installing 'build-aux/m4-autogen/depcomp'
+parallel-tests: installing 'build-aux/m4-autogen/test-driver'
+autoreconf: configure.ac: not running make: --make not given
+autoreconf: Leaving directory '.'
+
+== configure ==
+note: first configure used upstream default -Werror; clang 23 rejects two optional non-bcrypt hash files (crypt-sm3-yescrypt.c, crypt-gost-yescrypt.c) with -Wincompatible-pointer-types-discards-qualifiers, so the final recipe uses upstream's documented --disable-werror (no sources patched, no flags added).
+$ CC=clang ../../src/libxcrypt/configure --disable-shared --enable-static --disable-werror --prefix=$PWD/prefix
+checking for a BSD-compatible install... /usr/bin/install -c
+checking whether sleep supports fractional seconds... yes
+checking filesystem timestamp resolution... 0.01
+checking whether build environment is sane... yes
+checking for a race-free mkdir -p... /usr/bin/mkdir -p
+checking for gawk... gawk
+checking whether make sets $(MAKE)... yes
+checking whether make supports nested variables... yes
+checking xargs -n works... yes
+checking for pkg-config... /usr/bin/pkg-config
+checking pkg-config is at least version 0.27... yes
+checking build system type... x86_64-pc-linux-gnu
+checking host system type... x86_64-pc-linux-gnu
+checking for gcc... clang
+checking whether the C compiler works... yes
+checking for C compiler default output file name... a.out
+checking for suffix of executables... 
+checking whether we are cross compiling... no
+checking for suffix of object files... o
+checking whether the compiler supports GNU C... yes
+checking whether clang accepts -g... yes
+checking for clang option to enable C23 features... -std=gnu23
+checking whether clang -std=gnu23 understands -c and -o together... yes
+checking whether make supports the include directive... yes (GNU style)
+checking dependency style of clang -std=gnu23... gcc3
+checking how to run the C preprocessor... clang -std=gnu23 -E
+checking whether make sets $(MAKE)... (cached) yes
+checking whether ln -s works... yes
+checking for perl... /usr/bin/perl
+checking whether /usr/bin/perl is version 5.14.0 or later... yes
+checking for gpg2... /usr/bin/gpg2
+checking for sha256sum... /usr/bin/sha256sum
+checking for stdio.h... yes
+checking for stdlib.h... yes
+checking for string.h... yes
+checking for inttypes.h... yes
+checking for stdint.h... yes
+checking for strings.h... yes
+checking for sys/stat.h... yes
+checking for sys/types.h... yes
+checking for unistd.h... yes
+checking for wchar.h... yes
+checking for minix/config.h... no
+checking for fcntl.h... yes
+checking for stdbool.h... yes
+checking for ucontext.h... yes
+checking for sys/cdefs.h... yes
+checking for sys/random.h... yes
+checking for sys/syscall.h... yes
+checking for valgrind/valgrind.h... no
+checking for endian.h... yes
+checking for sys/endian.h... no
+checking for sys/param.h... yes
+checking whether it is safe to define __EXTENSIONS__... yes
+checking whether _XOPEN_SOURCE should be defined... no
+checking for clang -std=gnu23 option to support large files... none needed
+checking whether C compiler accepts -Werror=unknown-warning-option... yes
+checking whether C compiler accepts -Wall... yes
+checking whether C compiler accepts -Wextra... yes
+checking whether C compiler accepts -Walloc-zero... no
+checking whether C compiler accepts -Walloca... yes
+checking whether C compiler accepts -Wbad-function-cast... yes
+checking whether C compiler accepts -Wcast-align... yes
+checking whether C compiler accepts -Wcast-qual... yes
+checking whether C compiler accepts -Wconversion... yes
+checking whether C compiler accepts -Wformat=2... yes
+checking whether C compiler accepts -Wformat-overflow=2... no
+checking whether C compiler accepts -Wformat-signedness... yes
+checking whether C compiler accepts -Wformat-truncation=1... no
+checking whether C compiler accepts -Wlogical-op... no
+checking whether C compiler accepts -Wmissing-declarations... yes
+checking whether C compiler accepts -Wmissing-prototypes... yes
+checking whether C compiler accepts -Wnested-externs... yes
+checking whether C compiler accepts -Wnull-dereference... yes
+checking whether C compiler accepts -Wold-style-definition... yes
+checking whether C compiler accepts -Wpointer-arith... yes
+checking whether C compiler accepts -Wrestrict... no
+checking whether C compiler accepts -Wshadow... yes
+checking whether C compiler accepts -Wstrict-overflow=2... yes
+checking whether C compiler accepts -Wstrict-prototypes... yes
+checking whether C compiler accepts -Wundef... yes
+checking whether C compiler accepts -Wvla... yes
+checking whether C compiler accepts -Wwrite-strings... yes
+checking how to print strings... printf
+checking for a sed that does not truncate output... /usr/bin/sed
+checking for grep that handles long lines and -e... /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+checking for fgrep... /usr/bin/grep -F
+checking for ld used by clang -std=gnu23... /usr/bin/ld
+checking if the linker (/usr/bin/ld) is GNU ld... yes
+checking for BSD- or MS-compatible name lister (nm)... /usr/bin/nm -B
+checking the name lister (/usr/bin/nm -B) interface... BSD nm
+checking the maximum length of command line arguments... 1572864
+checking how to convert x86_64-pc-linux-gnu file names to x86_64-pc-linux-gnu format... func_convert_file_noop
+checking how to convert x86_64-pc-linux-gnu file names to toolchain format... func_convert_file_noop
+checking for /usr/bin/ld option to reload object files... -r
+checking for file... file
+checking for objdump... objdump
+checking how to recognize dependent libraries... pass_all
+checking for dlltool... no
+checking how to associate runtime and link libraries... printf %s\n
+checking for ranlib... ranlib
+checking for ar... ar
+checking for archiver @FILE support... @
+checking for strip... strip
+checking command to parse /usr/bin/nm -B output from clang -std=gnu23 object... ok
+checking for sysroot... no
+checking for a working dd... /usr/bin/dd
+checking how to truncate binary pipes... /usr/bin/dd bs=4096 count=1
+checking for mt... no
+checking if : is a manifest tool... no
+checking for dlfcn.h... yes
+checking which variant of shared library versioning to provide... (default) aix
+checking for objdir... .libs
+checking if clang -std=gnu23 supports -fno-rtti -fno-exceptions... yes
+checking for clang -std=gnu23 option to produce PIC... -fPIC -DPIC
+checking if clang -std=gnu23 PIC flag -fPIC -DPIC works... yes
+checking if clang -std=gnu23 static flag -static works... no
+checking if clang -std=gnu23 supports -c -o file.o... yes
+checking if clang -std=gnu23 supports -c -o file.o... (cached) yes
+checking whether the clang -std=gnu23 linker (/usr/bin/ld -m elf_x86_64) supports shared libraries... yes
+checking dynamic linker characteristics... GNU/Linux ld.so
+checking how to hardcode library paths into programs... immediate
+checking whether stripping libraries is possible... yes
+checking if libtool supports shared libraries... yes
+checking whether to build shared libraries... no
+checking whether to build static libraries... yes
+checking for _ prefix in compiled symbols... no
+checking whether the preprocessor (clang -std=gnu23 -E) supports -dD... yes
+checking whether we are compiling with ASan... no
+checking whether sys/cdefs.h defines __BEGIN_DECLS and __END_DECLS... yes
+checking whether sys/cdefs.h defines __THROW... yes
+checking how to control data alignment... __attribute__
+checking how to query data alignment... __alignof__
+checking for max_align_t in stddef.h... yes
+checking for byte order macros... BYTE_ORDER and xxx_ENDIAN
+checking for static_assert in assert.h... yes
+checking for ld --wrap... yes
+checking linker version script flag... --version-script
+checking if version scripts can use complex wildcards... yes
+checking for __attribute__((symver))... no
+checking how to make linking fail when undefined symbols remain... -Wl,-z,defs
+checking how to make linking fail when there are text relocations... -Wl,-z,text
+checking how to link with read-only relocations... -Wl,-z,relro
+checking how to link with immediate binding... -Wl,-z,now
+checking whether C compiler accepts -fno-plt... yes
+checking for arc4random_buf... yes
+checking for explicit_bzero... yes
+checking for explicit_memset... no
+checking for getentropy... yes
+checking for getrandom... yes
+checking for memset_explicit... yes
+checking for memset_s... no
+checking for open64... yes
+checking for syscall... yes
+checking for valgrind... /usr/bin/valgrind
+checking for Valgrind tool memcheck... yes
+checking for Python 3.>=6 with Passlib... not found
+configure: Disabling the "regen-ka-table" target, missing Python requirements.
+checking whether all ucontext.h functions are available... yes
+checking that generated files are newer than configure... done
+configure: creating ./config.status
+config.status: creating Makefile
+config.status: creating libxcrypt.pc
+config.status: creating config.h
+config.status: config.h is unchanged
+config.status: executing depfiles commands
+config.status: executing libtool commands
+
+== build ==
+$ make -j$(nproc)
+make  all-am
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/libxcrypt-clang'
+/bin/sh ./libtool  --tag=CC   --mode=link clang -std=gnu23 -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -Wl,-z,relro -Wl,-z,now  -o lib/gen-des-tables lib/gen-des-tables.o  
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-gost-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-gost-yescrypt.Tpo -c -o lib/libcrypt_la-crypt-gost-yescrypt.lo `test -f 'lib/crypt-gost-yescrypt.c' || echo '../../src/libxcrypt/'`lib/crypt-gost-yescrypt.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sm3-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sm3-yescrypt.Tpo -c -o lib/libcrypt_la-crypt-sm3-yescrypt.lo `test -f 'lib/crypt-sm3-yescrypt.c' || echo '../../src/libxcrypt/'`lib/crypt-sm3-yescrypt.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sha256.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sha256.Tpo -c -o lib/libcrypt_la-crypt-sha256.lo `test -f 'lib/crypt-sha256.c' || echo '../../src/libxcrypt/'`lib/crypt-sha256.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sha512.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sha512.Tpo -c -o lib/libcrypt_la-crypt-sha512.lo `test -f 'lib/crypt-sha512.c' || echo '../../src/libxcrypt/'`lib/crypt-sha512.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sm3.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sm3.Tpo -c -o lib/libcrypt_la-crypt-sm3.lo `test -f 'lib/crypt-sm3.c' || echo '../../src/libxcrypt/'`lib/crypt-sm3.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-static.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-static.Tpo -c -o lib/libcrypt_la-crypt-static.lo `test -f 'lib/crypt-static.c' || echo '../../src/libxcrypt/'`lib/crypt-static.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sunmd5.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sunmd5.Tpo -c -o lib/libcrypt_la-crypt-sunmd5.lo `test -f 'lib/crypt-sunmd5.c' || echo '../../src/libxcrypt/'`lib/crypt-sunmd5.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-yescrypt.Tpo -c -o lib/libcrypt_la-crypt-yescrypt.lo `test -f 'lib/crypt-yescrypt.c' || echo '../../src/libxcrypt/'`lib/crypt-yescrypt.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt.Tpo -c -o lib/libcrypt_la-crypt.lo `test -f 'lib/crypt.c' || echo '../../src/libxcrypt/'`lib/crypt.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-base64.lo -MD -MP -MF lib/.deps/libcrypt_la-util-base64.Tpo -c -o lib/libcrypt_la-util-base64.lo `test -f 'lib/util-base64.c' || echo '../../src/libxcrypt/'`lib/util-base64.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-gensalt-sha.lo -MD -MP -MF lib/.deps/libcrypt_la-util-gensalt-sha.Tpo -c -o lib/libcrypt_la-util-gensalt-sha.lo `test -f 'lib/util-gensalt-sha.c' || echo '../../src/libxcrypt/'`lib/util-gensalt-sha.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-get-random-bytes.lo -MD -MP -MF lib/.deps/libcrypt_la-util-get-random-bytes.Tpo -c -o lib/libcrypt_la-util-get-random-bytes.lo `test -f 'lib/util-get-random-bytes.c' || echo '../../src/libxcrypt/'`lib/util-get-random-bytes.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-make-failure-token.lo -MD -MP -MF lib/.deps/libcrypt_la-util-make-failure-token.Tpo -c -o lib/libcrypt_la-util-make-failure-token.lo `test -f 'lib/util-make-failure-token.c' || echo '../../src/libxcrypt/'`lib/util-make-failure-token.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-xbzero.lo -MD -MP -MF lib/.deps/libcrypt_la-util-xbzero.Tpo -c -o lib/libcrypt_la-util-xbzero.lo `test -f 'lib/util-xbzero.c' || echo '../../src/libxcrypt/'`lib/util-xbzero.c
+/bin/sh ./libtool  --tag=CC   --mode=compile clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt  -I../../src/libxcrypt/lib -DIN_LIBCRYPT  -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-xstrcpy.lo -MD -MP -MF lib/.deps/libcrypt_la-util-xstrcpy.Tpo -c -o lib/libcrypt_la-util-xstrcpy.lo `test -f 'lib/util-xstrcpy.c' || echo '../../src/libxcrypt/'`lib/util-xstrcpy.c
+LC_ALL=C /usr/bin/perl ../../src/libxcrypt/build-aux/scripts/gen-libcrypt-map \
+  SYMVER_MIN=XCRYPT_2.0 \
+  SYMVER_FLOOR=XCRYPT_2.0 \
+  COMPAT_ABI=yes \
+  ../../src/libxcrypt/lib/libcrypt.map.in > libcrypt.map.T
+../../src/libxcrypt/build-aux/scripts/move-if-change libcrypt.map.T libcrypt.map
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-static.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-static.Tpo -c ../../src/libxcrypt/lib/crypt-static.c -o lib/libcrypt_la-crypt-static.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-gost-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-gost-yescrypt.Tpo -c ../../src/libxcrypt/lib/crypt-gost-yescrypt.c -o lib/libcrypt_la-crypt-gost-yescrypt.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sm3-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sm3-yescrypt.Tpo -c ../../src/libxcrypt/lib/crypt-sm3-yescrypt.c -o lib/libcrypt_la-crypt-sm3-yescrypt.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt.Tpo -c ../../src/libxcrypt/lib/crypt.c -o lib/libcrypt_la-crypt.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sunmd5.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sunmd5.Tpo -c ../../src/libxcrypt/lib/crypt-sunmd5.c -o lib/libcrypt_la-crypt-sunmd5.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sha512.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sha512.Tpo -c ../../src/libxcrypt/lib/crypt-sha512.c -o lib/libcrypt_la-crypt-sha512.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sha256.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sha256.Tpo -c ../../src/libxcrypt/lib/crypt-sha256.c -o lib/libcrypt_la-crypt-sha256.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-xstrcpy.lo -MD -MP -MF lib/.deps/libcrypt_la-util-xstrcpy.Tpo -c ../../src/libxcrypt/lib/util-xstrcpy.c -o lib/libcrypt_la-util-xstrcpy.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-yescrypt.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-yescrypt.Tpo -c ../../src/libxcrypt/lib/crypt-yescrypt.c -o lib/libcrypt_la-crypt-yescrypt.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-get-random-bytes.lo -MD -MP -MF lib/.deps/libcrypt_la-util-get-random-bytes.Tpo -c ../../src/libxcrypt/lib/util-get-random-bytes.c -o lib/libcrypt_la-util-get-random-bytes.o
+echo timestamp > libcrypt.map.stamp
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-crypt-sm3.lo -MD -MP -MF lib/.deps/libcrypt_la-crypt-sm3.Tpo -c ../../src/libxcrypt/lib/crypt-sm3.c -o lib/libcrypt_la-crypt-sm3.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-gensalt-sha.lo -MD -MP -MF lib/.deps/libcrypt_la-util-gensalt-sha.Tpo -c ../../src/libxcrypt/lib/util-gensalt-sha.c -o lib/libcrypt_la-util-gensalt-sha.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-base64.lo -MD -MP -MF lib/.deps/libcrypt_la-util-base64.Tpo -c ../../src/libxcrypt/lib/util-base64.c -o lib/libcrypt_la-util-base64.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-xbzero.lo -MD -MP -MF lib/.deps/libcrypt_la-util-xbzero.Tpo -c ../../src/libxcrypt/lib/util-xbzero.c -o lib/libcrypt_la-util-xbzero.o
+libtool: compile:  clang -std=gnu23 -DHAVE_CONFIG_H -I. -I../../src/libxcrypt -I../../src/libxcrypt/lib -DIN_LIBCRYPT -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -MT lib/libcrypt_la-util-make-failure-token.lo -MD -MP -MF lib/.deps/libcrypt_la-util-make-failure-token.Tpo -c ../../src/libxcrypt/lib/util-make-failure-token.c -o lib/libcrypt_la-util-make-failure-token.o
+../../src/libxcrypt/lib/crypt-sm3-yescrypt.c:139:9: warning: initializing 'char *' with an expression of type 'const char *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+  139 |   char *hptr = strchr ((const char *) intbuf->retval + 3, '$');
+      |         ^      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+libtool: link: clang -std=gnu23 -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -Wl,-z -Wl,relro -Wl,-z -Wl,now -o lib/gen-des-tables lib/gen-des-tables.o 
+mv -f lib/.deps/libcrypt_la-util-base64.Tpo lib/.deps/libcrypt_la-util-base64.Plo
+../../src/libxcrypt/lib/crypt-gost-yescrypt.c:134:9: warning: initializing 'char *' with an expression of type 'const char *' discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+  134 |   char *hptr = strchr ((const char *) intbuf->retval + 3, '$');
+      |         ^      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+mv -f lib/.deps/libcrypt_la-util-xbzero.Tpo lib/.deps/libcrypt_la-util-xbzero.Plo
+mv -f lib/.deps/libcrypt_la-crypt-static.Tpo lib/.deps/libcrypt_la-crypt-static.Plo
+mv -f lib/.deps/libcrypt_la-util-get-random-bytes.Tpo lib/.deps/libcrypt_la-util-get-random-bytes.Plo
+mv -f lib/.deps/libcrypt_la-util-make-failure-token.Tpo lib/.deps/libcrypt_la-util-make-failure-token.Plo
+mv -f lib/.deps/libcrypt_la-util-xstrcpy.Tpo lib/.deps/libcrypt_la-util-xstrcpy.Plo
+1 warning generated.
+1 warning generated.
+mv -f lib/.deps/libcrypt_la-util-gensalt-sha.Tpo lib/.deps/libcrypt_la-util-gensalt-sha.Plo
+mv -f lib/.deps/libcrypt_la-crypt-sm3-yescrypt.Tpo lib/.deps/libcrypt_la-crypt-sm3-yescrypt.Plo
+mv -f lib/.deps/libcrypt_la-crypt-yescrypt.Tpo lib/.deps/libcrypt_la-crypt-yescrypt.Plo
+mv -f lib/.deps/libcrypt_la-crypt-gost-yescrypt.Tpo lib/.deps/libcrypt_la-crypt-gost-yescrypt.Plo
+mv -f lib/.deps/libcrypt_la-crypt.Tpo lib/.deps/libcrypt_la-crypt.Plo
+mv -f lib/.deps/libcrypt_la-crypt-sunmd5.Tpo lib/.deps/libcrypt_la-crypt-sunmd5.Plo
+mv -f lib/.deps/libcrypt_la-crypt-sha256.Tpo lib/.deps/libcrypt_la-crypt-sha256.Plo
+mv -f lib/.deps/libcrypt_la-crypt-sm3.Tpo lib/.deps/libcrypt_la-crypt-sm3.Plo
+mv -f lib/.deps/libcrypt_la-crypt-sha512.Tpo lib/.deps/libcrypt_la-crypt-sha512.Plo
+/bin/sh ./libtool  --tag=CC   --mode=link clang -std=gnu23 -Wall -Wextra -Walloca -Wbad-function-cast -Wcast-align -Wcast-qual -Wconversion -Wformat=2 -Wformat-signedness -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wnull-dereference -Wold-style-definition -Wpointer-arith -Wshadow -Wstrict-overflow=2 -Wstrict-prototypes -Wundef -Wvla -Wwrite-strings -fno-plt -g -O2 -version-info 2:0:0 -Wl,--version-script,./libcrypt.map -Wl,-z,defs -Wl,-z,text -Wl,-z,relro -Wl,-z,now  -o libcrypt.la -rpath /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/libxcrypt-clang/prefix/lib lib/libcrypt_la-alg-des-tables.lo lib/libcrypt_la-alg-des.lo lib/libcrypt_la-alg-gost3411-2012-core.lo lib/libcrypt_la-alg-gost3411-2012-hmac.lo lib/libcrypt_la-alg-hmac-sha1.lo lib/libcrypt_la-alg-md4.lo lib/libcrypt_la-alg-md5.lo lib/libcrypt_la-alg-sha1.lo lib/libcrypt_la-alg-sha256.lo lib/libcrypt_la-alg-sha512.lo lib/libcrypt_la-alg-sm3.lo lib/libcrypt_la-alg-sm3-hmac.lo lib/libcrypt_la-alg-yescrypt-common.lo lib/libcrypt_la-alg-yescrypt-opt.lo lib/libcrypt_la-crypt-bcrypt.lo lib/libcrypt_la-crypt-des.lo lib/libcrypt_la-crypt-gensalt-static.lo lib/libcrypt_la-crypt-gost-yescrypt.lo lib/libcrypt_la-crypt-sm3-yescrypt.lo lib/libcrypt_la-crypt-md5.lo lib/libcrypt_la-crypt-nthash.lo lib/libcrypt_la-crypt-pbkdf1-sha1.lo lib/libcrypt_la-crypt-scrypt.lo lib/libcrypt_la-crypt-sha256.lo lib/libcrypt_la-crypt-sha512.lo lib/libcrypt_la-crypt-sm3.lo lib/libcrypt_la-crypt-static.lo lib/libcrypt_la-crypt-sunmd5.lo lib/libcrypt_la-crypt-yescrypt.lo lib/libcrypt_la-crypt.lo lib/libcrypt_la-util-base64.lo lib/libcrypt_la-util-gensalt-sha.lo lib/libcrypt_la-util-get-random-bytes.lo lib/libcrypt_la-util-make-failure-token.lo lib/libcrypt_la-util-xbzero.lo lib/libcrypt_la-util-xstrcpy.lo   
+libtool: link: ar cr .libs/libcrypt.a lib/libcrypt_la-alg-des-tables.o lib/libcrypt_la-alg-des.o lib/libcrypt_la-alg-gost3411-2012-core.o lib/libcrypt_la-alg-gost3411-2012-hmac.o lib/libcrypt_la-alg-hmac-sha1.o lib/libcrypt_la-alg-md4.o lib/libcrypt_la-alg-md5.o lib/libcrypt_la-alg-sha1.o lib/libcrypt_la-alg-sha256.o lib/libcrypt_la-alg-sha512.o lib/libcrypt_la-alg-sm3.o lib/libcrypt_la-alg-sm3-hmac.o lib/libcrypt_la-alg-yescrypt-common.o lib/libcrypt_la-alg-yescrypt-opt.o lib/libcrypt_la-crypt-bcrypt.o lib/libcrypt_la-crypt-des.o lib/libcrypt_la-crypt-gensalt-static.o lib/libcrypt_la-crypt-gost-yescrypt.o lib/libcrypt_la-crypt-sm3-yescrypt.o lib/libcrypt_la-crypt-md5.o lib/libcrypt_la-crypt-nthash.o lib/libcrypt_la-crypt-pbkdf1-sha1.o lib/libcrypt_la-crypt-scrypt.o lib/libcrypt_la-crypt-sha256.o lib/libcrypt_la-crypt-sha512.o lib/libcrypt_la-crypt-sm3.o lib/libcrypt_la-crypt-static.o lib/libcrypt_la-crypt-sunmd5.o lib/libcrypt_la-crypt-yescrypt.o lib/libcrypt_la-crypt.o lib/libcrypt_la-util-base64.o lib/libcrypt_la-util-gensalt-sha.o lib/libcrypt_la-util-get-random-bytes.o lib/libcrypt_la-util-make-failure-token.o lib/libcrypt_la-util-xbzero.o lib/libcrypt_la-util-xstrcpy.o
+libtool: link: ranlib .libs/libcrypt.a
+libtool: link: ( cd ".libs" && rm -f "libcrypt.la" && ln -s "../libcrypt.la" "libcrypt.la" )
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/libxcrypt-clang'
+
+== probe build ==
+$ clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I. probe.c .libs/libcrypt.a -o probe
+(probe linked, exit 0)
+== probe run ==
+$ ./probe
+ok: rust-ref vector as $2b$ (cost 12) -> $2b$12$I/2qP3ixlNN..JU2dXSN0umG7/Folk3aUaqgSHn/Rl0G82O9WYk66
+ok: OpenBSD regress vector as $2b$ (cost 5) -> $2b$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW
+ok: published OpenBSD $2a$ body (cost 5) -> $2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW
+ok: repeated call is deterministic -> $2b$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW
+ok: 4 concurrent crypt_r x 25 rounds are state-independent
+probe_result: READY (0 failure(s))
+probe exit: 0

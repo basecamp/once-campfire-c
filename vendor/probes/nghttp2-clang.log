@@ -1,0 +1,189 @@
+== F00 nghttp2 v1.70.0 (commit 85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2) clang static cmake build+probe log ==
+
+== fetch (vendor/scripts/nghttp2.sh) ==
+From https://github.com/nghttp2/nghttp2
+ * branch            85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2 -> FETCH_HEAD
+OK: nghttp2 at 85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2
+
+== toolchain ==
+Homebrew clang version 23.1.2
+cmake version 4.3.0
+
+== configure ==
+$ cmake -S vendor/src/nghttp2 -B vendor/build/nghttp2-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF
+-- The C compiler identification is Clang 23.1.2
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /home/linuxbrew/.linuxbrew/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Found Python3: /usr/bin/python3.15 (found version "3.15.0") found components: Interpreter
+-- Found OpenSSL: /usr/lib64/libcrypto.so (found suitable version "4.0.3", minimum required is "1.1.1")
+-- Could NOT find Libngtcp2 (missing: LIBNGTCP2_LIBRARY LIBNGTCP2_INCLUDE_DIR) (Required is at least version "1.23.0")
+-- Could NOT find Libnghttp3 (missing: LIBNGHTTP3_LIBRARY LIBNGHTTP3_INCLUDE_DIR) (Required is at least version "1.17.0")
+-- Found Systemd: /usr/include (Required is at least version "209")
+-- Could NOT find Jansson (missing: JANSSON_LIBRARY JANSSON_INCLUDE_DIR) (Required is at least version "2.5")
+-- Could NOT find Libevent (missing: LIBEVENT_CORE_LIBRARY LIBEVENT_EXTRA_LIBRARY LIBEVENT_OPENSSL_LIBRARY LIBEVENT_INCLUDE_DIR core extra openssl) (Required is at least version "2.0.8")
+-- Found LibXml2: /usr/lib64/libxml2.so (found suitable version "2.15.4", minimum required is "2.6.26")
+-- Could NOT find Jemalloc (missing: JEMALLOC_LIBRARY JEMALLOC_INCLUDE_DIR) 
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Looking for arpa/inet.h
+-- Looking for arpa/inet.h - found
+-- Looking for fcntl.h
+-- Looking for fcntl.h - found
+-- Looking for inttypes.h
+-- Looking for inttypes.h - found
+-- Looking for limits.h
+-- Looking for limits.h - found
+-- Looking for netdb.h
+-- Looking for netdb.h - found
+-- Looking for netinet/in.h
+-- Looking for netinet/in.h - found
+-- Looking for netinet/ip.h
+-- Looking for netinet/ip.h - found
+-- Looking for pwd.h
+-- Looking for pwd.h - found
+-- Looking for sys/socket.h
+-- Looking for sys/socket.h - found
+-- Looking for sys/time.h
+-- Looking for sys/time.h - found
+-- Looking for syslog.h
+-- Looking for syslog.h - found
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+-- Looking for windows.h
+-- Looking for windows.h - not found
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of ssize_t
+-- Check size of ssize_t - done
+-- Performing Test HAVE_STRUCT_TM_TM_GMTOFF
+-- Performing Test HAVE_STRUCT_TM_TM_GMTOFF - Success
+-- Looking for _Exit
+-- Looking for _Exit - found
+-- Looking for accept4
+-- Looking for accept4 - found
+-- Looking for clock_gettime
+-- Looking for clock_gettime - found
+-- Looking for mkostemp
+-- Looking for mkostemp - found
+-- Looking for pipe2
+-- Looking for pipe2 - found
+-- Looking for GetTickCount64
+-- Looking for GetTickCount64 - not found
+-- Looking for initgroups
+-- Looking for initgroups - found
+-- Looking for CLOCK_MONOTONIC
+-- Looking for CLOCK_MONOTONIC - found
+-- summary of build options:
+
+    Package version: 1.70.0
+    Library version: 43:5:29
+    Install prefix:  /usr/local
+    Target system:   Linux
+    Compiler:
+      Build type:     Release
+      C compiler:     /home/linuxbrew/.linuxbrew/bin/clang
+      CFLAGS:         -O3  
+      C++ compiler:   
+      CXXFLAGS:        
+      WARNCFLAGS:       -Wextra -Wall -Wconversion -Winline -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wpointer-arith -Wshadow -Wundef -Wwrite-strings -Waddress -Wattributes -Wcast-align -Wdeclaration-after-statement -Wdiv-by-zero -Wempty-body -Wendif-labels -Wfloat-equal -Wformat-nonliteral -Wformat-security -Wmissing-field-initializers -Wmissing-noreturn -Wno-format-nonliteral -Wredundant-decls -Wsign-conversion -Wstrict-prototypes -Wunreachable-code -Wunused-parameter -Wvla -Wshorten-64-to-32 -Wlanguage-extension-token -Wpragmas -Wunreachable-code-break -Wheader-guard -Wmissing-variable-declarations
+      CXX1XCXXFLAGS:  
+      WARNCXXFLAGS:   
+    Python:
+      Python:          /usr/bin/python3.15
+      Python3_VERSION: 3.15.0
+    Test:
+      Failmalloc:     ON
+      Build Test:     OFF
+    Libs:
+      OpenSSL:        TRUE (LIBS='')
+      wolfSSL:         (LIBS='')
+      Libxml2:        TRUE (LIBS='/usr/lib64/libxml2.so')
+      Libev:           (LIBS='')
+      Libc-ares:       (LIBS='')
+      Libngtcp2:       (LIBS='')
+      Libngtcp2_crypto_quictls:  (LIBS='')
+      Libngtcp2_crypto_libressl:  (LIBS='')
+      Libngtcp2_crypto_wolfssl:  (LIBS='')
+      Libnghttp3:      (LIBS='')
+      Libbpf:          (LIBS='')
+      Libevent(SSL):  FALSE (LIBS='')
+      Jansson:        FALSE (LIBS='')
+      Jemalloc:       FALSE (LIBS='')
+      Zlib:            (LIBS='')
+      Systemd:        TRUE (LIBS='/usr/lib64/libsystemd.so')
+      Libbrotlienc:    (LIBS='')
+      Libbrotlidec:    (LIBS='')
+    Third-party:
+      http-parser:    
+      MRuby:          0
+      Neverbleed:     0
+    Features:
+      Applications:   OFF
+      HPACK tools:    OFF
+      Examples:       OFF
+      Threading:      ON
+      HTTP/3(EXPERIMENTAL): OFF
+
+-- Configuring done (2.5s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-clang
+
+== build ==
+$ cmake --build vendor/build/nghttp2-clang -j$(nproc)
+[  0%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_map.c.o
+[  5%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_stream.c.o
+[  5%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_session.c.o
+[  5%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_helper.c.o
+[ 15%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_submit.c.o
+[ 30%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_pq.c.o
+[ 25%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_outbound_item.c.o
+[ 20%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_queue.c.o
+[ 35%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_buf.c.o
+[ 40%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_hd.c.o
+[ 35%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_alpn.c.o
+[ 45%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_hd_huffman.c.o
+[ 45%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_hd_huffman_data.c.o
+[ 50%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_frame.c.o
+[ 55%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_version.c.o
+[ 60%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_priority_spec.c.o
+[ 65%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_option.c.o
+[ 65%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_callbacks.c.o
+[ 70%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_http.c.o
+[ 75%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_mem.c.o
+[ 80%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_rcbuf.c.o
+[ 85%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_extpri.c.o
+[ 90%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_time.c.o
+[ 90%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_ratelim.c.o
+[ 95%] Building C object lib/CMakeFiles/nghttp2_static.dir/nghttp2_debug.c.o
+[100%] Building C object lib/CMakeFiles/nghttp2_static.dir/sfparse.c.o
+[100%] Linking C static library libnghttp2.a
+[100%] Built target nghttp2_static
+
+== probe build ==
+$ clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/nghttp2/lib/includes vendor/build/nghttp2-clang/probe.c vendor/build/nghttp2-clang/lib/libnghttp2.a -o vendor/build/nghttp2-clang/probe
+(probe linked, exit 0)
+
+== probe run ==
+$ vendor/build/nghttp2-clang/probe
+ok: nghttp2_version() returns info
+ok: version_str is 1.70.0
+ok: version_num is 0x014600 (1.70.0)
+ok: session callbacks allocated
+ok: client session created
+ok: HPACK deflater initialized
+ok: HPACK inflater initialized
+ok: HPACK deflate produces a block
+ok: HPACK round-trip is :method: GET
+ok: HPACK inflate consumes the block
+ok: HPACK inflate emits the header
+ok: HPACK inflate reports FINAL
+probe_result: READY (0 failure(s))
+probe exit: 0

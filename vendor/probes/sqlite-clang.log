@@ -1,0 +1,67 @@
+== archive provenance ==
+SHA3-256(/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/sqlite/sqlite-amalgamation-3530400.zip)= 628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e
+1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d  /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/sqlite/sqlite-amalgamation-3530400.zip
+#define SQLITE_VERSION        "3.53.4"
+== build ==
+clang --version: Homebrew clang version 23.1.2
++ clang -O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread -c sqlite3.c
+
+real	0m12.926s
+user	0m12.815s
+sys	0m0.040s
+note: -lm is required at link time because FTS5 bm25 calls log()
++ clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread probe.c -I ... libsqlite3.a -lm -o probe
+== probe ==
+sqlite3_libversion() = 3.53.4
+sqlite3_sourceid()   = 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc
+sqlite3_threadsafe() = 1 (expect 1)
+opened temp database: /tmp/cf-sqlite-probe-2632901.db
+  compile_options[0] = ATOMIC_INTRINSICS=1
+  compile_options[1] = COMPILER=clang-23.1.2
+  compile_options[2] = DEFAULT_AUTOVACUUM
+  compile_options[3] = DEFAULT_CACHE_SIZE=-2000
+  compile_options[4] = DEFAULT_FILE_FORMAT=4
+  compile_options[5] = DEFAULT_JOURNAL_SIZE_LIMIT=-1
+  compile_options[6] = DEFAULT_MMAP_SIZE=0
+  compile_options[7] = DEFAULT_PAGE_SIZE=4096
+  compile_options[8] = DEFAULT_PCACHE_INITSZ=20
+  compile_options[9] = DEFAULT_RECURSIVE_TRIGGERS
+  compile_options[10] = DEFAULT_SECTOR_SIZE=4096
+  compile_options[11] = DEFAULT_SYNCHRONOUS=2
+  compile_options[12] = DEFAULT_WAL_AUTOCHECKPOINT=1000
+  compile_options[13] = DEFAULT_WAL_SYNCHRONOUS=2
+  compile_options[14] = DEFAULT_WORKER_THREADS=0
+  compile_options[15] = DIRECT_OVERFLOW_READ
+  compile_options[16] = ENABLE_FTS5
+  compile_options[17] = MALLOC_SOFT_LIMIT=1024
+  compile_options[18] = MAX_ATTACHED=10
+  compile_options[19] = MAX_COLUMN=2000
+  compile_options[20] = MAX_COMPOUND_SELECT=500
+  compile_options[21] = MAX_DEFAULT_PAGE_SIZE=8192
+  compile_options[22] = MAX_EXPR_DEPTH=1000
+  compile_options[23] = MAX_FUNCTION_ARG=1000
+  compile_options[24] = MAX_LENGTH=1000000000
+  compile_options[25] = MAX_LIKE_PATTERN_LENGTH=50000
+  compile_options[26] = MAX_MMAP_SIZE=0x7fff0000
+  compile_options[27] = MAX_PAGE_COUNT=0xfffffffe
+  compile_options[28] = MAX_PAGE_SIZE=65536
+  compile_options[29] = MAX_SQL_LENGTH=1000000000
+  compile_options[30] = MAX_TRIGGER_DEPTH=1000
+  compile_options[31] = MAX_VARIABLE_NUMBER=32766
+  compile_options[32] = MAX_VDBE_OP=250000000
+  compile_options[33] = MAX_WORKER_THREADS=8
+  compile_options[34] = MUTEX_PTHREADS
+  compile_options[35] = SYSTEM_MALLOC
+  compile_options[36] = TEMP_STORE=1
+  compile_options[37] = THREADSAFE=1
+compile_options count=38
+compile option ENABLE_FTS5 present=1 (expect 1)
+compile option THREADSAFE=1 present=1 (expect 1)
+PRAGMA journal_mode=WAL -> wal (expect wal)
+PRAGMA foreign_keys -> 1 (expect 1)
+PRAGMA user_version -> 42 (expect 42)
+FTS5 create+insert ok=1
+FTS5 MATCH 'campfire' -> rowid=1 body=hello campfire
+sqlite3_busy_timeout(1000) then PRAGMA busy_timeout -> 1000 (expect 1000)
+probe_result=PASS
+probe exit=0

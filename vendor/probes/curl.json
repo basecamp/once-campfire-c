@@ -1,0 +1,39 @@
+{
+  "name": "libcurl",
+  "repo": "https://github.com/curl/curl",
+  "pinned_commit": "01346829096c61b372692f6dc43ffa778c6caccd",
+  "checked_out_commit": "01346829096c61b372692f6dc43ffa778c6caccd",
+  "commit": "01346829096c61b372692f6dc43ffa778c6caccd",
+  "source_identity": "git commit 01346829096c61b372692f6dc43ffa778c6caccd fetched by SHA (no archive)",
+  "license": "curl (SPDX: curl; upstream file: vendor/src/curl/COPYING; REUSE metadata: vendor/src/curl/LICENSES/curl.txt)",
+  "license_file": "vendor/src/curl/COPYING",
+  "fetch_script": "vendor/scripts/curl.sh",
+  "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl && autoreconf -fi   # documented in GIT-INFO.md; git checkout ships no configure && cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build && CC=clang PKG_CONFIG_PATH=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/pkgconfig /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/configure --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install --with-openssl=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --disable-shared --enable-static --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt --disable-ldap --disable-file --disable-ftp --disable-smb --disable-ipfs --disable-manual --without-brotli --without-zstd --without-libpsl --without-nghttp2 --without-libidn2 --without-librtmp --without-libssh2 --without-libgsasl && make -j24 && make install",
+  "artifacts": [
+    {
+      "path": "vendor/build/curl-clang/install/lib/libcurl.a",
+      "size": 1478426,
+      "sha256": "de0652d5772c259caca626edb91bef468e990696866d75a9730827b35e1658d8"
+    },
+    {
+      "path": "vendor/build/curl-clang/install/include/curl/curl.h",
+      "size": 136595,
+      "sha256": "9ec2e9040d8d95545a4c331461c54748651edc3852a6ceca0672f858103e0528"
+    },
+    {
+      "path": "vendor/build/curl-clang/install/bin/curl-config",
+      "size": 5638,
+      "sha256": "a4c7df25019f74cceeb7d7e475e46e36e50eae33a32e84c906563705eb58f85a"
+    },
+    {
+      "path": "vendor/build/curl-clang/probe/curl_probe_clang",
+      "size": 6245240,
+      "sha256": "c19667f65a7c1f82dd5d2d9a5c092f03d59e544f984d7e8f14c3fbc30f4edeb3"
+    }
+  ],
+  "probe_command": "clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<curl-prefix>/include -o vendor/build/curl-clang/probe/curl_probe_clang vendor/build/curl-clang/probe/curl_probe.c <curl-prefix>/lib/libcurl.a <openssl-prefix>/lib/libssl.a <openssl-prefix>/lib/libcrypto.a -lz -ldl -pthread && (cd vendor/build/curl-clang/probe/www && python3 -m http.server <free-port> --bind 127.0.0.1 &) && vendor/build/curl-clang/probe/curl_probe_clang http://127.0.0.1:<free-port>/probe.txt campfire-f00-curl-probe-body",
+  "probe_result": "READY",
+  "probe_log_tail": "== probe run ==\n$ /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/probe/curl_probe_clang http://127.0.0.1:55489/probe.txt campfire-f00-curl-probe-body\ncurl_version() = libcurl/8.22.0-DEV OpenSSL/4.0.3 zlib/1.3.1.zlib-ng\ncurl_version_info: version=8.22.0-DEV host=x86_64-pc-linux-gnu ssl_version=OpenSSL/4.0.3\nPASS ssl-feature: CURL_VERSION_SSL set\nPASS ssl-backend: OpenSSL/4.0.3\nGET http://127.0.0.1:55489/probe.txt -> HTTP 200, 28 bytes\nPASS easy-get: body matches expected\nCURL_PROBE: ALL CHECKS PASSED\nPROBE_EXIT=0\n== local server log ==\n127.0.0.1 - - [04/Oct/2026 21:29:00] \"GET /probe.txt HTTP/1.1\" 200 -\n== static-link check (no libcurl/libssl in ldd) ==\n\tlinux-vdso.so.1 (0x00007f35ff12f000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x00007f35ff0d9000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x00007f35fe600000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f35ff131000)",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "configure summary: SSL enabled (OpenSSL), 'Build libcurl: Shared=no, Static=yes', Protocols: http https ws wss (rtsp/dict/telnet/tftp/pop3/imap/smtp/gopher/mqtt/ldap/file/ftp/smb/ipfs disabled where flags exist), HTTP2/HTTP3 off, zlib enabled via system libz (Fedora zlib-ng compatibility build; curl_version reports zlib/1.3.1.zlib-ng), IDN/PSL/SSH/RTMP/GSASL off. curl-config --static-libs resolves -lssl -lcrypto to the freshly built OpenSSL prefix. TLS verification never disabled: probe source contains no CURLOPT_SSL_VERIFYPEER/VERIFYHOST reference and no such configure option exists; the GET is plain HTTP on 127.0.0.1. Static probe ldd lists only libz/libc/ld.so (libcurl and libssl embedded). make exit 0, make install exit 0. Full build+probe log: vendor/probes/curl-clang.log."
+}

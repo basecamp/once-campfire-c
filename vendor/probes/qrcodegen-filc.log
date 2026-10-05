@@ -1,0 +1,24 @@
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -O2 -Wall -fPIC -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c/qrcodegen.c -o qrcodegen.o
++ ar rcs libqrcodegen.a qrcodegen.o
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c probe.c libqrcodegen.a -o probe
++ set +x
+=== probe run ===
+ok: version 1 MEDIUM encode succeeds
+ok: version 1 dimensions: 21 == 4*1+17
+ok: v1: finder top-left
+ok: v1: finder top-right
+ok: v1: finder bottom-left
+ok: v1: separators light
+ok: version 5 HIGH encode succeeds
+ok: version 5 dimensions: 37 == 4*5+17
+ok: v5: finder top-left
+ok: v5: finder top-right
+ok: v5: finder bottom-left
+ok: v5: separators light
+ok: version 5 LOW encode succeeds with size 37
+ok: ECC LOW and HIGH yield different matrices at version 5
+ok: repeated version 5 HIGH encode is deterministic
+probe_result: READY (0 failure(s))
+
+=== build.sh exit: 0 (set -euo pipefail; probe is its final command) ===
+=== separate probe re-run exit: 0 ===

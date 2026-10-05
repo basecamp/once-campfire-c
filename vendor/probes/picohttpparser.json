@@ -1,0 +1,28 @@
+{
+  "name": "picohttpparser",
+  "repo": "https://github.com/h2o/picohttpparser",
+  "pinned_commit": "465a7ff09fbd3432fe56c673451f5460154d1f07",
+  "checked_out_commit": "465a7ff09fbd3432fe56c673451f5460154d1f07",
+  "archive_sha256": null,
+  "license": "MIT OR Perl (dual-licensed: source header states 'either the MIT License (below) or the Perl license'); no SPDX tag in tree",
+  "license_file": "no standalone LICENSE file at this revision; dual-license text in vendor/src/picohttpparser/picohttpparser.c lines 1-24 and vendor/src/picohttpparser/picohttpparser.h lines 1-24",
+  "fetch_script": "vendor/scripts/picohttpparser.sh",
+  "build_command": "clang -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c -o vendor/build/picohttpparser-clang/picohttpparser.o && ar rcs vendor/build/picohttpparser-clang/libpicohttpparser.a vendor/build/picohttpparser-clang/picohttpparser.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/picohttpparser-clang/probe.c -I vendor/src/picohttpparser vendor/build/picohttpparser-clang/libpicohttpparser.a -o vendor/build/picohttpparser-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/picohttpparser-clang/libpicohttpparser.a",
+      "size": 6782,
+      "sha256": "b81d7fb138c67a7cbe44461733c7ee354a04e6fa4b2f955dec3f62eb55235d3e"
+    },
+    {
+      "path": "vendor/build/picohttpparser-clang/probe",
+      "size": 17264,
+      "sha256": "52c80c4c2696cfbe237689c9a6720e22551a87c044ba4d77ed9cf124be904006"
+    }
+  ],
+  "probe_command": "vendor/build/picohttpparser-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "== probe ==\nvalid_request ret=63 input_len=63\n  consumed=63 method=\"GET\" path=\"/hello?x=1\" minor_version=1 num_headers=2\n  header[0] name_len=4 name=\"Host\" value_len=11 value=\"example.com\"\n  header[1] name_len=6 name=\"X-Test\" value_len=7 value=\"abc def\"\nincomplete_request(10 bytes) ret=-2 (observed)\nmalformed_request(no HTTP version) ret=-1 (observed)\ncontrol_char_header ret=-1 (observed, informational)\nprobe_result=PASS\nprobe exit=0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Exact observed parser behavior: valid 'GET /hello?x=1 HTTP/1.1' with Host and X-Test parsed returning 63 (all bytes consumed); method/path pointers are non-NUL-terminated, lengths must be used; minor_version=1; 2 headers with leading space after ':' and CRLF stripped from values. Incomplete input (10 of 63 bytes) returns -2. Malformed request without an HTTP version ('GET /\\r\\n\\r\\n') returns -1. A control byte (0x01) inside a header name is also rejected with -1. ph_parse_request returns >0 = bytes consumed, -2 = incomplete, -1 = parse error. Upstream compiles warning-free with -O2 -Wall."
+}

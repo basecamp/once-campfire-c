@@ -1,0 +1,32 @@
+{
+  "name": "zlib-ng",
+  "repo": "https://github.com/zlib-ng/zlib-ng",
+  "pinned_commit": "12731092979c6d07f42da27da673a9f6c7b13586",
+  "checked_out_commit": "12731092979c6d07f42da27da673a9f6c7b13586",
+  "archive_sha256": null,
+  "license": "Zlib (SPDX: Zlib)",
+  "license_file": "vendor/src/zlib-ng/LICENSE.md",
+  "fetch_script": "vendor/scripts/zlib-ng.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc symlink to build/bin/clang-20)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\ncmake -S vendor/src/zlib-ng -B vendor/build/zlib-ng-filc -DCMAKE_C_COMPILER=\"$FILC\" -DCMAKE_BUILD_TYPE=Release -DZLIB_COMPAT=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF\ncmake --build vendor/build/zlib-ng-filc --parallel 8\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/zlib-ng-filc/probe.c -I vendor/build/zlib-ng-filc -I vendor/src/zlib-ng vendor/build/zlib-ng-filc/libz.a -o vendor/build/zlib-ng-filc/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/zlib-ng-filc/libz.a",
+      "size": 1122094,
+      "sha256": "3415c84c19c390da28c0ddaa3e39c53264226bc2c263f29fac2e4ac0709bd827"
+    },
+    {
+      "path": "vendor/build/zlib-ng-filc/probe",
+      "size": 665120,
+      "sha256": "6f1357e3e98d87b38fb212a296cdb63f448c5861974bec8e33a51e8318b68500"
+    }
+  ],
+  "probe_command": "vendor/build/zlib-ng-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "input_len=994 crc32=0x41c3d943\nzlibVersion()=1.3.1.zlib-ng\ndeflateInit2(gzip) rc=0 (expect 0)\ndeflate rc=1 (expect 1=Z_STREAM_END) comp_len=108\ngzip_header (10 bytes): 1f 8b 08 00 00 00 00 00 00 03\ngzip_trailer (8 bytes): 43 d9 c3 41 e2 03 00 00\ncrc32_le_trailer=0x41c3d943 crc32_computed=0x41c3d943 isize_le_trailer=994 isize_computed=994\ninflateInit2(auto-gzip) rc=0 (expect 0)\ninflate rc=1 (expect 1=Z_STREAM_END) out_len=994\nround_trip bytes equal=yes\nprobe_result=PASS\nprobe exit=0\n",
+  "failure_exact": null,
+  "probe_source_sha256": "648ec3984afeec0e7e6c78b8509ed1a365cae5c25bb5e340c515374ae08ed054",
+  "clang_probe_sha256": "648ec3984afeec0e7e6c78b8509ed1a365cae5c25bb5e340c515374ae08ed054",
+  "probe_rerun_exit": 0,
+  "notes": "Same cmake configuration as the clang half (Release, ZLIB_COMPAT=ON, BUILD_SHARED_LIBS=OFF, BUILD_TESTING=OFF) with only CMAKE_C_COMPILER switched to the pinned Fil-C 0.685 pizfix compiler; cmake's own flags -O2 -DNDEBUG -std=c11 -Wall preserved, no -Werror added to upstream code. All 50 translation units (including every x86 SIMD variant with runtime CPU dispatch) built with Fil-C; CMakeCache records the filcc path and objects carry filc_* runtime symbols. Probe source is a byte-identical copy of the clang probe (sha256 match); same windowBits 15+16 deflate / 15+32 inflate settings and same Z_DEFAULT_COMPRESSION level. Observed output byte-for-byte identical to the clang half: zlibVersion()=1.3.1.zlib-ng, gzip comp_len=108, gzip header 1f 8b 08 00 00 00 00 00 00 03, trailer CRC32 0x41c3d943 and ISIZE 994, round trip byte-exact. Probe ELF interpreter: pizfix/lib/ld-fil1-x86_64.so. Transcript: vendor/probes/zlib-ng-filc.log."
+}

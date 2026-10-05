@@ -1,0 +1,16 @@
+== picohttpparser Fil-C probe ==
+compiler: clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c -o vendor/build/picohttpparser-filc/picohttpparser.o
+$ ar rcs vendor/build/picohttpparser-filc/libpicohttpparser.a vendor/build/picohttpparser-filc/picohttpparser.o
+$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/picohttpparser-filc/probe.c -I vendor/src/picohttpparser vendor/build/picohttpparser-filc/libpicohttpparser.a -o vendor/build/picohttpparser-filc/probe
+build_rc=0
+$ vendor/build/picohttpparser-filc/probe
+valid_request ret=63 input_len=63
+  consumed=63 method="GET" path="/hello?x=1" minor_version=1 num_headers=2
+  header[0] name_len=4 name="Host" value_len=11 value="example.com"
+  header[1] name_len=6 name="X-Test" value_len=7 value="abc def"
+incomplete_request(10 bytes) ret=-2 (observed)
+malformed_request(no HTTP version) ret=-1 (observed)
+control_char_header ret=-1 (observed, informational)
+probe_result=PASS
+probe exit=0

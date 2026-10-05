@@ -1,0 +1,39 @@
+{
+  "name": "OpenSSL",
+  "repo": "https://github.com/openssl/openssl",
+  "pinned_commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+  "checked_out_commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+  "commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+  "source_identity": "git commit af1775b60dfa141a4ad762585052cabeb9f37e9e fetched by SHA (no archive)",
+  "license": "Apache-2.0 (upstream file: vendor/src/openssl/LICENSE.txt)",
+  "license_file": "vendor/src/openssl/LICENSE.txt",
+  "fetch_script": "vendor/scripts/openssl.sh",
+  "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/build && CC=clang /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/openssl/Configure no-asm no-shared --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --openssldir=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/ssl --libdir=lib && make -j24 && make install_sw",
+  "artifacts": [
+    {
+      "path": "vendor/build/openssl-clang/install/lib/libcrypto.a",
+      "size": 9928966,
+      "sha256": "fe3590b39d873e2af67ebe4abf508c28b4e8cde764f0cb519ab3fbec2f7d0ac8"
+    },
+    {
+      "path": "vendor/build/openssl-clang/install/lib/libssl.a",
+      "size": 2188826,
+      "sha256": "acf53a9b1983d30491cddee53768588e0ca89df2fa8862df537a1f7f9e31666f"
+    },
+    {
+      "path": "vendor/build/openssl-clang/install/bin/openssl",
+      "size": 7036976,
+      "sha256": "ce45342586148426128613970338e0ba551453a678367984801804ce46cb48e4"
+    },
+    {
+      "path": "vendor/build/openssl-clang/probe/openssl_probe_clang",
+      "size": 4443640,
+      "sha256": "5ec820eae62a11a0db596c97cb29a38a1f568054a12d9b0d521af160d31be169"
+    }
+  ],
+  "probe_command": "clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<prefix>/include -o vendor/build/openssl-clang/probe/openssl_probe_clang vendor/build/openssl-clang/probe/openssl_probe.c <prefix>/lib/libcrypto.a -ldl -pthread && vendor/build/openssl-clang/probe/openssl_probe_clang",
+  "probe_result": "READY",
+  "probe_log_tail": "$ /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/probe/openssl_probe_clang\nOpenSSL_version(OPENSSL_VERSION) = OpenSSL 4.0.3 29 Sep 2026\ncompile-time OPENSSL_VERSION_TEXT = OpenSSL 4.0.3 29 Sep 2026\nPASS hmac-sha256-rfc4231-tc2: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\nPASS pbkdf2-sha256-c1: 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b\nPASS pbkdf2-sha256-c2: ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43\nPASS rand-status: RAND_status() == 1\nPASS rand-bytes: 2x32 bytes, distinct, non-zero sample 7232cedd\nOPENSSL_PROBE: ALL CHECKS PASSED\nPROBE_EXIT=0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "no-asm confirmed: configdata.pm --dump lists 'Disabled features: asm [option] OPENSSL_NO_ASM'. no-shared confirmed: install/lib contains only .a archives (no libcrypto.so/libssl.so; lib/ossl-modules/legacy.so is the standard provider module installed by install_sw). Configure output: 'Configuring OpenSSL version 4.0.3 for target linux-x86_64'. make exit 0, make install_sw exit 0. Probe KATs: HMAC-SHA256 RFC 4231 TC2; PBKDF2-HMAC-SHA256 c=1/c=2 (vectors independently reproduced with python hashlib.pbkdf2_hmac); RAND_bytes twice, distinct non-zero. Full build+probe log: vendor/probes/openssl-clang.log."
+}

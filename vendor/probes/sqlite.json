@@ -1,0 +1,30 @@
+{
+  "name": "sqlite",
+  "repo": "https://sqlite.org",
+  "pinned_commit": "n/a (source archive sqlite-amalgamation-3530400.zip, version 3.53.4)",
+  "checked_out_commit": "n/a (amalgamation archive)",
+  "archive_sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+  "archive_sha3_256_published_and_verified": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
+  "archive_url": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+  "license": "Public domain (SPDX: blessing); header blessing 'The author disclaims copyright to this source code... May you do good and not evil'",
+  "license_file": "no LICENSE file inside sqlite-amalgamation-3530400.zip; public-domain dedication in vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.h lines 4-8",
+  "fetch_script": "vendor/scripts/sqlite.sh",
+  "build_command": "clang -O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread -c vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c -o vendor/build/sqlite-clang/sqlite3.o && ar rcs vendor/build/sqlite-clang/libsqlite3.a vendor/build/sqlite-clang/sqlite3.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/sqlite-clang/probe.c -I vendor/src/sqlite/sqlite-amalgamation-3530400 vendor/build/sqlite-clang/libsqlite3.a -lm -o vendor/build/sqlite-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/sqlite-clang/libsqlite3.a",
+      "size": 2003662,
+      "sha256": "e4402812fd20222043083ff0203a085bd72fc8f6f6ebaef0e74897df692bb3fe"
+    },
+    {
+      "path": "vendor/build/sqlite-clang/probe",
+      "size": 1535016,
+      "sha256": "e30fd982a5e849ee755f508798d437d6717487a97e3c21505308def493097c03"
+    }
+  ],
+  "probe_command": "vendor/build/sqlite-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "compile_options count=38\ncompile option ENABLE_FTS5 present=1 (expect 1)\ncompile option THREADSAFE=1 present=1 (expect 1)\nPRAGMA journal_mode=WAL -> wal (expect wal)\nPRAGMA foreign_keys -> 1 (expect 1)\nPRAGMA user_version -> 42 (expect 42)\nFTS5 create+insert ok=1\nFTS5 MATCH 'campfire' -> rowid=1 body=hello campfire\nsqlite3_busy_timeout(1000) then PRAGMA busy_timeout -> 1000 (expect 1000)\nprobe_result=PASS\nprobe exit=0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "sqlite3_libversion() = 3.53.4; sqlite3_sourceid() = 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc; sqlite3_threadsafe() = 1. Full PRAGMA compile_options list (38 entries) is in the log; it contains ENABLE_FTS5 and THREADSAFE=1. WAL activated on a temp file, foreign_keys=ON survives readback, user_version 42 set/read, FTS5 CREATE VIRTUAL TABLE + INSERT + MATCH round trip returns the inserted row, busy_timeout 1000 set via sqlite3_busy_timeout() and read back through PRAGMA busy_timeout. Integration note: linking with FTS5 requires -lm (fts5Bm25Function calls log()); without it the link fails. Archive provenance: SQLite publishes SHA3-256 (verified against the value on https://sqlite.org/download.html); the SHA-256 recorded above was computed locally."
+}

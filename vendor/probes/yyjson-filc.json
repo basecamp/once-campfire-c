@@ -1,0 +1,31 @@
+{
+  "name": "yyjson",
+  "pinned_commit": "6447536015f3d600f3d65323b10976103b337ca7",
+  "checked_out_commit": "6447536015f3d600f3d65323b10976103b337ca7",
+  "repo": "https://github.com/ibireme/yyjson",
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/yyjson/LICENSE",
+  "fetch_script": "vendor/scripts/yyjson.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc symlink to build/bin/clang-20)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -c vendor/src/yyjson/src/yyjson.c -o vendor/build/yyjson-filc/yyjson.o\nar rcs vendor/build/yyjson-filc/libyyjson.a vendor/build/yyjson-filc/yyjson.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/yyjson-filc/probe.c -I vendor/src/yyjson/src vendor/build/yyjson-filc/libyyjson.a -o vendor/build/yyjson-filc/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/yyjson-filc/libyyjson.a",
+      "size": 1832592,
+      "sha256": "0d8bcc6e005caf277c5a63c4e82409121687e9302c1b85741e26926b5fd76a76"
+    },
+    {
+      "path": "vendor/build/yyjson-filc/probe",
+      "size": 1411696,
+      "sha256": "457e34365c81abc309251bd413e859c05363e752ead0a7042d8a0cc7079c4504"
+    }
+  ],
+  "probe_command": "vendor/build/yyjson-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "parsed object iteration order:\n  [0] zeta type=uint\n  [1] alpha type=uint\n  [2] middle type=array\n  [3] beta type=object\niteration count=4 expect=4\ninvalid_utf8 parse -> REJECTED code=10 msg=\"invalid UTF-8 encoding in string\" pos=7\nNaN literal parse -> REJECTED code=6 msg=\"unexpected character, expected a JSON value\"\nInfinity literal parse -> REJECTED code=6 msg=\"unexpected character, expected a JSON value\"\n1e999 overflow literal parse -> REJECTED code=9 msg=\"number is infinity when parsed as double\"\nwriter_output={\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]}\nwriter_expected={\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]}\nwriter_NaN -> (null) code=4 msg=\"nan or inf number is not allowed\"\nprobe_result=PASS\nprobe exit=0\n",
+  "failure_exact": null,
+  "probe_source_sha256": "e1e6d307b6f934f4dc02df52976cf20b7abe6703b439cbc93d6bdf0f77234137",
+  "clang_probe_sha256": "e1e6d307b6f934f4dc02df52976cf20b7abe6703b439cbc93d6bdf0f77234137",
+  "probe_rerun_exit": 0,
+  "notes": "Amalgamation sources vendor/src/yyjson/src/yyjson.c + yyjson.h built entirely with the pinned Fil-C 0.685 pizfix compiler (no clang-built object linked); same source-level flags as the clang half for the library, application flag set for probe.c. Probe source is a byte-identical copy of the clang probe (sha256 match); no reader/writer flags or assertions changed. Observed behavior identical to the clang half: object iteration order zeta, alpha, middle, beta preserved; direct lookups work; default reader rejects invalid UTF-8 (code 10), NaN/Infinity literals (code 6) and 1e999 (code 9); default writer emits exactly {\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]} and rejects a NaN double with code 4. Probe ELF interpreter: pizfix/lib/ld-fil1-x86_64.so. Transcript: vendor/probes/yyjson-filc.log."
+}

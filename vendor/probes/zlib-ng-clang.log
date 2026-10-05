@@ -1,0 +1,205 @@
+== fetch state ==
+12731092979c6d07f42da27da673a9f6c7b13586
+== cmake configure (clang, ZLIB_COMPAT=ON, static) ==
+-- Using CMake version 4.3.0
+-- ZLIB_HEADER_VERSION: 1.3.1
+-- ZLIBNG_HEADER_VERSION: 2.3.3
+-- The C compiler identification is Clang 23.1.2
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /home/linuxbrew/.linuxbrew/bin/clang - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Arch detected: 'x86_64'
+-- Basearch of 'x86_64' has been detected as: 'x86'
+-- Performing Test FNO_LTO_AVAILABLE
+-- Performing Test FNO_LTO_AVAILABLE - Success
+-- Looking for arm_acle.h
+-- Looking for arm_acle.h - not found
+-- Looking for sys/auxv.h
+-- Looking for sys/auxv.h - found
+-- Looking for sys/sdt.h
+-- Looking for sys/sdt.h - not found
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+-- Looking for linux/auxvec.h
+-- Looking for linux/auxvec.h - found
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of off64_t
+-- Check size of off64_t - done
+-- Looking for fseeko
+-- Looking for fseeko - found
+-- Looking for strerror
+-- Looking for strerror - found
+-- Looking for __cpuid_count
+-- Looking for __cpuid_count - found
+-- Performing Test HAVE_CPUID_MS
+-- Performing Test HAVE_CPUID_MS - Failed
+-- Performing Test HAVE_NO_INTERPOSITION
+-- Performing Test HAVE_NO_INTERPOSITION - Success
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_HIDDEN
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_HIDDEN - Success
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_INTERNAL
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_INTERNAL - Success
+-- Performing Test HAVE_ATTRIBUTE_ALIGNED
+-- Performing Test HAVE_ATTRIBUTE_ALIGNED - Success
+-- Performing Test HAVE_BUILTIN_ASSUME_ALIGNED
+-- Performing Test HAVE_BUILTIN_ASSUME_ALIGNED - Success
+-- Performing Test HAVE_BUILTIN_CTZ
+-- Performing Test HAVE_BUILTIN_CTZ - Success
+-- Performing Test HAVE_BUILTIN_CTZLL
+-- Performing Test HAVE_BUILTIN_CTZLL - Success
+-- Performing Test HAVE_PTRDIFF_T
+-- Performing Test HAVE_PTRDIFF_T - Success
+-- Performing Test HAVE_XSAVE_INTRIN
+-- Performing Test HAVE_XSAVE_INTRIN - Success
+-- Performing Test HAVE_SSE2_INTRIN
+-- Performing Test HAVE_SSE2_INTRIN - Success
+-- Performing Test HAVE_SSSE3_INTRIN
+-- Performing Test HAVE_SSSE3_INTRIN - Success
+-- Performing Test HAVE_SSE41_INTRIN
+-- Performing Test HAVE_SSE41_INTRIN - Success
+-- Performing Test HAVE_SSE42_INTRIN
+-- Performing Test HAVE_SSE42_INTRIN - Success
+-- Performing Test HAVE_PCLMULQDQ_INTRIN
+-- Performing Test HAVE_PCLMULQDQ_INTRIN - Success
+-- Performing Test HAVE_AVX2_INTRIN
+-- Performing Test HAVE_AVX2_INTRIN - Success
+-- Performing Test HAVE_CASCADE_LAKE
+-- Performing Test HAVE_CASCADE_LAKE - Success
+-- Performing Test HAVE_AVX512_INTRIN
+-- Performing Test HAVE_AVX512_INTRIN - Success
+-- Performing Test HAVE_AVX512VNNI_INTRIN
+-- Performing Test HAVE_AVX512VNNI_INTRIN - Success
+-- Performing Test HAVE_VPCLMULQDQ_INTRIN
+-- Performing Test HAVE_VPCLMULQDQ_INTRIN - Success
+-- Architecture-specific source files: arch/x86/x86_features.c;arch/x86/chunkset_sse2.c;arch/x86/chorba_sse2.c;arch/x86/compare256_sse2.c;arch/x86/slide_hash_sse2.c;arch/x86/adler32_ssse3.c;arch/x86/chunkset_ssse3.c;arch/x86/chorba_sse41.c;arch/x86/adler32_sse42.c;arch/x86/crc32_pclmulqdq.c;arch/x86/slide_hash_avx2.c;arch/x86/chunkset_avx2.c;arch/x86/compare256_avx2.c;arch/x86/adler32_avx2.c;arch/x86/adler32_avx512.c;arch/x86/chunkset_avx512.c;arch/x86/compare256_avx512.c;arch/x86/adler32_avx512_vnni.c;arch/x86/crc32_vpclmulqdq.c
+-- The following features have been enabled:
+
+ * CMAKE_BUILD_TYPE, Build type: Release (selected)
+ * XSAVE, Support XSAVE intrinsics using "-mxsave"
+ * SSSE3_ADLER32, Support SSSE3-accelerated adler32, using "-mssse3"
+ * SSE42_CRC, Support SSE4.2 optimized adler32 hash generation, using "-msse4.2"
+ * PCLMUL_CRC, Support CRC hash generation using PCLMULQDQ, using "-msse4.2 -mpclmul"
+ * AVX2_SLIDEHASH, Support AVX2 optimized slide_hash, using "-mavx2 -mbmi2"
+ * AVX2_CHUNKSET, Support AVX2 optimized chunkset, using "-mavx2 -mbmi2"
+ * AVX2_COMPARE256, Support AVX2 optimized compare256, using "-mavx2 -mbmi2"
+ * AVX2_ADLER32, Support AVX2-accelerated adler32, using "-mavx2 -mbmi2"
+ * AVX512_ADLER32, Support AVX512-accelerated adler32, using "-mavx512f -mavx512dq -mavx512bw -mavx512vl -mbmi2 -mtune=cascadelake"
+ * AVX512_CHUNKSET, Support AVX512 optimized chunkset, using "-mavx512f -mavx512dq -mavx512bw -mavx512vl -mbmi2 -mtune=cascadelake"
+ * AVX512_COMPARE256, Support AVX512 optimized compare256, using "-mavx512f -mavx512dq -mavx512bw -mavx512vl -mbmi2 -mtune=cascadelake"
+ * AVX512VNNI_ADLER32, Support AVX512VNNI adler32, using "-mavx512f -mavx512dq -mavx512bw -mavx512vl -mavx512vnni -mbmi2 -mtune=cascadelake"
+ * VPCLMUL_CRC, Support CRC hash generation using VPCLMULQDQ, using "-mpclmul -mvpclmulqdq -mavx512f -mavx512f -mavx512dq -mavx512bw -mavx512vl -mbmi2 -mtune=cascadelake"
+ * WITH_GZFILEOP, Compile with support for gzFile related functions
+ * ZLIB_COMPAT, Compile with zlib compatible API
+ * ZLIB_ALIASES, Compile with zlib compatible CMake targets
+ * WITH_SANITIZER, Enable sanitizer testing support
+ * WITH_OPTIM, Build with optimisation
+ * WITH_NEW_STRATEGIES, Use new strategies
+ * WITH_CRC32_CHORBA, Use optimized CRC32 algorithm Chorba
+ * WITH_RUNTIME_CPU_DETECTION, Build with runtime CPU detection
+ * WITH_SSE2, Build with SSE2
+ * WITH_SSSE3, Build with SSSE3
+ * WITH_SSE41, Build with SSE41
+ * WITH_SSE42, Build with SSE42
+ * WITH_PCLMULQDQ, Build with PCLMULQDQ
+ * WITH_AVX2, Build with AVX2
+ * WITH_AVX512, Build with AVX512
+ * WITH_AVX512VNNI, Build with AVX512 VNNI
+ * WITH_VPCLMULQDQ, Build with VPCLMULQDQ
+
+-- The following features have been disabled:
+
+ * ZLIB_SYMBOL_PREFIX, Publicly exported symbols DO NOT have a custom prefix
+ * BUILD_TESTING, Build test binaries
+ * WITH_GTEST, Build tests using Gtest framework
+ * WITH_FUZZERS, Build test/fuzz
+ * WITH_BENCHMARKS, Build benchmarks using Google Benchmark framework
+ * WITH_BENCHMARK_APPS, Build application benchmarks (currently libpng)
+ * WITH_ALL_FALLBACKS, Build all generic fallback functions
+ * WITH_NATIVE_INSTRUCTIONS, Instruct the compiler to use the full instruction set on this host (gcc/clang -march=native)
+ * WITH_MAINTAINER_WARNINGS, Build with project maintainer warnings
+ * WITH_CODE_COVERAGE, Enable code coverage reporting
+ * WITH_INFLATE_STRICT, Build with strict inflate distance checking
+ * WITH_INFLATE_ALLOW_INVALID_DIST, Build with zero fill for inflate invalid distances
+ * INSTALL_UTILS, Copy minigzip and minideflate during install
+
+-- Configuring done (2.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/zlib-ng-clang
+== cmake build ==
+[  2%] Building C object CMakeFiles/zlib-ng.dir/arch/generic/adler32_fold_c.c.o
+[  6%] Building C object CMakeFiles/zlib-ng.dir/adler32.c.o
+[  6%] Building C object CMakeFiles/zlib-ng.dir/compress.c.o
+[  8%] Building C object CMakeFiles/zlib-ng.dir/crc32.c.o
+[ 16%] Building C object CMakeFiles/zlib-ng.dir/arch/generic/crc32_fold_c.c.o
+[ 16%] Building C object CMakeFiles/zlib-ng.dir/crc32_braid_comb.c.o
+[ 16%] Building C object CMakeFiles/zlib-ng.dir/arch/generic/crc32_braid_c.c.o
+[ 16%] Building C object CMakeFiles/zlib-ng.dir/deflate.c.o
+[ 20%] Building C object CMakeFiles/zlib-ng.dir/deflate_huff.c.o
+[ 20%] Building C object CMakeFiles/zlib-ng.dir/deflate_medium.c.o
+[ 26%] Building C object CMakeFiles/zlib-ng.dir/deflate_slow.c.o
+[ 26%] Building C object CMakeFiles/zlib-ng.dir/deflate_stored.c.o
+[ 26%] Building C object CMakeFiles/zlib-ng.dir/deflate_quick.c.o
+[ 28%] Building C object CMakeFiles/zlib-ng.dir/arch/generic/adler32_c.c.o
+[ 30%] Building C object CMakeFiles/zlib-ng.dir/deflate_rle.c.o
+[ 32%] Building C object CMakeFiles/zlib-ng.dir/infback.c.o
+[ 34%] Building C object CMakeFiles/zlib-ng.dir/inflate.c.o
+[ 36%] Building C object CMakeFiles/zlib-ng.dir/deflate_fast.c.o
+[ 38%] Building C object CMakeFiles/zlib-ng.dir/inftrees.c.o
+[ 40%] Building C object CMakeFiles/zlib-ng.dir/functable.c.o
+[ 42%] Building C object CMakeFiles/zlib-ng.dir/insert_string.c.o
+[ 44%] Building C object CMakeFiles/zlib-ng.dir/insert_string_roll.c.o
+[ 46%] Building C object CMakeFiles/zlib-ng.dir/trees.c.o
+[ 48%] Building C object CMakeFiles/zlib-ng.dir/uncompr.c.o
+[ 50%] Building C object CMakeFiles/zlib-ng.dir/arch/generic/crc32_chorba_c.c.o
+[ 52%] Building C object CMakeFiles/zlib-ng.dir/zutil.c.o
+[ 54%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/x86_features.c.o
+[ 60%] Building C object CMakeFiles/zlib-ng.dir/cpu_features.c.o
+[ 60%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chorba_sse2.c.o
+[ 60%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chunkset_sse2.c.o
+[ 62%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/compare256_sse2.c.o
+[ 64%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/slide_hash_sse2.c.o
+[ 66%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/adler32_ssse3.c.o
+[ 68%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/adler32_sse42.c.o
+[ 74%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chunkset_avx2.c.o
+[ 74%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chunkset_ssse3.c.o
+[ 74%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/slide_hash_avx2.c.o
+[ 76%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chorba_sse41.c.o
+[ 78%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/compare256_avx2.c.o
+[ 80%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/crc32_pclmulqdq.c.o
+[ 82%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/adler32_avx512.c.o
+[ 84%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/adler32_avx2.c.o
+[ 86%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/chunkset_avx512.c.o
+[ 88%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/compare256_avx512.c.o
+[ 90%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/adler32_avx512_vnni.c.o
+[ 92%] Building C object CMakeFiles/zlib-ng.dir/arch/x86/crc32_vpclmulqdq.c.o
+[ 94%] Building C object CMakeFiles/zlib-ng.dir/gzlib.c.o
+[ 96%] Building C object CMakeFiles/zlib-ng.dir/gzread.c.o
+[ 98%] Building C object CMakeFiles/zlib-ng.dir/gzwrite.c.o
+[100%] Linking C static library libz.a
+[100%] Built target zlib-ng
+== artifacts ==
+-rw-r--r-- 1 msaraiva wheel 282902 Oct  4 21:28 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/zlib-ng-clang/libz.a
+-rw-r--r-- 1 msaraiva wheel   5495 Oct  4 21:28 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/zlib-ng-clang/zconf.h
+-rw-r--r-- 1 msaraiva wheel  94787 Oct  4 21:28 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/zlib-ng-clang/zlib.h
+== probe build ==
+clang --version: Homebrew clang version 23.1.2
+== probe ==
+input_len=994 crc32=0x41c3d943
+zlibVersion()=1.3.1.zlib-ng
+deflateInit2(gzip) rc=0 (expect 0)
+deflate rc=1 (expect 1=Z_STREAM_END) comp_len=108
+gzip_header (10 bytes): 1f 8b 08 00 00 00 00 00 00 03
+gzip_trailer (8 bytes): 43 d9 c3 41 e2 03 00 00
+crc32_le_trailer=0x41c3d943 crc32_computed=0x41c3d943 isize_le_trailer=994 isize_computed=994
+inflateInit2(auto-gzip) rc=0 (expect 0)
+inflate rc=1 (expect 1=Z_STREAM_END) out_len=994
+round_trip bytes equal=yes
+probe_result=PASS
+probe exit=0

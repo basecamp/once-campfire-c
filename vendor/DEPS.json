@@ -1,0 +1,669 @@
+{
+  "lock": "campfire-c vendored dependency lock (assembled from the F00 probe records)",
+  "value_policy": "All dependency values below are copied from vendor/probes/*.json; purpose text is from docs/devel/implementation/contracts/dependencies.json or the named spec; see vendor/README.md for pinning/verification rules and open disclosures. Do not edit values by hand; new probe evidence is required.",
+  "assembled_from": [
+    "vendor/probes/<name>.json (clang-half probe records)",
+    "vendor/probes/<name>-filc.json (Fil-C-half probe records)",
+    "vendor/probes/filc.json (Fil-C 0.685 toolchain record)",
+    "docs/devel/implementation/contracts/dependencies.json (selection and purpose only)"
+  ],
+  "verification": "docs/devel/evidence/F00-verify.md (independent re-execution of all probes, artifact hashes, pins and licenses)",
+  "dependencies": [
+    {
+      "name": "picohttpparser",
+      "purpose": "HTTP parser",
+      "repo": "https://github.com/h2o/picohttpparser",
+      "pinned_commit": "465a7ff09fbd3432fe56c673451f5460154d1f07",
+      "source_identity": "git commit 465a7ff09fbd3432fe56c673451f5460154d1f07 fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/picohttpparser",
+      "license": "MIT OR Perl (dual-licensed: source header states 'either the MIT License (below) or the Perl license'); no SPDX tag in tree",
+      "license_file": "no standalone LICENSE file at this revision; dual-license text in vendor/src/picohttpparser/picohttpparser.c lines 1-24 and vendor/src/picohttpparser/picohttpparser.h lines 1-24",
+      "fetch_script": "vendor/scripts/picohttpparser.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "clang -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c -o vendor/build/picohttpparser-clang/picohttpparser.o && ar rcs vendor/build/picohttpparser-clang/libpicohttpparser.a vendor/build/picohttpparser-clang/picohttpparser.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/picohttpparser-clang/probe.c -I vendor/src/picohttpparser vendor/build/picohttpparser-clang/libpicohttpparser.a -o vendor/build/picohttpparser-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/picohttpparser-clang/libpicohttpparser.a",
+            "size": 6782,
+            "sha256": "b81d7fb138c67a7cbe44461733c7ee354a04e6fa4b2f955dec3f62eb55235d3e"
+          },
+          {
+            "path": "vendor/build/picohttpparser-clang/probe",
+            "size": 17264,
+            "sha256": "52c80c4c2696cfbe237689c9a6720e22551a87c044ba4d77ed9cf124be904006"
+          }
+        ],
+        "probe_command": "vendor/build/picohttpparser-clang/probe",
+        "evidence": "vendor/probes/picohttpparser.json; vendor/probes/picohttpparser-clang.log; docs/devel/evidence/F00-clang-picohttpparser-sqlite-zlib-ng-yyjson.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c -o vendor/build/picohttpparser-filc/picohttpparser.o\nar rcs vendor/build/picohttpparser-filc/libpicohttpparser.a vendor/build/picohttpparser-filc/picohttpparser.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/picohttpparser-filc/probe.c -I vendor/src/picohttpparser vendor/build/picohttpparser-filc/libpicohttpparser.a -o vendor/build/picohttpparser-filc/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/picohttpparser-filc/libpicohttpparser.a",
+            "size": 37620,
+            "sha256": "0877efcd259422d6490b999cf1298f6117c48384e6c81ebac8ebb5d1b628f055"
+          },
+          {
+            "path": "vendor/build/picohttpparser-filc/probe",
+            "size": 56864,
+            "sha256": "e055b2e231776f062896283f09ffc90d6dcf7ab3a7b2ad8ad34bfd85ca7127c3"
+          }
+        ],
+        "probe_command": "vendor/build/picohttpparser-filc/probe",
+        "evidence": "vendor/probes/picohttpparser-filc.json; vendor/probes/picohttpparser-filc.log; docs/devel/evidence/F00-filc-core.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Pinned commit equals checked-out commit (verified by the fetch script and re-checked by F00-verify). Probe sources are byte-identical between the clang and Fil-C halves (probe_source_sha256 == clang_probe_sha256 in the -filc JSON); no assertion weakened, no upstream source modified. Observed API behavior is identical in both halves: return >0 = bytes consumed, -2 = incomplete, -1 = parse error; method/path are length-counted, not NUL-terminated. Releases F01/H01/D01 (F00 core)."
+    },
+    {
+      "name": "sqlite",
+      "purpose": "SQLite database; vendored amalgamation, FTS5 and threads enabled, stock Unix VFS (F00 spec)",
+      "repo": "https://sqlite.org",
+      "pinned_commit": "n/a (source archive sqlite-amalgamation-3530400.zip, version 3.53.4)",
+      "source_identity": null,
+      "source_path_in_repo": "vendor/src/sqlite/sqlite-amalgamation-3530400",
+      "license": "Public domain (SPDX: blessing); header blessing 'The author disclaims copyright to this source code... May you do good and not evil'",
+      "license_file": "no LICENSE file inside sqlite-amalgamation-3530400.zip; public-domain dedication in vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.h lines 4-8",
+      "fetch_script": "vendor/scripts/sqlite.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "clang -O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread -c vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c -o vendor/build/sqlite-clang/sqlite3.o && ar rcs vendor/build/sqlite-clang/libsqlite3.a vendor/build/sqlite-clang/sqlite3.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/sqlite-clang/probe.c -I vendor/src/sqlite/sqlite-amalgamation-3530400 vendor/build/sqlite-clang/libsqlite3.a -lm -o vendor/build/sqlite-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/sqlite-clang/libsqlite3.a",
+            "size": 2003662,
+            "sha256": "e4402812fd20222043083ff0203a085bd72fc8f6f6ebaef0e74897df692bb3fe"
+          },
+          {
+            "path": "vendor/build/sqlite-clang/probe",
+            "size": 1535016,
+            "sha256": "e30fd982a5e849ee755f508798d437d6717487a97e3c21505308def493097c03"
+          }
+        ],
+        "probe_command": "vendor/build/sqlite-clang/probe",
+        "evidence": "vendor/probes/sqlite.json; vendor/probes/sqlite-clang.log; docs/devel/evidence/F00-clang-picohttpparser-sqlite-zlib-ng-yyjson.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -DSQLITE_THREADSAFE=1 -DSQLITE_ENABLE_FTS5 -pthread -c vendor/src/sqlite/sqlite-amalgamation-3530400/sqlite3.c -o vendor/build/sqlite-filc/sqlite3.o\nar rcs vendor/build/sqlite-filc/libsqlite3.a vendor/build/sqlite-filc/sqlite3.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/sqlite-filc/probe.c -I vendor/src/sqlite/sqlite-amalgamation-3530400 vendor/build/sqlite-filc/libsqlite3.a -lm -o vendor/build/sqlite-filc/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/sqlite-filc/libsqlite3.a",
+            "size": 14157102,
+            "sha256": "7b8092d181f30f27748c1989efaf977730b6225d0293eb2a3ebec9daa7d629ab"
+          },
+          {
+            "path": "vendor/build/sqlite-filc/probe",
+            "size": 10392464,
+            "sha256": "41a3ac63badeb08e6b16924d7c96c1318ef52370c0c0b61ca7243393e61b63d5"
+          }
+        ],
+        "probe_command": "vendor/build/sqlite-filc/probe",
+        "evidence": "vendor/probes/sqlite-filc.json; vendor/probes/sqlite-filc.log; docs/devel/evidence/F00-filc-core.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Not a git pin: source is the vendored 3.53.4 amalgamation archive (archive_sha256 1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d computed locally; the published SHA3-256 628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e was verified against sqlite.org/download.html and re-checked by F00-verify). sqlite3_libversion()=3.53.4; sourceid 2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc; THREADSAFE=1 and ENABLE_FTS5 confirmed. Integration note: FTS5 consumers must link -lm. Probe sources byte-identical between halves; both re-runs exit 0. source_identity is null by design: this pin is a source archive (SHA3-256/SHA-256 recorded in vendor/probes/sqlite.json), not a git commit. Releases D01/H01 (F00 core)."
+    },
+    {
+      "name": "zlib-ng",
+      "purpose": "gzip and WebSocket deflate",
+      "repo": "https://github.com/zlib-ng/zlib-ng",
+      "pinned_commit": "12731092979c6d07f42da27da673a9f6c7b13586",
+      "source_identity": "git commit 12731092979c6d07f42da27da673a9f6c7b13586 fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/zlib-ng",
+      "license": "Zlib (SPDX: Zlib)",
+      "license_file": "vendor/src/zlib-ng/LICENSE.md",
+      "fetch_script": "vendor/scripts/zlib-ng.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "cmake -S vendor/src/zlib-ng -B vendor/build/zlib-ng-clang -DCMAKE_C_COMPILER=/home/linuxbrew/.linuxbrew/bin/clang -DCMAKE_BUILD_TYPE=Release -DZLIB_COMPAT=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF && cmake --build vendor/build/zlib-ng-clang --parallel 8 && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/zlib-ng-clang/probe.c -I vendor/build/zlib-ng-clang -I vendor/src/zlib-ng vendor/build/zlib-ng-clang/libz.a -o vendor/build/zlib-ng-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/zlib-ng-clang/libz.a",
+            "size": 282902,
+            "sha256": "ada08a1dad9e97fa2df735804e7f122564cef1e42fb18ea8daabdd648880e87a"
+          },
+          {
+            "path": "vendor/build/zlib-ng-clang/probe",
+            "size": 178208,
+            "sha256": "1acc4f9857ebb7d1b96513fe43693c8e68f0dc6425ae3ab4ca23286fbdc760c2"
+          }
+        ],
+        "probe_command": "vendor/build/zlib-ng-clang/probe",
+        "evidence": "vendor/probes/zlib-ng.json; vendor/probes/zlib-ng-clang.log; docs/devel/evidence/F00-clang-picohttpparser-sqlite-zlib-ng-yyjson.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\ncmake -S vendor/src/zlib-ng -B vendor/build/zlib-ng-filc -DCMAKE_C_COMPILER=\"$FILC\" -DCMAKE_BUILD_TYPE=Release -DZLIB_COMPAT=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF\ncmake --build vendor/build/zlib-ng-filc --parallel 8\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/zlib-ng-filc/probe.c -I vendor/build/zlib-ng-filc -I vendor/src/zlib-ng vendor/build/zlib-ng-filc/libz.a -o vendor/build/zlib-ng-filc/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/zlib-ng-filc/libz.a",
+            "size": 1122094,
+            "sha256": "3415c84c19c390da28c0ddaa3e39c53264226bc2c263f29fac2e4ac0709bd827"
+          },
+          {
+            "path": "vendor/build/zlib-ng-filc/probe",
+            "size": 665120,
+            "sha256": "6f1357e3e98d87b38fb212a296cdb63f448c5861974bec8e33a51e8318b68500"
+          }
+        ],
+        "probe_command": "vendor/build/zlib-ng-filc/probe",
+        "evidence": "vendor/probes/zlib-ng-filc.json; vendor/probes/zlib-ng-filc.log; docs/devel/evidence/F00-filc-core.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag 2.3.3; pinned commit equals checked-out commit. Static zlib-compatible libz.a (ZLIB_COMPAT=ON, shared off); generated compat headers zlib.h/zconf.h land in the build directories (include that directory first). zlibVersion()=1.3.1.zlib-ng. Same window/level gzip settings in both builds and byte-identical observed output (comp_len=108, header 1f 8b 08 00 00 00 00 00 00 03, trailer CRC32 0x41c3d943 + ISIZE 994, round trip byte-exact). The Fil-C archive vendor/build/zlib-ng-filc/libz.a is the proposed input for the disclosed libcurl Fil-C relink (see libcurl entry). Probe sources byte-identical between halves. Releases C01 (F00 core)."
+    },
+    {
+      "name": "yyjson",
+      "purpose": "JSON",
+      "repo": "https://github.com/ibireme/yyjson",
+      "pinned_commit": "6447536015f3d600f3d65323b10976103b337ca7",
+      "source_identity": "git commit 6447536015f3d600f3d65323b10976103b337ca7 fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/yyjson/src",
+      "license": "MIT (SPDX: MIT)",
+      "license_file": "vendor/src/yyjson/LICENSE",
+      "fetch_script": "vendor/scripts/yyjson.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -c vendor/src/yyjson/src/yyjson.c -o vendor/build/yyjson-clang/yyjson.o && ar rcs vendor/build/yyjson-clang/libyyjson.a vendor/build/yyjson-clang/yyjson.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/yyjson-clang/probe.c -I vendor/src/yyjson/src vendor/build/yyjson-clang/libyyjson.a -o vendor/build/yyjson-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/yyjson-clang/libyyjson.a",
+            "size": 384482,
+            "sha256": "9a2e00903b91b4c68189649ec6e85d1a3728a0e3c143277eecb87a2ee92adc5d"
+          },
+          {
+            "path": "vendor/build/yyjson-clang/probe",
+            "size": 300352,
+            "sha256": "e37e73e5f64c0f02a0a3ec9944013d750eebf64ecb33698348f5c863ad497153"
+          }
+        ],
+        "probe_command": "vendor/build/yyjson-clang/probe",
+        "evidence": "vendor/probes/yyjson.json; vendor/probes/yyjson-clang.log; docs/devel/evidence/F00-clang-picohttpparser-sqlite-zlib-ng-yyjson.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -c vendor/src/yyjson/src/yyjson.c -o vendor/build/yyjson-filc/yyjson.o\nar rcs vendor/build/yyjson-filc/libyyjson.a vendor/build/yyjson-filc/yyjson.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/yyjson-filc/probe.c -I vendor/src/yyjson/src vendor/build/yyjson-filc/libyyjson.a -o vendor/build/yyjson-filc/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/yyjson-filc/libyyjson.a",
+            "size": 1832592,
+            "sha256": "0d8bcc6e005caf277c5a63c4e82409121687e9302c1b85741e26926b5fd76a76"
+          },
+          {
+            "path": "vendor/build/yyjson-filc/probe",
+            "size": 1411696,
+            "sha256": "457e34365c81abc309251bd413e859c05363e752ead0a7042d8a0cc7079c4504"
+          }
+        ],
+        "probe_command": "vendor/build/yyjson-filc/probe",
+        "evidence": "vendor/probes/yyjson-filc.json; vendor/probes/yyjson-filc.log; docs/devel/evidence/F00-filc-core.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag 0.13.0; pinned commit equals checked-out commit. Amalgamation only (src/yyjson.c + yyjson.h). Strict default reader/writer behavior recorded identically in both halves: object iteration order preserved; invalid UTF-8 rejected (code 10), NaN/Infinity literals rejected (code 6), 1e999 rejected (code 9), NaN write rejected (code 4); no non-standard flags. Probe sources byte-identical between halves. Releases H02 (F00 core)."
+    },
+    {
+      "name": "OpenSSL",
+      "purpose": "crypto and TLS",
+      "repo": "https://github.com/openssl/openssl",
+      "pinned_commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+      "source_identity": "git commit af1775b60dfa141a4ad762585052cabeb9f37e9e fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/openssl",
+      "license": "Apache-2.0 (upstream file: vendor/src/openssl/LICENSE.txt)",
+      "license_file": "vendor/src/openssl/LICENSE.txt",
+      "fetch_script": "vendor/scripts/openssl.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/build && CC=clang /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/openssl/Configure no-asm no-shared --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --openssldir=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/ssl --libdir=lib && make -j24 && make install_sw",
+        "artifacts": [
+          {
+            "path": "vendor/build/openssl-clang/install/lib/libcrypto.a",
+            "size": 9928966,
+            "sha256": "fe3590b39d873e2af67ebe4abf508c28b4e8cde764f0cb519ab3fbec2f7d0ac8"
+          },
+          {
+            "path": "vendor/build/openssl-clang/install/lib/libssl.a",
+            "size": 2188826,
+            "sha256": "acf53a9b1983d30491cddee53768588e0ca89df2fa8862df537a1f7f9e31666f"
+          },
+          {
+            "path": "vendor/build/openssl-clang/install/bin/openssl",
+            "size": 7036976,
+            "sha256": "ce45342586148426128613970338e0ba551453a678367984801804ce46cb48e4"
+          },
+          {
+            "path": "vendor/build/openssl-clang/probe/openssl_probe_clang",
+            "size": 4443640,
+            "sha256": "5ec820eae62a11a0db596c97cb29a38a1f568054a12d9b0d521af160d31be169"
+          }
+        ],
+        "probe_command": "clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<prefix>/include -o vendor/build/openssl-clang/probe/openssl_probe_clang vendor/build/openssl-clang/probe/openssl_probe.c <prefix>/lib/libcrypto.a -ldl -pthread && vendor/build/openssl-clang/probe/openssl_probe_clang",
+        "evidence": "vendor/probes/openssl.json; vendor/probes/openssl-clang.log; docs/devel/evidence/F00-clang-openssl-curl.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/build && CC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc perl /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/openssl/Configure no-asm no-shared --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install --openssldir=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install/ssl --libdir=lib && make -j16 && make install_sw",
+        "artifacts": [
+          {
+            "path": "vendor/build/openssl-filc/install/lib/libcrypto.a",
+            "size": 48854272,
+            "sha256": "ee0f4fa97c33b4c32089dc7fe72da0c82211453946f774877a67c83711b18fab"
+          },
+          {
+            "path": "vendor/build/openssl-filc/install/lib/libssl.a",
+            "size": 12213260,
+            "sha256": "cb8cd0284d4817d1bce3d813c2324c6328e839998e20b34a75558cfda1b56282"
+          },
+          {
+            "path": "vendor/build/openssl-filc/install/bin/openssl",
+            "size": 43946248,
+            "sha256": "089c346e8db65223d61096578fd4e716e23a374f4a6ba7f09dbd819b05488e13"
+          },
+          {
+            "path": "vendor/build/openssl-filc/probe/openssl_probe_filc",
+            "size": 26018664,
+            "sha256": "bddd6288828afe19198ee5d63e66c7d08bd2417475acfdd209215ba2f8353e42"
+          }
+        ],
+        "probe_command": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<prefix>/include -o vendor/build/openssl-filc/probe/openssl_probe_filc vendor/build/openssl-filc/probe/openssl_probe.c <prefix>/lib/libcrypto.a -ldl -pthread && vendor/build/openssl-filc/probe/openssl_probe_filc",
+        "evidence": "vendor/probes/openssl-filc.json; vendor/probes/openssl-filc.log; docs/devel/evidence/F00-filc-auxa.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag openssl-4.0.3 (peeled); pinned commit equals checked-out commit. no-asm and no-shared confirmed in both builds (contract requirement); install/lib holds only libcrypto.a/libssl.a (ossl-modules/legacy.so is the standard provider module). Identical known-answer probes in both halves: RFC 4231 TC2 HMAC-SHA256, PBKDF2-HMAC-SHA256 c=1/c=2, RAND_status/RAND_bytes. Probe-record repair and remaining disclosure (F00-verify): openssl-filc.json previously omitted repo/pinned_commit/checked_out_commit/license/license_file, and no git-sourced probe record carried source_identity; on 2026-10-04 pinned_commit/checked_out_commit (af1775b60dfa141a4ad762585052cabeb9f37e9e, reproduced by git rev-parse HEAD in vendor/src/openssl), license/license_file (vendor/src/openssl/LICENSE.txt, present on disk) and source_identity were added to the -filc record, and source_identity was added to the clang record. repo/fetch_script are still not fields of the -filc record and are carried here from the clang-half record. Still open (F00-verify D3): openssl-filc.json quotes a configdata.pm no-asm line not present verbatim in openssl-filc.log (configdata.pm was re-run by F00-verify and does list OPENSSL_NO_ASM). No upstream source modified. Releases A01 crypto/I02."
+    },
+    {
+      "name": "libcurl",
+      "purpose": "outbound HTTP",
+      "repo": "https://github.com/curl/curl",
+      "pinned_commit": "01346829096c61b372692f6dc43ffa778c6caccd",
+      "source_identity": "git commit 01346829096c61b372692f6dc43ffa778c6caccd fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/curl",
+      "license": "curl (SPDX: curl; upstream file: vendor/src/curl/COPYING; REUSE metadata: vendor/src/curl/LICENSES/curl.txt)",
+      "license_file": "vendor/src/curl/COPYING",
+      "fetch_script": "vendor/scripts/curl.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl && autoreconf -fi   # documented in GIT-INFO.md; git checkout ships no configure && cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build && CC=clang PKG_CONFIG_PATH=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/pkgconfig /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/configure --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install --with-openssl=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --disable-shared --enable-static --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt --disable-ldap --disable-file --disable-ftp --disable-smb --disable-ipfs --disable-manual --without-brotli --without-zstd --without-libpsl --without-nghttp2 --without-libidn2 --without-librtmp --without-libssh2 --without-libgsasl && make -j24 && make install",
+        "artifacts": [
+          {
+            "path": "vendor/build/curl-clang/install/lib/libcurl.a",
+            "size": 1478426,
+            "sha256": "de0652d5772c259caca626edb91bef468e990696866d75a9730827b35e1658d8"
+          },
+          {
+            "path": "vendor/build/curl-clang/install/include/curl/curl.h",
+            "size": 136595,
+            "sha256": "9ec2e9040d8d95545a4c331461c54748651edc3852a6ceca0672f858103e0528"
+          },
+          {
+            "path": "vendor/build/curl-clang/install/bin/curl-config",
+            "size": 5638,
+            "sha256": "a4c7df25019f74cceeb7d7e475e46e36e50eae33a32e84c906563705eb58f85a"
+          },
+          {
+            "path": "vendor/build/curl-clang/probe/curl_probe_clang",
+            "size": 6245240,
+            "sha256": "c19667f65a7c1f82dd5d2d9a5c092f03d59e544f984d7e8f14c3fbc30f4edeb3"
+          }
+        ],
+        "probe_command": "clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<curl-prefix>/include -o vendor/build/curl-clang/probe/curl_probe_clang vendor/build/curl-clang/probe/curl_probe.c <curl-prefix>/lib/libcurl.a <openssl-prefix>/lib/libssl.a <openssl-prefix>/lib/libcrypto.a -lz -ldl -pthread && (cd vendor/build/curl-clang/probe/www && python3 -m http.server <free-port> --bind 127.0.0.1 &) && vendor/build/curl-clang/probe/curl_probe_clang http://127.0.0.1:<free-port>/probe.txt campfire-f00-curl-probe-body",
+        "evidence": "vendor/probes/curl.json; vendor/probes/curl-clang.log; docs/devel/evidence/F00-clang-openssl-curl.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-filc/build && CC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc PKG_CONFIG_PATH=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install/lib/pkgconfig /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/configure --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-filc/install --with-openssl=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install --disable-shared --enable-static --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt --disable-ldap --disable-file --disable-ftp --disable-smb --disable-ipfs --disable-manual --without-zlib --without-brotli --without-zstd --without-libpsl --without-nghttp2 --without-libidn2 --without-librtmp --without-libssh2 --without-libgsasl && make -j16 && make install",
+        "artifacts": [
+          {
+            "path": "vendor/build/curl-filc/install/lib/libcurl.a",
+            "size": 8394088,
+            "sha256": "df06ea3a086a22d6ec3ed47b3670b3052cfc6325f93a39f00ebc52483f2391c3"
+          },
+          {
+            "path": "vendor/build/curl-filc/install/include/curl/curl.h",
+            "size": 136595,
+            "sha256": "9ec2e9040d8d95545a4c331461c54748651edc3852a6ceca0672f858103e0528"
+          },
+          {
+            "path": "vendor/build/curl-filc/install/bin/curl-config",
+            "size": 5763,
+            "sha256": "74e19aae1f41ca7329c96799c9d751811a6d76107139352ec5ccac754b77db97"
+          },
+          {
+            "path": "vendor/build/curl-filc/probe/curl_probe_filc",
+            "size": 39489952,
+            "sha256": "0e8b463e218bda51368ae4abfdd308bc31374dba9ccedbb355c2d1011bb47cbc"
+          }
+        ],
+        "probe_command": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<curl-prefix>/include -o vendor/build/curl-filc/probe/curl_probe_filc vendor/build/curl-filc/probe/curl_probe.c <curl-prefix>/lib/libcurl.a <openssl-filc-prefix>/lib/libssl.a <openssl-filc-prefix>/lib/libcrypto.a -ldl -pthread && (cd vendor/build/curl-filc/probe/www && python3 -m http.server <free-port> --bind 127.0.0.1 &) && vendor/build/curl-filc/probe/curl_probe_filc http://127.0.0.1:<free-port>/probe.txt campfire-f00-curl-probe-body",
+        "evidence": "vendor/probes/curl-filc.json; vendor/probes/curl-filc.log; docs/devel/evidence/F00-filc-auxa.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag curl-8_22_0 (peeled); pinned commit equals checked-out commit. The configure script was generated by the documented autoreconf -fi (curl's git checkout ships no configure; no source file changed). Configure/make/install exit codes 0/0/0 in both halves; probe GETs a loopback python http.server document (HTTP 200) with TLS verification untouched (no VERIFYPEER/VERIFYHOST reference anywhere). DISCLOSED DIFFERENCE, recorded and not reconciled: the Fil-C build was configured --without-zlib (linking the ordinary-C system libz into a Fil-C program is forbidden and no Fil-C zlib-ng archive existed at build time), so curl_version() in the Fil-C probe omits the zlib component while the clang build reports zlib/1.3.1.zlib-ng; the probe's required checks pass in both halves. Open integrator question with a proposed change (curl-filc.json notes, F00-filc-auxa.md section 6): now that vendor/build/zlib-ng-filc/libz.a exists, re-run configure with --with-zlib=<zlib-ng-filc prefix> and relink; until then downstream Fil-C consumers must not rely on libcurl content decoding. Also disclosed: the first Fil-C probe attempt failed on a local-server readiness race; the recorded passing re-run is exit 0. Probe-record repair and remaining disclosure (F00-verify): curl-filc.json previously omitted repo/pinned_commit/checked_out_commit/license/license_file, and no git-sourced probe record carried source_identity; on 2026-10-04 pinned_commit/checked_out_commit (01346829096c61b372692f6dc43ffa778c6caccd, reproduced by git rev-parse HEAD in vendor/src/curl), license/license_file (vendor/src/curl/COPYING, present on disk) and source_identity were added to the -filc record, and source_identity was added to the clang record. repo/fetch_script are still not fields of the -filc record and are carried here from the clang-half record. Still open (F00-verify D4): curl-filc.json's probe_log_tail stops before the log's final curl-tool sanity section (shape difference only). Releases I01/I02."
+    },
+    {
+      "name": "libxcrypt",
+      "purpose": "bcrypt",
+      "repo": "https://github.com/besser82/libxcrypt",
+      "pinned_commit": "db70b42bd7b2a5b00a8580c8dec0aa66791c950a",
+      "source_identity": "git commit db70b42bd7b2a5b00a8580c8dec0aa66791c950a fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/libxcrypt",
+      "license": "LGPL-2.1-or-later (SPDX: LGPL-2.1-or-later)",
+      "license_file": "vendor/src/libxcrypt/COPYING.LIB",
+      "fetch_script": "vendor/scripts/libxcrypt.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "cd vendor/src/libxcrypt && ./autogen.sh && cd vendor/build/libxcrypt-clang && CC=clang ../../src/libxcrypt/configure --disable-shared --enable-static --disable-werror --prefix=$PWD/prefix && make -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I. probe.c .libs/libcrypt.a -o probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/libxcrypt-clang/.libs/libcrypt.a",
+            "size": 673668,
+            "sha256": "6f9c1bd5e5dba910625eb3f5ddbc5b83e19851b4f78d8ce8f4da4ad85de5d637"
+          },
+          {
+            "path": "vendor/build/libxcrypt-clang/probe",
+            "size": 471048,
+            "sha256": "095d46bf68f5bc4c7d7a4e5eeefb076dfcdf7495b7e3d949b3eb7c4cd23b9d56"
+          }
+        ],
+        "probe_command": "vendor/build/libxcrypt-clang/probe",
+        "evidence": "vendor/probes/libxcrypt.json; vendor/probes/libxcrypt-clang.log; docs/devel/evidence/F00-clang-libxcrypt-gumbo-qrcodegen-nghttp2.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/libxcrypt-filc\nCC=\"$FILC\" /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/libxcrypt/configure --disable-shared --enable-static --disable-werror --prefix=$PWD/prefix\nmake -j$(nproc)\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I. probe.c .libs/libcrypt.a -o probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/libxcrypt-filc/.libs/libcrypt.a",
+            "size": 1401006,
+            "sha256": "842f47b2f358f5a26fdac43985dded6af5db857ba5e9ef8741148ea6a7811c0c"
+          },
+          {
+            "path": "vendor/build/libxcrypt-filc/probe",
+            "size": 989904,
+            "sha256": "ce55416a4920b3b2689bdc0c640ce562b8236a1869a2fccdffde2ad449c3a427"
+          }
+        ],
+        "probe_command": "vendor/build/libxcrypt-filc/probe",
+        "evidence": "vendor/probes/libxcrypt-filc.json; vendor/probes/libxcrypt-filc.log; docs/devel/evidence/F00-filc-auxb.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag v4.5.2; pinned commit equals checked-out commit. Static autotools build. Upstream configure defaults to -Werror and clang 23 trips two optional non-bcrypt hash files, so both recipes use upstream's documented --disable-werror; no source patched and no extra compiler flags added. bcrypt is in the default hash set (lib/hashes.conf). Probe uses crypt_r only (no global crypt state): rails_compat vector asserted as $2b$ cost 12, published OpenBSD regress vector with $2a$ cross-check, determinism, 4 threads x 25 concurrent crypt_r rounds on distinct crypt_data buffers. Probe sources byte-identical between halves. Application bcrypt cost is fixed at 12 by configuration (F00 spec), not by the library. Releases A01."
+    },
+    {
+      "name": "gumbo",
+      "purpose": "gumbo-parser subtree only; HTML5 (no Ruby runtime)",
+      "repo": "https://github.com/sparklemotion/nokogiri (gumbo-parser subtree at v1.19.4)",
+      "pinned_commit": "8cfb9daae9ee4a0837508eab43c40fbc8c4138c9",
+      "source_identity": "git commit 8cfb9daae9ee4a0837508eab43c40fbc8c4138c9 fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/gumbo/gumbo-parser (sparse subtree; C sources in gumbo-parser/src)",
+      "license": "Apache-2.0 (SPDX: Apache-2.0)",
+      "license_file": "vendor/src/gumbo/gumbo-parser/src/README.md",
+      "fetch_script": "vendor/scripts/gumbo.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "SRCDIR=vendor/src/gumbo/gumbo-parser/src; for f in ascii attribute char_ref error foreign_attrs parser string_buffer string_piece svg_attrs svg_tags tag tag_lookup token_buffer tokenizer utf8 util vector; do clang -std=c99 -Wall -O2 -fPIC -I$SRCDIR -c $SRCDIR/$f.c -o vendor/build/gumbo-clang/obj/$f.o; done && ar rcs vendor/build/gumbo-clang/libgumbo.a vendor/build/gumbo-clang/obj/*.o && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I$SRCDIR vendor/build/gumbo-clang/probe.c vendor/build/gumbo-clang/libgumbo.a -o vendor/build/gumbo-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/gumbo-clang/libgumbo.a",
+            "size": 567376,
+            "sha256": "87cf913769018668b07251cd26699dba9344abcbc058e227e17466c31607da47"
+          },
+          {
+            "path": "vendor/build/gumbo-clang/probe",
+            "size": 397584,
+            "sha256": "e56993f8c2d89c7c9ecdfaca9eddc3b46ef775df0a90b45cd58700e302b144fd"
+          }
+        ],
+        "probe_command": "vendor/build/gumbo-clang/probe",
+        "evidence": "vendor/probes/gumbo.json; vendor/probes/gumbo-clang.log; docs/devel/evidence/F00-clang-libxcrypt-gumbo-qrcodegen-nghttp2.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/gumbo-filc\nfor f in ascii attribute char_ref error foreign_attrs parser string_buffer string_piece svg_attrs svg_tags tag tag_lookup token_buffer tokenizer utf8 util vector; do \"$FILC\" -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/$f.c -o obj/$f.o; done\nar rcs libgumbo.a obj/*.o\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src probe.c libgumbo.a -o probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/gumbo-filc/libgumbo.a",
+            "size": 2306306,
+            "sha256": "72e039c7f11d78013a6e2b4ba4a72ad663d43ec12f31e3d398f4b529c5b6fdd6"
+          },
+          {
+            "path": "vendor/build/gumbo-filc/probe",
+            "size": 1697184,
+            "sha256": "aa7b248635c437ec052a01df85cc7b8b168797626dd1b3ded5012e1e1e95dc55"
+          }
+        ],
+        "probe_command": "vendor/build/gumbo-filc/probe",
+        "evidence": "vendor/probes/gumbo-filc.json; vendor/probes/gumbo-filc.log; docs/devel/evidence/F00-filc-auxb.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Nokogiri v1.19.4 gumbo-parser subtree fetched with a blob:none partial fetch plus sparse checkout of gumbo-parser/ only (no Ruby tree retained); C sources are the 17 files listed in upstream gumbo-parser/src/Makefile; committed gperf tables used, nothing regenerated. doc1/doc2 byte-exact serialization, attributes and implied <body>/<tbody> checks pass identically in both halves. License-note repair (F00-verify D5): license_file now points at vendor/src/gumbo/gumbo-parser/src/README.md, which exists in the sparse checkout and states the fork is used under the terms of the Apache 2.0 license; source-file headers carry Apache-2.0 notices and the subtree still carries no standalone COPYING (SPDX statement unchanged: Apache-2.0). The earlier note cited Nokogiri LICENSE-DEPENDENCIES.md, which is intentionally outside the sparse checkout. Releases R02."
+    },
+    {
+      "name": "qrcodegen",
+      "purpose": "C QR generator",
+      "repo": "https://github.com/nayuki/QR-Code-generator",
+      "pinned_commit": "720f62bddb7226106071d4728c292cb1df519ceb",
+      "source_identity": "git commit 720f62bddb7226106071d4728c292cb1df519ceb fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/qrcodegen/c",
+      "license": "MIT (SPDX: MIT)",
+      "license_file": "vendor/src/qrcodegen/c/qrcodegen.h (MIT license header); also c/qrcodegen.c, c/Makefile and Readme.markdown; the repo has no standalone LICENSE/COPYING file at v1.8.0",
+      "fetch_script": "vendor/scripts/qrcodegen.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "clang -std=c99 -O2 -Wall -fPIC -c vendor/src/qrcodegen/c/qrcodegen.c -o vendor/build/qrcodegen-clang/qrcodegen.o && ar rcs vendor/build/qrcodegen-clang/libqrcodegen.a vendor/build/qrcodegen-clang/qrcodegen.o && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/qrcodegen/c vendor/build/qrcodegen-clang/probe.c vendor/build/qrcodegen-clang/libqrcodegen.a -o vendor/build/qrcodegen-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/qrcodegen-clang/libqrcodegen.a",
+            "size": 36904,
+            "sha256": "e8b03880cb2d410992d9fec3041c37e4696dfb88075c005b96e66df9c71bc2bf"
+          },
+          {
+            "path": "vendor/build/qrcodegen-clang/probe",
+            "size": 39104,
+            "sha256": "8fed6199ebbd4ec5c80a48f29b1661ba0ebeea7267343e711a797955ff53235a"
+          }
+        ],
+        "probe_command": "vendor/build/qrcodegen-clang/probe",
+        "evidence": "vendor/probes/qrcodegen.json; vendor/probes/qrcodegen-clang.log; docs/devel/evidence/F00-clang-libxcrypt-gumbo-qrcodegen-nghttp2.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/qrcodegen-filc\n\"$FILC\" -std=c99 -O2 -Wall -fPIC -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c/qrcodegen.c -o qrcodegen.o\nar rcs libqrcodegen.a qrcodegen.o\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/qrcodegen/c probe.c libqrcodegen.a -o probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/qrcodegen-filc/libqrcodegen.a",
+            "size": 124116,
+            "sha256": "4bc07c8c9444d169921006735e178cf06941b5d5ed52e271904341387ad7e3a4"
+          },
+          {
+            "path": "vendor/build/qrcodegen-filc/probe",
+            "size": 133904,
+            "sha256": "027beeaa145eb9293eae58b663e36e14f686014d07c9caa492d5ec88da6d709a"
+          }
+        ],
+        "probe_command": "vendor/build/qrcodegen-filc/probe",
+        "evidence": "vendor/probes/qrcodegen-filc.json; vendor/probes/qrcodegen-filc.log; docs/devel/evidence/F00-filc-auxb.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag v1.8.0; pinned commit equals checked-out commit. Only c/qrcodegen.c compiled (upstream demo/test files excluded) with upstream flags. No standalone LICENSE file at this revision; MIT text is in c/qrcodegen.h/.c, c/Makefile and Readme.markdown. Finder-pattern module-by-module checks, pinned min=max version (sizes 21 and 37), ECC LOW/HIGH difference and repeated-encode determinism pass identically in both halves. Releases A-qr_code."
+    },
+    {
+      "name": "nghttp2",
+      "purpose": "HTTP/2 library",
+      "repo": "https://github.com/nghttp2/nghttp2",
+      "pinned_commit": "85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2",
+      "source_identity": "git commit 85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2 fetched by SHA (no archive)",
+      "source_path_in_repo": "vendor/src/nghttp2",
+      "license": "MIT (SPDX: MIT)",
+      "license_file": "vendor/src/nghttp2/COPYING",
+      "fetch_script": "vendor/scripts/nghttp2.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "cmake -S vendor/src/nghttp2 -B vendor/build/nghttp2-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF && cmake --build vendor/build/nghttp2-clang -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/nghttp2/lib/includes vendor/build/nghttp2-clang/probe.c vendor/build/nghttp2-clang/lib/libnghttp2.a -o vendor/build/nghttp2-clang/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/nghttp2-clang/lib/libnghttp2.a",
+            "size": 334836,
+            "sha256": "3e9bd73feda2e52ee5fc0fbab5aebfa345d0f5b00b691d7edf67471eac30b6a5"
+          },
+          {
+            "path": "vendor/build/nghttp2-clang/probe",
+            "size": 206776,
+            "sha256": "f4b892edb479128aa174d35f9e69aff0059cf9c34220c0785c3d9619b65a27fc"
+          }
+        ],
+        "probe_command": "vendor/build/nghttp2-clang/probe",
+        "evidence": "vendor/probes/nghttp2.json; vendor/probes/nghttp2-clang.log; docs/devel/evidence/F00-clang-libxcrypt-gumbo-qrcodegen-nghttp2.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang\ncmake -S /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/nghttp2 -B /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc -DCMAKE_C_COMPILER=\"$FILC\" -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF\ncmake --build /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc -j$(nproc)\n\"$FILC\" -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/nghttp2/lib/includes -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/includes /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe.c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/lib/libnghttp2.a -o /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/nghttp2-filc/probe",
+        "artifacts": [
+          {
+            "path": "vendor/build/nghttp2-filc/lib/libnghttp2.a",
+            "size": 1726472,
+            "sha256": "49453c7d7a15b75ae15edfc8b8303190047eddf1a4471a729aa30b79fa2c1746"
+          },
+          {
+            "path": "vendor/build/nghttp2-filc/probe",
+            "size": 1170456,
+            "sha256": "4b0ecfb720ea62d7cae4d14a2fa2db17c0282e8cf67554f2abb9e66f3d264494"
+          }
+        ],
+        "probe_command": "vendor/build/nghttp2-filc/probe",
+        "evidence": "vendor/probes/nghttp2-filc.json; vendor/probes/nghttp2-filc.log; docs/devel/evidence/F00-filc-auxb.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Tag v1.70.0; pinned commit equals checked-out commit. Upstream CMake, library-only static build (ENABLE_LIB_ONLY=ON disables nghttp/nghttpd/nghttpx/h2load and HPACK tools; BUILD_TESTING=OFF; no c-ares/libev needed). nghttp2_version() reports 1.70.0 / 0x014600; client session create/destroy and HPACK ':method: GET' deflate/inflate round-trip (drain loop to NGHTTP2_HD_INFLATE_FINAL) pass identically in both halves. Releases P01 (HTTP/2)."
+    },
+    {
+      "name": "filc",
+      "purpose": "Selected Fil-C 0.685 toolchain (memory-safe C compiler) for the Fil-C application build (dependencies.json filc entry)",
+      "repo": "https://github.com/pizlonator/fil-c/releases/tag/v0.685 (docs: https://fil-c.org/)",
+      "pinned_commit": "n/a (prebuilt release assets, no source checkout; released version 0.685; asset bytes pinned by size+sha256, see artifacts)",
+      "source_identity": null,
+      "source_path_in_repo": "n/a (installed outside the repo at /home/msaraiva/.local/fil-c/0.685)",
+      "license": "PAS-LICENSE.txt (runtime), LLVM-LICENSE.txt (compiler), MUSL-LICENSE.txt (pizfix libc), optfil additional_licenses/ per program (recorded in vendor/probes/filc.json notes)",
+      "license_file": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/PAS-LICENSE.txt (runtime); LLVM-LICENSE.txt and MUSL-LICENSE.txt in the same pizfix directory; optfil: /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/PAS-LICENSE.txt, LLVM-LICENSE.txt and additional_licenses/",
+      "fetch_script": "vendor/scripts/filc.sh",
+      "clang": {
+        "status": "READY",
+        "build_command": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -O2 -g -o hello hello.c",
+        "artifacts": [
+          {
+            "name": "clang",
+            "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+            "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang",
+            "real_target": "build/bin/clang-20",
+            "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+            "verified": true
+          },
+          {
+            "name": "filcc (pizfix wrapper name)",
+            "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+            "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc",
+            "real_target": "build/bin/clang-20",
+            "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+            "verified": true
+          },
+          {
+            "name": "fil++ / clang++ (pizfix C++ wrapper names)",
+            "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+            "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/fil++",
+            "real_target": "build/bin/clang-20",
+            "verified": true
+          },
+          {
+            "name": "filc-0.685-linux-x86_64.tar.xz",
+            "url": "https://github.com/pizlonator/fil-c/releases/download/v0.685/filc-0.685-linux-x86_64.tar.xz",
+            "size": 77045600,
+            "sha256": "d12bd30c33f18179a9355b32ea44ba61dcc0342c7d77d1ac2548852e64994727"
+          }
+        ],
+        "probe_command": "./hello (filc.json hello_world.run_cmd; exit_code 0; output 'Hello from Fil-C!')",
+        "evidence": "vendor/probes/filc.json; vendor/probes/filc-install.log; docs/devel/evidence/F00-filc.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "filc": {
+        "status": "READY",
+        "build_command": "/opt/fil/bin/filcc -O2 -g -o hello hello.c",
+        "artifacts": [
+          {
+            "name": "filcc (/opt/fil distribution)",
+            "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+            "path": "/opt/fil/bin/filcc",
+            "real_target": "filcc-clang-20",
+            "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/fil-c.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+            "verified": true
+          },
+          {
+            "name": "fil++ (/opt/fil C++ wrapper name)",
+            "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+            "path": "/opt/fil/bin/fil++",
+            "real_target": "filcc-clang-20",
+            "verified": true
+          },
+          {
+            "name": "ld (/opt/fil memory-safe GNU ld)",
+            "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+            "path": "/opt/fil/bin/ld",
+            "verified": true
+          },
+          {
+            "name": "optfil-0.685-linux-x86_64.tar.xz",
+            "url": "https://github.com/pizlonator/fil-c/releases/download/v0.685/optfil-0.685-linux-x86_64.tar.xz",
+            "size": 274092224,
+            "sha256": "f7d2d73b17ee9bfff0859ca15b3ca9c10e8501f8d891b0dfa961e81f0390e788"
+          }
+        ],
+        "probe_command": "./hello (filc.json hello_world_optfil.run_cmd; exit_code 0; output 'Hello from Fil-C!')",
+        "evidence": "vendor/probes/filc.json; vendor/probes/filc-install.log; docs/devel/evidence/F00-filc.md; independent verification: docs/devel/evidence/F00-verify.md"
+      },
+      "notes": "Toolchain entry. dependencies.json selects Fil-C 0.685 (source https://fil-c.org/). Installed per F00 at /home/msaraiva/.local/fil-c/0.685 from the pinned v0.685 release assets; both tarball sizes and sha256 values were verified against the GitHub release API digests and re-checked by F00-verify. Cell mapping for this entry: the clang cell records the pizfix distribution (driver invoked as build/bin/clang; filc.json hello_world) and the filc cell records the /opt/fil optfil distribution (/opt/fil/bin/filcc; filc.json hello_world_optfil); the pizfix build/bin/filcc wrapper used by the Fil-C dependency probes is a symlink to the same clang-20 binary as the clang cell. Version string: clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941). pizfix needs no environment variables (the driver locates its slice relative to the compiler binary). /opt/fil is a bind mount of the local optfil tree; the mount is runtime state that does not survive reboot and is re-created by vendor/scripts/filc.sh (documented deviation F00-filc.md section 4; the vendor-canonical alternative is sudo ./setup.sh -u). There is no executable literally named filc or optfil in either distribution. The shared application flag set also compiles and runs hello with both compilers (filc.json notes). source_identity is null by design: the toolchain is pinned by release-asset size+sha256, not by a git commit of the built tree. license_file lists the license files present in the install (names recorded in filc.json notes; paths verified on disk). Releases all Fil-C builds."
+    },
+    {
+      "name": "libvips",
+      "purpose": "media image transforms via external vips subprocess (S03; D-C05)",
+      "repo": "not recorded in probes (dependencies.json media.source: tmp/rust-ref/Dockerfile and README.md)",
+      "pinned_commit": "not recorded (dependencies.json pins version 8.16.1; no commit and no archive hash recorded)",
+      "source_identity": null,
+      "source_path_in_repo": "not vendored (subprocess dependency; no vendor/src tree)",
+      "license": "not recorded (no probe data)",
+      "license_file": null,
+      "fetch_script": "none (no vendor/scripts script exists; not fetched or probed)",
+      "clang": {
+        "status": "BLOCKED",
+        "build_command": "not recorded (no probe)",
+        "artifacts": [],
+        "probe_command": "not recorded (no probe)",
+        "evidence": "missing probe record: vendor/probes/ contains no libvips JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+      },
+      "filc": {
+        "status": "BLOCKED",
+        "build_command": "not recorded (no probe)",
+        "artifacts": [],
+        "probe_command": "not recorded (no probe)",
+        "evidence": "missing probe record: vendor/probes/ contains no libvips JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+      },
+      "notes": "MISSING PROBE DATA -> BLOCKED under the lock rule that a cell without probe data cannot be READY or silently UNTESTED, and the contradiction is listed here. dependencies.json media.status = 'match reference build options; subprocess adapter parity unverified' and fixes libvips 8.16.1. No F00 worker fetched or probed it (F00-verify discrepancy 8: F00 media is not fetched or probed yet; no READY claim is made for it anywhere). Per D-C05 these are subprocess dependencies (vips/ffmpeg/ffprobe), not libraries linked into the application; S03's 'F00 media' prerequisite remains open until dedicated probe/provenance evidence exists. Values above are deliberately left unrecorded rather than invented; source_identity and license_file are null for the same reason (F00-verify D8)."
+    },
+    {
+      "name": "ffmpeg",
+      "purpose": "media video metadata/poster via external ffmpeg/ffprobe subprocess (S03; D-C05)",
+      "repo": "not recorded in probes (dependencies.json media.source: tmp/rust-ref/Dockerfile and README.md)",
+      "pinned_commit": "not recorded (dependencies.json pins version 7.1.5; no commit and no archive hash recorded)",
+      "source_identity": null,
+      "source_path_in_repo": "not vendored (subprocess dependency; no vendor/src tree)",
+      "license": "not recorded (no probe data)",
+      "license_file": null,
+      "fetch_script": "none (no vendor/scripts script exists; not fetched or probed)",
+      "clang": {
+        "status": "BLOCKED",
+        "build_command": "not recorded (no probe)",
+        "artifacts": [],
+        "probe_command": "not recorded (no probe)",
+        "evidence": "missing probe record: vendor/probes/ contains no ffmpeg JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+      },
+      "filc": {
+        "status": "BLOCKED",
+        "build_command": "not recorded (no probe)",
+        "artifacts": [],
+        "probe_command": "not recorded (no probe)",
+        "evidence": "missing probe record: vendor/probes/ contains no ffmpeg JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+      },
+      "notes": "MISSING PROBE DATA -> BLOCKED under the lock rule that a cell without probe data cannot be READY or silently UNTESTED, and the contradiction is listed here. dependencies.json media.status = 'match reference build options; subprocess adapter parity unverified' and fixes ffmpeg 7.1.5. No F00 worker fetched or probed it (F00-verify discrepancy 8: F00 media is not fetched or probed yet; no READY claim is made for it anywhere). Per D-C05 these are subprocess dependencies (vips/ffmpeg/ffprobe), not libraries linked into the application; S03's 'F00 media' prerequisite remains open until dedicated probe/provenance evidence exists. Values above are deliberately left unrecorded rather than invented; source_identity and license_file are null for the same reason (F00-verify D8)."
+    }
+  ]
+}

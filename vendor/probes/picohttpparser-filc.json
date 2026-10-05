@@ -1,0 +1,31 @@
+{
+  "name": "picohttpparser",
+  "pinned_commit": "465a7ff09fbd3432fe56c673451f5460154d1f07",
+  "checked_out_commit": "465a7ff09fbd3432fe56c673451f5460154d1f07",
+  "repo": "https://github.com/h2o/picohttpparser",
+  "license": "MIT OR Perl (dual-licensed: source header states 'either the MIT License (below) or the Perl license'); no SPDX tag in tree",
+  "license_file": "no standalone LICENSE file at this revision; dual-license text in vendor/src/picohttpparser/picohttpparser.c lines 1-24 and vendor/src/picohttpparser/picohttpparser.h lines 1-24",
+  "fetch_script": "vendor/scripts/picohttpparser.sh",
+  "compiler": "filc 0.685 (pizfix distribution; clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941); /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc symlink to build/bin/clang-20)",
+  "build_command": "FILC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc\n\"$FILC\" -O2 -Wall -c vendor/src/picohttpparser/picohttpparser.c -o vendor/build/picohttpparser-filc/picohttpparser.o\nar rcs vendor/build/picohttpparser-filc/libpicohttpparser.a vendor/build/picohttpparser-filc/picohttpparser.o\n\"$FILC\" -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/picohttpparser-filc/probe.c -I vendor/src/picohttpparser vendor/build/picohttpparser-filc/libpicohttpparser.a -o vendor/build/picohttpparser-filc/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/picohttpparser-filc/libpicohttpparser.a",
+      "size": 37620,
+      "sha256": "0877efcd259422d6490b999cf1298f6117c48384e6c81ebac8ebb5d1b628f055"
+    },
+    {
+      "path": "vendor/build/picohttpparser-filc/probe",
+      "size": 56864,
+      "sha256": "e055b2e231776f062896283f09ffc90d6dcf7ab3a7b2ad8ad34bfd85ca7127c3"
+    }
+  ],
+  "probe_command": "vendor/build/picohttpparser-filc/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "valid_request ret=63 input_len=63\n  consumed=63 method=\"GET\" path=\"/hello?x=1\" minor_version=1 num_headers=2\n  header[0] name_len=4 name=\"Host\" value_len=11 value=\"example.com\"\n  header[1] name_len=6 name=\"X-Test\" value_len=7 value=\"abc def\"\nincomplete_request(10 bytes) ret=-2 (observed)\nmalformed_request(no HTTP version) ret=-1 (observed)\ncontrol_char_header ret=-1 (observed, informational)\nprobe_result=PASS\nprobe exit=0\n",
+  "failure_exact": null,
+  "probe_source_sha256": "6f304eb5efa8704ad2749eae00027566443c0684733da9ddf9ad70c5fb5b4cbc",
+  "clang_probe_sha256": "6f304eb5efa8704ad2749eae00027566443c0684733da9ddf9ad70c5fb5b4cbc",
+  "probe_rerun_exit": 0,
+  "notes": "Built entirely with the pinned Fil-C 0.685 pizfix compiler (no clang-built object linked): upstream flags -O2 -Wall preserved for the library object; application flag set for probe.c. Probe source is a byte-identical copy of the clang probe (sha256 match), no assertion weakened. Observed parser behavior is identical to the clang half: valid request consumes 63 bytes with method=GET path=/hello?x=1 minor_version=1 num_headers=2, incomplete input returns -2, request without HTTP version returns -1, 0x01 in a header name returns -1. Probe ELF interpreter: pizfix/lib/ld-fil1-x86_64.so. Static archive packed with system ar, which only stores the Fil-C objects. Transcript: vendor/probes/picohttpparser-filc.log."
+}

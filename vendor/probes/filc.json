@@ -1,0 +1,83 @@
+{
+  "version": "0.685",
+  "install_path": "/home/msaraiva/.local/fil-c/0.685",
+  "binaries": [
+    {
+      "name": "clang",
+      "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+      "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang",
+      "real_target": "build/bin/clang-20",
+      "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+      "verified": true
+    },
+    {
+      "name": "filcc (pizfix wrapper name)",
+      "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+      "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc",
+      "real_target": "build/bin/clang-20",
+      "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+      "verified": true
+    },
+    {
+      "name": "fil++ / clang++ (pizfix C++ wrapper names)",
+      "distribution": "filc-0.685-linux-x86_64 (pizfix, musl-based)",
+      "path": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/fil++",
+      "real_target": "build/bin/clang-20",
+      "verified": true
+    },
+    {
+      "name": "filcc (/opt/fil distribution)",
+      "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+      "path": "/opt/fil/bin/filcc",
+      "real_target": "filcc-clang-20",
+      "version": "clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/fil-c.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+      "verified": true
+    },
+    {
+      "name": "fil++ (/opt/fil C++ wrapper name)",
+      "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+      "path": "/opt/fil/bin/fil++",
+      "real_target": "filcc-clang-20",
+      "verified": true
+    },
+    {
+      "name": "ld (/opt/fil memory-safe GNU ld)",
+      "distribution": "optfil-0.685-linux-x86_64 (/opt/fil, glibc-based)",
+      "path": "/opt/fil/bin/ld",
+      "verified": true
+    }
+  ],
+  "tarballs": [
+    {
+      "name": "filc-0.685-linux-x86_64.tar.xz",
+      "url": "https://github.com/pizlonator/fil-c/releases/download/v0.685/filc-0.685-linux-x86_64.tar.xz",
+      "size": 77045600,
+      "sha256": "d12bd30c33f18179a9355b32ea44ba61dcc0342c7d77d1ac2548852e64994727"
+    },
+    {
+      "name": "optfil-0.685-linux-x86_64.tar.xz",
+      "url": "https://github.com/pizlonator/fil-c/releases/download/v0.685/optfil-0.685-linux-x86_64.tar.xz",
+      "size": 274092224,
+      "sha256": "f7d2d73b17ee9bfff0859ca15b3ca9c10e8501f8d891b0dfa961e81f0390e788"
+    }
+  ],
+  "env_required": {
+    "pizfix": "none; invoke /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang (or filcc) directly. The driver locates the slice relative to the compiler binary. Optional runtime-only variables (from libpizlo.so, not needed to build): FILC_DUMP_*/FILC_QUIET_PANIC/FILC_EXIT_ON_PANIC; FUGC_* including FUGC_VERIFY=1, FUGC_MIN_THRESHOLD=0, FUGC_THRESHOLD_MULTIPLIER=1.01 for the GC verifier; LD_LIBRARY_PATH=<pizfix>/lib_test or lib_gcverify selects assertion/verifier runtime builds.",
+    "optfil": "export PATH=/opt/fil/bin:$PATH is the documented convenience (absolute paths also work). /opt/fil must exist as the canonical prefix: the shipped binaries hardcode it (ELF interpreter /opt/fil/lib/ld-fil1-x86_64.so and driver paths /opt/fil/include, /opt/fil/lib). In this install /opt/fil is a bind mount of the local tree; it must be re-established after a reboot by re-running vendor/scripts/filc.sh or by the distribution's own sudo ./setup.sh."
+  },
+  "docs_url": "https://fil-c.org/",
+  "hello_world": {
+    "compile_cmd": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -O2 -g -o hello hello.c",
+    "run_cmd": "./hello",
+    "exit_code": 0,
+    "output": "Hello from Fil-C!"
+  },
+  "hello_world_optfil": {
+    "compile_cmd": "/opt/fil/bin/filcc -O2 -g -o hello hello.c",
+    "run_cmd": "./hello",
+    "exit_code": 0,
+    "output": "Hello from Fil-C!"
+  },
+  "status": "READY",
+  "notes": "Pinned by docs/devel/implementation/contracts/dependencies.json (filc 0.685) and installed per task F00. Both x86_64 assets downloaded from the v0.685 GitHub release and verified byte-for-byte (size and sha256) against the digests published in the release API metadata (https://api.github.com/repos/pizlonator/fil-c/releases/tags/v0.685). Release note names: the pizfix tarball is the self-contained musl distribution (compiler only, no root); optfil is the glibc /opt/fil distribution (compiler plus many programs; its setup.sh requires root). There is no executable named filc or optfil in either distribution: the actual compiler names are build/bin/clang and build/bin/filcc (pizfix; symlinks to clang-20) and /opt/fil/bin/filcc and fil++ (optfil; symlinks to filcc-clang-20). Canonical recipe: no extra flags are required; the driver adds -lpizlo/-lyolort/-lyoloc/-lyolom/-lyolounwind and the Fil-C CRT objects automatically and produces a dynamically linked PIE (pizfix interpreter <root>/pizfix/lib/ld-fil1-x86_64.so with RUNPATH to pizfix/lib, NEEDED libc.so/libpizlo.so/libyoloc.so; optfil interpreter /opt/fil/lib/ld-fil1-x86_64.so, NEEDED libc.so.6666/libpizlo.so/libyolocimpl.so/libyolomimpl.so). It is not a static-link toolchain. The shared application flag set -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -O2 -g also compiles and runs 'Hello from Fil-C!' with both compilers (exit 0). optfil relocation: because the shipped filcc-clang-20 resolves its own executable path and only uses /opt/fil/{include,lib} when that path is under the literal /opt/fil prefix, a /opt/fil symlink to the local tree makes it fall back to system paths and link with /usr/lib/Scrt1.o etc. (fails: cannot find /usr/lib/Scrt1.o, filc_crt.o, -lc, -lpizlo). The physical tree is therefore kept at /home/msaraiva/.local/fil-c/0.685/optfil-0.685-linux-x86_64/opt/fil and bind-mounted at /opt/fil (sudo mount --bind); the unmodified shipped binaries then report the ld line -dynamic-linker /opt/fil/lib/ld-fil1-x86_64.so ... -L/opt/fil/lib and compile/run hello correctly. This mount is runtime state (does not survive reboot; vendor/scripts/filc.sh recreates it). Alternative canonical install if the integrator prefers a persistent /opt/fil: cd <optfil unpack dir> && sudo ./setup.sh -u (extracts fil.tar.xz directly to /opt/fil; optional SSH/system configuration declined). Total installed size: 388 MiB pizfix + 1.8 GiB optfil. Licenses: PAS-LICENSE.txt (runtime), LLVM-LICENSE.txt (compiler), MUSL-LICENSE.txt (pizfix libc), optfil additional_licenses/ per program. Full command log: vendor/probes/filc-install.log. Evidence: docs/devel/evidence/F00-filc.md."
+}

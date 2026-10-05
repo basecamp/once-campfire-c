@@ -1,0 +1,28 @@
+{
+  "name": "qrcodegen",
+  "repo": "https://github.com/nayuki/QR-Code-generator",
+  "pinned_commit": "720f62bddb7226106071d4728c292cb1df519ceb",
+  "checked_out_commit": "720f62bddb7226106071d4728c292cb1df519ceb",
+  "archive_sha256": null,
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/qrcodegen/c/qrcodegen.h (MIT license header); also c/qrcodegen.c, c/Makefile and Readme.markdown; the repo has no standalone LICENSE/COPYING file at v1.8.0",
+  "fetch_script": "vendor/scripts/qrcodegen.sh",
+  "build_command": "clang -std=c99 -O2 -Wall -fPIC -c vendor/src/qrcodegen/c/qrcodegen.c -o vendor/build/qrcodegen-clang/qrcodegen.o && ar rcs vendor/build/qrcodegen-clang/libqrcodegen.a vendor/build/qrcodegen-clang/qrcodegen.o && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/qrcodegen/c vendor/build/qrcodegen-clang/probe.c vendor/build/qrcodegen-clang/libqrcodegen.a -o vendor/build/qrcodegen-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/qrcodegen-clang/libqrcodegen.a",
+      "size": 36904,
+      "sha256": "e8b03880cb2d410992d9fec3041c37e4696dfb88075c005b96e66df9c71bc2bf"
+    },
+    {
+      "path": "vendor/build/qrcodegen-clang/probe",
+      "size": 39104,
+      "sha256": "8fed6199ebbd4ec5c80a48f29b1661ba0ebeea7267343e711a797955ff53235a"
+    }
+  ],
+  "probe_command": "vendor/build/qrcodegen-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "ok: version 5 LOW encode succeeds with size 37\nok: ECC LOW and HIGH yield different matrices at version 5\nok: repeated version 5 HIGH encode is deterministic\nprobe_result: READY (0 failure(s))\nprobe exit: 0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Only the C library file c/qrcodegen.c is compiled (upstream qrcodegen-demo.c/qrcodegen-test.c excluded); upstream recommended flags -std=c99 -O preserved (-O2 -Wall). Probe pins minVersion=maxVersion to make the requested version explicit: version 1 / ECC MEDIUM / mask AUTO / no boost for 'HELLO WORLD' yields size 21 = 4*1+17, and version 5 / ECC HIGH for 'HELLO WORLD 12345' yields size 37 = 4*5+17; all three 7x7 finder patterns plus their light separators are verified module-by-module via qrcodegen_getModule at both versions. Requested ECC level is honored: LOW vs HIGH at the same pinned version and text produce different matrices with the same dimensions, and repeated encodes are byte-identical. No upstream source was modified."
+}

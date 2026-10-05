@@ -1,0 +1,28 @@
+{
+  "name": "yyjson",
+  "repo": "https://github.com/ibireme/yyjson",
+  "pinned_commit": "6447536015f3d600f3d65323b10976103b337ca7",
+  "checked_out_commit": "6447536015f3d600f3d65323b10976103b337ca7",
+  "archive_sha256": null,
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/yyjson/LICENSE",
+  "fetch_script": "vendor/scripts/yyjson.sh",
+  "build_command": "clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -c vendor/src/yyjson/src/yyjson.c -o vendor/build/yyjson-clang/yyjson.o && ar rcs vendor/build/yyjson-clang/libyyjson.a vendor/build/yyjson-clang/yyjson.o && clang -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread vendor/build/yyjson-clang/probe.c -I vendor/src/yyjson/src vendor/build/yyjson-clang/libyyjson.a -o vendor/build/yyjson-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/yyjson-clang/libyyjson.a",
+      "size": 384482,
+      "sha256": "9a2e00903b91b4c68189649ec6e85d1a3728a0e3c143277eecb87a2ee92adc5d"
+    },
+    {
+      "path": "vendor/build/yyjson-clang/probe",
+      "size": 300352,
+      "sha256": "e37e73e5f64c0f02a0a3ec9944013d750eebf64ecb33698348f5c863ad497153"
+    }
+  ],
+  "probe_command": "vendor/build/yyjson-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "== probe ==\nparsed object iteration order:\n  [0] zeta type=uint\n  [1] alpha type=uint\n  [2] middle type=array\n  [3] beta type=object\niteration count=4 expect=4\ninvalid_utf8 parse -> REJECTED code=10 msg=\"invalid UTF-8 encoding in string\" pos=7\nNaN literal parse -> REJECTED code=6 msg=\"unexpected character, expected a JSON value\"\nInfinity literal parse -> REJECTED code=6 msg=\"unexpected character, expected a JSON value\"\n1e999 overflow literal parse -> REJECTED code=9 msg=\"number is infinity when parsed as double\"\nwriter_output={\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]}\nwriter_expected={\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]}\nwriter_NaN -> (null) code=4 msg=\"nan or inf number is not allowed\"\nprobe_result=PASS\nprobe exit=0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Amalgamation sources: vendor/src/yyjson/src/yyjson.c + yyjson.h. Object iteration order is preserved: input keys zeta, alpha, middle, beta iterated in exactly that order via yyjson_obj_iter; yyjson_obj_get lookups still work. Default reader (flags 0) rejects invalid UTF-8 (code 10, 'invalid UTF-8 encoding in string'), NaN and Infinity literals (code 6, 'unexpected character, expected a JSON value'), and 1e999 overflow (code 9, 'number is infinity when parsed as double'). Default writer output for {b:7,a:\"x\\\"y\",arr:[true,null,3.5]} is exactly {\"b\":7,\"a\":\"x\\\"y\",\"arr\":[true,null,3.5]}; writing a NaN double with default flags returns NULL, write error code 4 ('nan or inf number is not allowed'). No non-standard reader/writer flags used."
+}

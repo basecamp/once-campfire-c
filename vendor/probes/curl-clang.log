@@ -1,0 +1,2568 @@
+===== F00 curl clang build+probe log =====
+Mon Oct  5 01:27:48 AM UTC 2026
+Homebrew clang version 23.1.2
+Target: x86_64-unknown-linux-gnu
+Thread model: posix
+InstalledDir: /home/linuxbrew/.linuxbrew/Cellar/llvm/23.1.2/bin
+== buildconf (git checkout lacks configure) ==
+/bin/bash: line 1: ./buildconf: No such file or directory
+BUILDCONF_EXIT=127
+== autoconf/automake/libtool versions ==
+autoconf (GNU Autoconf) 2.73
+automake (GNU automake) 1.18.1
+libtool (GNU libtool) 2.6.2
+== autoreconf -fi (documented in GIT-INFO.md) ==
+libtoolize: putting auxiliary files in '.'.
+libtoolize: copying file './ltmain.sh'
+libtoolize: putting macros in AC_CONFIG_MACRO_DIRS, 'm4'.
+libtoolize: copying file 'm4/libtool.m4'
+libtoolize: copying file 'm4/ltoptions.m4'
+libtoolize: copying file 'm4/ltsugar.m4'
+libtoolize: copying file 'm4/ltversion.m4'
+libtoolize: copying file 'm4/lt~obsolete.m4'
+libtoolize: Remember to add 'LT_INIT' to configure.ac.
+configure.ac:154: installing './compile'
+configure.ac:544: installing './config.guess'
+configure.ac:544: installing './config.sub'
+configure.ac:154: installing './install-sh'
+configure.ac:157: installing './missing'
+docs/examples/Makefile.am: installing './depcomp'
+AUTORECONF_EXIT=0
+-rwxr-xr-x 1 msaraiva wheel 1500037 Oct  4 21:27 configure
+EXACT configure line:
+  cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build && CC=clang /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/configure --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install --with-openssl=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --disable-shared --enable-static --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt --disable-ldap --disable-file --disable-ftp --disable-smb --disable-manual --without-brotli --without-zstd --without-libpsl --without-nghttp2 --without-libidn2 --without-librtmp --without-libssh2 --without-libgsasl
+== configure ==
+configure: WARNING: unrecognized options: --without-librtmp
+checking whether to enable maintainer-specific portions of Makefiles... no
+checking whether make supports nested variables... yes
+checking whether to enable curl debug features (for developing curl)... no
+checking whether to enable compiler optimizer... (assumed) yes
+checking whether to enable strict compiler warnings... no
+checking whether to enable compiler warnings as errors... no
+checking whether to enable hiding of library internal symbols... yes
+checking whether to enable c-ares for DNS lookups... no
+checking whether to disable dependency on -lrt... (assumed no)
+checking whether to enable HTTPSRR support... no
+checking whether to enable ECH support... no
+checking whether to enable SSL session export support... no
+checking whether to enable HTTP/3 proxy support... no
+checking for path separator... :
+checking for sed... /usr/bin/sed
+checking for grep... /usr/bin/grep
+checking that grep -E works... yes
+checking for ar... /usr/bin/ar
+checking for a BSD-compatible install... /usr/bin/install -c
+checking for gcc... clang
+checking whether the C compiler works... yes
+checking for C compiler default output file name... a.out
+checking for suffix of executables... 
+checking whether we are cross compiling... no
+checking for suffix of object files... o
+checking whether the compiler supports GNU C... yes
+checking whether clang accepts -g... yes
+checking for clang option to enable C23 features... -std=gnu23
+checking whether clang -std=gnu23 understands -c and -o together... yes
+checking how to run the C preprocessor... clang -std=gnu23 -E
+checking for stdio.h... yes
+checking for stdlib.h... yes
+checking for string.h... yes
+checking for inttypes.h... yes
+checking for stdint.h... yes
+checking for strings.h... yes
+checking for sys/stat.h... yes
+checking for sys/types.h... yes
+checking for unistd.h... yes
+checking for stdatomic.h... yes
+checking if _Atomic is available... yes
+checking whether sleep supports fractional seconds... yes
+checking filesystem timestamp resolution... 0.01
+checking whether build environment is sane... yes
+checking for a race-free mkdir -p... /usr/bin/mkdir -p
+checking for gawk... gawk
+checking whether make sets $(MAKE)... yes
+checking whether make supports the include directive... yes (GNU style)
+checking xargs -n works... yes
+checking whether UID '1000' is supported by ustar format... yes
+checking whether GID '1000' is supported by ustar format... yes
+checking how to create a ustar tar archive... gnutar
+checking dependency style of clang -std=gnu23... gcc3
+checking curl version... 8.22.0-DEV
+checking for perl... /usr/bin/perl
+checking for httpd... /usr/bin/httpd
+checking for apxs... no
+configure: apxs not in PATH, http tests disabled
+checking for danted... no
+checking for danted... no
+checking for sftp-server... no
+checking for sftp-server... no
+checking for nghttpx... no
+checking for caddy... no
+checking build system type... x86_64-pc-linux-gnu
+checking host system type... x86_64-pc-linux-gnu
+checking for egrep -e... /usr/bin/grep -E
+checking if OS is AIX (to define _ALL_SOURCE)... no
+checking if _THREAD_SAFE is already defined... no
+checking if _THREAD_SAFE is actually needed... no
+checking if _THREAD_SAFE is onwards defined... no
+checking if _REENTRANT is already defined... no
+checking if _REENTRANT is actually needed... no
+checking if _REENTRANT is onwards defined... no
+checking for clang -std=gnu23 option to support large files... none needed
+checking how to print strings... printf
+checking for a sed that does not truncate output... (cached) /usr/bin/sed
+checking for grep that handles long lines and -e... (cached) /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+checking for fgrep... /usr/bin/grep -F
+checking for ld used by clang -std=gnu23... /usr/bin/ld
+checking if the linker (/usr/bin/ld) is GNU ld... yes
+checking for BSD- or MS-compatible name lister (nm)... /usr/bin/nm -B
+checking the name lister (/usr/bin/nm -B) interface... BSD nm
+checking whether ln -s works... yes
+checking the maximum length of command line arguments... 1572864
+checking how to convert x86_64-pc-linux-gnu file names to x86_64-pc-linux-gnu format... func_convert_file_noop
+checking how to convert x86_64-pc-linux-gnu file names to toolchain format... func_convert_file_noop
+checking for /usr/bin/ld option to reload object files... -r
+checking for file... file
+checking for objdump... objdump
+checking how to recognize dependent libraries... pass_all
+checking for dlltool... no
+checking how to associate runtime and link libraries... printf %s\n
+checking for ranlib... ranlib
+checking for archiver @FILE support... @
+checking for strip... strip
+checking command to parse /usr/bin/nm -B output from clang -std=gnu23 object... ok
+checking for sysroot... no
+checking for a working dd... /usr/bin/dd
+checking how to truncate binary pipes... /usr/bin/dd bs=4096 count=1
+checking for mt... no
+checking if : is a manifest tool... no
+checking for dlfcn.h... yes
+checking which variant of shared library versioning to provide... (default) aix
+checking for objdir... .libs
+checking if clang -std=gnu23 supports -fno-rtti -fno-exceptions... yes
+checking for clang -std=gnu23 option to produce PIC... -fPIC -DPIC
+checking if clang -std=gnu23 PIC flag -fPIC -DPIC works... yes
+checking if clang -std=gnu23 static flag -static works... no
+checking if clang -std=gnu23 supports -c -o file.o... yes
+checking if clang -std=gnu23 supports -c -o file.o... (cached) yes
+checking whether the clang -std=gnu23 linker (/usr/bin/ld -m elf_x86_64) supports shared libraries... yes
+checking dynamic linker characteristics... GNU/Linux ld.so
+checking how to hardcode library paths into programs... immediate
+checking whether stripping libraries is possible... yes
+checking if libtool supports shared libraries... yes
+checking whether to build shared libraries... no
+checking whether to build static libraries... yes
+checking whether to build shared libraries with -version-info... yes
+checking whether to build shared libraries with -no-undefined... no
+checking whether to build shared libraries with -mimpure-text... no
+checking whether to build shared libraries with PIC... yes
+checking whether to build static libraries with PIC... yes
+checking whether to build shared libraries only... no
+checking whether to build static libraries only... yes
+checking for windres... no
+checking if cpp -P is needed... no
+checking if compiler is DEC/Compaq/HP C... no
+checking if compiler is HP-UX C... no
+checking if compiler is IBM C... no
+checking if compiler is Intel C... no
+checking if compiler is clang... yes
+checking if compiler is xlclang... no
+checking if compiler is Apple clang... no
+checking compiler version... clang '715' (raw: 'Homebrew clang version 23.1.2
+Found CUDA installation: /usr/local/cuda, version 13.0
+Found HIP installation: /usr, version 7.15.0' / '7.15')
+checking if compiler is GNU C... no
+checking if compiler is SunPro C... no
+checking if compiler is Tiny C... no
+checking for code coverage support... no
+checking whether build target is a native Windows one... no
+checking if compiler accepts some basic options... yes
+configure: compiler options added: -Qunused-arguments -Werror-implicit-function-declaration 
+checking if compiler optimizer assumed setting might be used... yes
+checking if compiler accepts optimizer enabling options... yes
+configure: compiler options added: -O2
+checking if compiler halts on compilation errors... yes
+checking if compiler halts on negative sized arrays... yes
+checking if compiler halts on function prototype mismatch... yes
+checking if compiler supports hiding library internal symbols... yes
+checking whether build target supports Win32 crypto API... no
+checking whether to build libcurl and curl in "unity" mode... no
+checking whether to support http... yes
+checking whether to support ftp... no
+checking whether to support file... no
+checking whether to support IPFS... yes
+checking whether to support ldap... no
+checking whether to support ldaps... no
+checking whether to support rtsp... no
+checking whether to support proxies... yes
+checking whether to support dict... no
+checking whether to support telnet... no
+checking whether to support tftp... no
+checking whether to support pop3... no
+checking whether to support imap... no
+checking whether to support smb... no
+checking whether to support smtp... no
+checking whether to support gopher... no
+checking whether to support mqtt... no
+checking enable curl_global_init_mem debug build... no
+checking whether to provide built-in manual... no
+checking whether to build documentation... yes
+checking whether to enable generation of C code... yes
+checking whether to use libgcc... no
+checking whether to use libbacktrace... no
+checking if X/Open network library is required... no
+checking for gethostbyname... yes
+checking whether build target is a native Windows one... (cached) no
+checking for proto/bsdsocket.h... no
+checking for connect in libraries... yes
+checking for sys/types.h... (cached) yes
+checking for monotonic clock_gettime... yes
+checking for clock_gettime in libraries... no additional lib required
+checking if monotonic clock_gettime works... yes
+checking for sys/types.h... (cached) yes
+checking for raw monotonic clock_gettime... yes
+checking for pkg-config... /usr/bin/pkg-config
+checking for zlib options with pkg-config... found
+checking for zlib.h... yes
+configure: found both libz and libz.h header
+checking whether to enable IPv6... yes
+checking if struct sockaddr_in6 has sin6_scope_id member... yes
+checking if argv can be written to... yes
+checking if GSS-API support is requested... no
+checking whether to enable Windows native SSL/TLS... no
+checking whether to enable Amiga native SSL/TLS (AmiSSL 5)... no
+configure: PKG_CONFIG_LIBDIR is set to "/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/pkgconfig"
+checking for pkg-config... (cached) /usr/bin/pkg-config
+checking for openssl options with pkg-config... found
+configure: pkg-config: SSL_LIBS: "-lssl -lcrypto"
+configure: pkg-config: SSL_LDFLAGS: "-L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib"
+configure: pkg-config: SSL_CPPFLAGS: "-I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/include"
+checking for HMAC_Update in -lcrypto... yes
+checking for SSL_connect in -lssl... yes
+checking for openssl/rsa.h... yes
+checking for openssl/crypto.h... yes
+checking for openssl/pem.h... yes
+checking for openssl/ssl.h... yes
+checking for openssl/err.h... yes
+checking for AWS-LC... no
+checking for BoringSSL... no
+checking for LibreSSL... no
+checking for OpenSSL >= 3... checking for SSL_set_quic_use_legacy_codepoint... no
+checking for SSL_set_quic_tls_cbs... yes
+configure: OpenSSL with QUIC APIv2
+configure: Added /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib to CURL_LIBRARY_PATH
+checking for DES support in OpenSSL... yes
+checking whether to enable Apple OS native certificate validation... no
+configure: built with one SSL backend
+checking whether to use native CA store... no
+checking default CA cert bundle/path... configure: want unset CA /etc/ssl/certs/ca-certificates.crt
+/etc/ssl/certs/ca-certificates.crt
+checking whether to use OpenSSL's built-in CA store... no
+checking CA cert bundle path to embed in the curl tool... no
+checking whether versioned symbols are wanted... no
+checking whether to build with libidn2... no
+checking for sys/types.h... (cached) yes
+checking for sys/select.h... yes
+checking for sys/ioctl.h... yes
+checking for unistd.h... (cached) yes
+checking for arpa/inet.h... yes
+checking for net/if.h... yes
+checking for netinet/in.h... yes
+checking for netinet/in6.h... no
+checking for sys/un.h... yes
+checking for linux/tcp.h... yes
+checking for netinet/tcp.h... yes
+checking for netinet/udp.h... yes
+checking for netinet/ip.h... yes
+checking for netdb.h... yes
+checking for sys/sockio.h... no
+checking for sys/param.h... yes
+checking for termios.h... yes
+checking for termio.h... no
+checking for fcntl.h... yes
+checking for io.h... no
+checking for pwd.h... yes
+checking for utime.h... yes
+checking for sys/utime.h... no
+checking for sys/poll.h... yes
+checking for poll.h... yes
+checking for sys/resource.h... yes
+checking for libgen.h... yes
+checking for locale.h... yes
+checking for stdbool.h... yes
+checking for sys/filio.h... no
+checking for sys/eventfd.h... yes
+checking for an ANSI C-conforming const... yes
+checking for size_t... yes
+checking for sys/types.h... (cached) yes
+checking for struct timeval... yes
+checking runtime libs availability... fine
+checking size of size_t... 8
+checking size of long... 8
+checking size of int... 4
+checking size of time_t... 8
+checking size of off_t... 8
+checking size of curl_off_t... 8
+checking size of curl_socket_t... 4
+checking for ssize_t... yes
+checking for bool... yes
+checking for sa_family_t... yes
+checking for suseconds_t... yes
+checking if time_t is unsigned... no
+checking for struct sockaddr_storage... yes
+checking for sys/types.h... (cached) yes
+checking for recv... yes
+checking for sys/types.h... (cached) yes
+checking for send... yes
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking if alarm can be linked... yes
+checking if alarm is prototyped... yes
+checking if alarm is compilable... yes
+checking if alarm usage allowed... yes
+checking if alarm might be used... yes
+checking for sys/types.h... (cached) yes
+checking for strings.h... (cached) yes
+checking for sys/types.h... (cached) yes
+checking for libgen.h... (cached) yes
+checking if basename can be linked... yes
+checking if basename is prototyped... yes
+checking if basename is compilable... yes
+checking if basename usage allowed... yes
+checking if basename might be used... yes
+checking if closesocket can be linked... no
+checking if closesocket might be used... no
+checking for sys/types.h... (cached) yes
+checking if CloseSocket can be linked... no
+checking if CloseSocket might be used... no
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking for fcntl.h... (cached) yes
+checking if fcntl can be linked... yes
+checking if fcntl is prototyped... yes
+checking if fcntl is compilable... yes
+checking if fcntl usage allowed... yes
+checking if fcntl might be used... yes
+checking if fcntl O_NONBLOCK is compilable... yes
+checking if fcntl O_NONBLOCK usage allowed... yes
+checking if fcntl O_NONBLOCK might be used... yes
+checking whether build target is a native Windows one... (cached) no
+checking for sys/types.h... (cached) yes
+checking for netdb.h... (cached) yes
+checking if freeaddrinfo can be linked... yes
+checking if freeaddrinfo is prototyped... yes
+checking if freeaddrinfo is compilable... yes
+checking if freeaddrinfo usage allowed... yes
+checking if freeaddrinfo might be used... yes
+checking for sys/types.h... (cached) yes
+checking for sys/xattr.h... yes
+checking if fsetxattr can be linked... yes
+checking if fsetxattr is prototyped... yes
+checking if fsetxattr takes 5 args.... yes
+checking if fsetxattr is compilable... yes
+checking if fsetxattr usage allowed... yes
+checking if fsetxattr might be used... yes
+checking for sys/types.h... (cached) yes
+checking if getaddrinfo can be linked... yes
+checking if getaddrinfo is prototyped... yes
+checking if getaddrinfo is compilable... yes
+checking if getaddrinfo seems to work... yes
+checking if getaddrinfo usage allowed... yes
+checking if getaddrinfo might be used... yes
+checking if getaddrinfo is thread-safe... yes
+checking if gethostbyname_r can be linked... yes
+checking if gethostbyname_r is prototyped... yes
+checking if gethostbyname_r takes 3 args.... no
+checking if gethostbyname_r takes 5 args.... no
+checking if gethostbyname_r takes 6 args.... yes
+checking if gethostbyname_r is compilable... yes
+checking if gethostbyname_r usage allowed... yes
+checking if gethostbyname_r might be used... yes
+checking if gethostname can be linked... yes
+checking if gethostname is prototyped... yes
+checking if gethostname is compilable... yes
+checking for gethostname arg 2 data type... size_t
+checking if gethostname usage allowed... yes
+checking if gethostname might be used... yes
+checking for sys/types.h... (cached) yes
+checking for netinet/in.h... (cached) yes
+checking for ifaddrs.h... yes
+checking if getifaddrs can be linked... yes
+checking if getifaddrs is prototyped... yes
+checking if getifaddrs is compilable... yes
+checking if getifaddrs seems to work... yes
+checking if getifaddrs usage allowed... yes
+checking if getifaddrs might be used... yes
+checking if getpeername can be linked... yes
+checking if getpeername is prototyped... yes
+checking if getpeername is compilable... yes
+checking if getpeername usage allowed... yes
+checking if getpeername might be used... yes
+checking if getsockname can be linked... yes
+checking if getsockname is prototyped... yes
+checking if getsockname is compilable... yes
+checking if getsockname usage allowed... yes
+checking if getsockname might be used... yes
+checking for sys/types.h... (cached) yes
+checking if gmtime_r can be linked... yes
+checking if gmtime_r is prototyped... yes
+checking if gmtime_r is compilable... yes
+checking if gmtime_r seems to work... yes
+checking if gmtime_r usage allowed... yes
+checking if gmtime_r might be used... yes
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking for sys/ioctl.h... (cached) yes
+checking for stropts.h... no
+checking if ioctl can be linked... yes
+checking if ioctl is prototyped... yes
+checking if ioctl is compilable... yes
+checking if ioctl usage allowed... yes
+checking if ioctl might be used... yes
+checking if ioctl FIONBIO is compilable... yes
+checking if ioctl FIONBIO usage allowed... yes
+checking if ioctl FIONBIO might be used... yes
+checking if ioctl SIOCGIFADDR is compilable... yes
+checking if ioctl SIOCGIFADDR usage allowed... yes
+checking if ioctl SIOCGIFADDR might be used... yes
+checking if ioctlsocket can be linked... no
+checking if ioctlsocket might be used... no
+checking if IoctlSocket can be linked... no
+checking if IoctlSocket might be used... no
+checking if localtime_r can be linked... yes
+checking if localtime_r is prototyped... yes
+checking if localtime_r is compilable... yes
+checking if localtime_r seems to work... yes
+checking if localtime_r usage allowed... yes
+checking if localtime_r might be used... yes
+checking if memrchr can be linked... yes
+checking if memrchr is prototyped... yes
+checking if memrchr is compilable... yes
+checking if memrchr usage allowed... yes
+checking if memrchr might be used... yes
+checking for sys/types.h... (cached) yes
+checking if sigaction can be linked... yes
+checking if sigaction is prototyped... yes
+checking if sigaction is compilable... yes
+checking if sigaction usage allowed... yes
+checking if sigaction might be used... yes
+checking if siginterrupt can be linked... yes
+checking if siginterrupt is prototyped... yes
+checking if siginterrupt is compilable... yes
+checking if siginterrupt usage allowed... yes
+checking if siginterrupt might be used... yes
+checking if signal can be linked... yes
+checking if signal is prototyped... yes
+checking if signal is compilable... yes
+checking if signal usage allowed... yes
+checking if signal might be used... yes
+checking for sys/types.h... (cached) yes
+checking if sigsetjmp can be linked... no
+checking if sigsetjmp seems a macro... yes
+checking if sigsetjmp is compilable... yes
+checking if sigsetjmp usage allowed... yes
+checking if sigsetjmp might be used... yes
+checking if socket can be linked... yes
+checking if socket is prototyped... yes
+checking if socket is compilable... yes
+checking if socket usage allowed... yes
+checking if socket might be used... yes
+checking if socketpair can be linked... yes
+checking if socketpair is prototyped... yes
+checking if socketpair is compilable... yes
+checking if socketpair usage allowed... yes
+checking if socketpair might be used... yes
+checking if strerror_r can be linked... yes
+checking if strerror_r is prototyped... yes
+checking if strerror_r is compilable... yes
+checking if strerror_r is glibc like... yes
+checking if strerror_r seems to work... yes
+checking if strerror_r usage allowed... yes
+checking if strerror_r might be used... yes
+checking for accept4... yes
+checking for eventfd... yes
+checking for fnmatch... yes
+checking for geteuid... yes
+checking for getpass_r... no
+checking for getppid... yes
+checking for getpwuid... yes
+checking for getpwuid_r... yes
+checking for getrlimit... yes
+checking for mach_absolute_time... no
+checking for pipe... yes
+checking for poll... yes
+checking for sendmmsg... yes
+checking for sendmsg... yes
+checking for setlocale... yes
+checking for setrlimit... yes
+checking for utime... yes
+checking for utimes... yes
+checking for pipe2... yes
+checking for gettimeofday... yes
+checking for if_nametoindex... yes
+checking for realpath... yes
+checking for sched_yield... yes
+checking if strcasecmp can be linked... yes
+checking if strcasecmp is prototyped... yes
+checking if strcasecmp is compilable... yes
+checking if strcasecmp usage allowed... yes
+checking if strcasecmp might be used... yes
+checking if strcmpi can be linked... no
+checking if strcmpi might be used... no
+checking if stricmp can be linked... no
+checking if stricmp might be used... no
+checking if memset_s can be linked... no
+checking if memset_s might be used... no
+checking for memset_explicit... yes
+checking for fseeko... yes
+checking for clang -std=gnu23 options to detect undeclared functions... none needed
+checking for clang -std=gnu23 options to ignore future-version functions... none needed
+checking whether fseeko is declared... yes
+checking how to set a socket into non-blocking mode... fcntl O_NONBLOCK
+checking whether to enable the threaded resolver... yes
+checking for pthread.h... yes
+checking for pthread_create... yes
+checking for dirent.h... yes
+checking for opendir... yes
+checking convert -I options to -isystem... yes
+checking whether to enable curl_easy_setopt()/curl_easy_getinfo() type checking... yes
+checking whether to enable verbose strings... yes
+checking whether to enable SSPI support (Windows native builds only)... no
+checking whether to enable basic authentication method... yes
+checking whether to enable bearer authentication method... yes
+checking whether to enable digest authentication method... yes
+checking whether to enable kerberos authentication method... yes
+checking whether to enable negotiate authentication method... yes
+checking whether to enable aws-sigv4 methods... yes
+checking whether to enable HTTP Message Signatures (RFC 9421)... no
+checking whether to support NTLM... no
+checking whether to enable Unix domain sockets... auto
+checking for struct sockaddr_un.sun_path... yes
+checking whether to support cookies... yes
+checking whether to support socketpair... yes
+checking whether to support HTTP authentication... yes
+checking whether to support DoH... yes
+checking whether to support the MIME API... yes
+checking whether to support binding connections locally... yes
+checking whether to support the form API... yes
+checking whether to support date parsing... yes
+checking whether to support netrc parsing... yes
+checking whether to support progress-meter... yes
+checking whether to support the SHA-512/256 hash algorithm... yes
+checking whether to support DNS shuffling... yes
+checking whether to support curl_easy_option*... yes
+checking whether to support alt-svc... yes
+checking whether to support headers-api... yes
+checking whether to support HSTS... yes
+checking whether to enable HTTPS-RR support... no
+checking for SSL_set0_wbio... yes
+checking whether to support WebSockets... yes
+checking whether hiding of library internal symbols does actually happen... yes
+checking if this build supports HTTPS-proxy... yes
+checking that generated files are newer than configure... done
+configure: creating ./config.status
+config.status: creating Makefile
+config.status: creating docs/Makefile
+config.status: creating docs/examples/Makefile
+config.status: creating docs/libcurl/Makefile
+config.status: creating docs/libcurl/opts/Makefile
+config.status: creating docs/cmdline-opts/Makefile
+config.status: creating include/Makefile
+config.status: creating include/curl/Makefile
+config.status: creating src/Makefile
+config.status: creating lib/Makefile
+config.status: creating scripts/Makefile
+config.status: creating lib/libcurl.vers
+config.status: creating tests/Makefile
+config.status: creating tests/config
+config.status: creating tests/configurehelp.pm
+config.status: creating tests/certs/Makefile
+config.status: creating tests/data/Makefile
+config.status: creating tests/http/config.ini
+config.status: creating tests/http/Makefile
+config.status: creating tests/libtest/Makefile
+config.status: creating tests/perf/Makefile
+config.status: creating tests/server/Makefile
+config.status: creating tests/tunit/Makefile
+config.status: creating tests/unit/Makefile
+config.status: creating projects/Makefile
+config.status: creating projects/vms/Makefile
+config.status: creating curl-config
+config.status: creating libcurl.pc
+config.status: creating lib/curl_config.h
+config.status: executing depfiles commands
+config.status: executing libtool commands
+configure: WARNING: unrecognized options: --without-librtmp
+configure: Configured to build curl/libcurl:
+
+  Host setup:       x86_64-pc-linux-gnu
+  Install prefix:   /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install
+  Compiler:         clang -std=gnu23
+   CFLAGS:          -Qunused-arguments -Werror-implicit-function-declaration -O2
+   CFLAGS extras:   
+   CPPFLAGS:        -D_GNU_SOURCE -DWITH_GZFILEOP -isystem /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/include
+   LDFLAGS:         -L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib
+     curl-config:   -L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib
+   LIBS:            -lssl -lcrypto -lssl -lcrypto -lz
+
+  curl version:     8.22.0-DEV
+  SSL:              enabled (OpenSSL)
+  SSH:              no       (--with-{libssh,libssh2})
+  zlib:             enabled
+  brotli:           no       (--with-brotli)
+  zstd:             no       (--with-zstd)
+  GSS-API:          no       (--with-gssapi)
+  GSASL:            no       (--with-gsasl)
+  resolver:         POSIX threaded
+  IPv6:             enabled
+  Unix sockets:     enabled
+  IDN:              no       (--with-{libidn2,winidn})
+  Build docs:       enabled  (--disable-docs)
+  Build libcurl:    Shared=no, Static=yes
+  Built-in manual:  no       (--enable-manual)
+  --libcurl option: enabled  (--disable-libcurl-option)
+  Type checking:    enabled  (--disable-typecheck)
+  Verbose errors:   enabled  (--disable-verbose)
+  Code coverage:    disabled
+  SSPI:             no       (--enable-sspi)
+  CA native:        no
+  CA cert bundle:   /etc/ssl/certs/ca-certificates.crt
+  CA cert path:     no
+  CA cert embed:    no
+  CA fallback:      no
+  LDAP:             no       (--enable-ldap / --with-ldap-lib / --with-lber-lib)
+  LDAPS:            no       (--enable-ldaps)
+  IPFS/IPNS:        enabled
+  RTSP:             no       (--enable-rtsp)
+  PSL:              no       (--with-libpsl)
+  Alt-svc:          enabled  (--disable-alt-svc)
+  Headers API:      enabled  (--disable-headers-api)
+  HSTS:             enabled  (--disable-hsts)
+  HTTP1:            enabled  (internal)
+  HTTP2:            no       (--with-nghttp2)
+  HTTP3:            no       (--with-ngtcp2 --with-nghttp3, --with-quiche)
+  proxy-HTTP3:      no      (--enable-proxy-http3)
+  ECH:              no      (--enable-ech)
+  HTTPS RR:         no      (--enable-httpsrr)
+  SSLS-EXPORT:      no      (--enable-ssls-export)
+  Protocols:        http https ipfs ipns ws wss
+  Features:         alt-svc AsynchDNS HSTS HTTPS-proxy IPv6 Largefile libz SSL threadsafe UnixSockets
+
+CONFIGURE_EXIT=0
+== reconfigure adding --disable-ipfs ==
+EXACT configure line:
+  cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build && CC=clang PKG_CONFIG_PATH=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/pkgconfig /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/configure --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install --with-openssl=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install --disable-shared --enable-static --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher --disable-mqtt --disable-ldap --disable-file --disable-ftp --disable-smb --disable-ipfs --disable-manual --without-brotli --without-zstd --without-libpsl --without-nghttp2 --without-libidn2 --without-librtmp --without-libssh2 --without-libgsasl
+configure: WARNING: unrecognized options: --without-librtmp
+checking whether to enable maintainer-specific portions of Makefiles... no
+checking whether make supports nested variables... yes
+checking whether to enable curl debug features (for developing curl)... no
+checking whether to enable compiler optimizer... (assumed) yes
+checking whether to enable strict compiler warnings... no
+checking whether to enable compiler warnings as errors... no
+checking whether to enable hiding of library internal symbols... yes
+checking whether to enable c-ares for DNS lookups... no
+checking whether to disable dependency on -lrt... (assumed no)
+checking whether to enable HTTPSRR support... no
+checking whether to enable ECH support... no
+checking whether to enable SSL session export support... no
+checking whether to enable HTTP/3 proxy support... no
+checking for path separator... :
+checking for sed... /usr/bin/sed
+checking for grep... /usr/bin/grep
+checking that grep -E works... yes
+checking for ar... /usr/bin/ar
+checking for a BSD-compatible install... /usr/bin/install -c
+checking for gcc... clang
+checking whether the C compiler works... yes
+checking for C compiler default output file name... a.out
+checking for suffix of executables... 
+checking whether we are cross compiling... no
+checking for suffix of object files... o
+checking whether the compiler supports GNU C... yes
+checking whether clang accepts -g... yes
+checking for clang option to enable C23 features... -std=gnu23
+checking whether clang -std=gnu23 understands -c and -o together... yes
+checking how to run the C preprocessor... clang -std=gnu23 -E
+checking for stdio.h... yes
+checking for stdlib.h... yes
+checking for string.h... yes
+checking for inttypes.h... yes
+checking for stdint.h... yes
+checking for strings.h... yes
+checking for sys/stat.h... yes
+checking for sys/types.h... yes
+checking for unistd.h... yes
+checking for stdatomic.h... yes
+checking if _Atomic is available... yes
+checking whether sleep supports fractional seconds... yes
+checking filesystem timestamp resolution... 0.01
+checking whether build environment is sane... yes
+checking for a race-free mkdir -p... /usr/bin/mkdir -p
+checking for gawk... gawk
+checking whether make sets $(MAKE)... yes
+checking whether make supports the include directive... yes (GNU style)
+checking xargs -n works... yes
+checking whether UID '1000' is supported by ustar format... yes
+checking whether GID '1000' is supported by ustar format... yes
+checking how to create a ustar tar archive... gnutar
+checking dependency style of clang -std=gnu23... gcc3
+checking curl version... 8.22.0-DEV
+checking for perl... /usr/bin/perl
+checking for httpd... /usr/bin/httpd
+checking for apxs... no
+configure: apxs not in PATH, http tests disabled
+checking for danted... no
+checking for danted... no
+checking for sftp-server... no
+checking for sftp-server... no
+checking for nghttpx... no
+checking for caddy... no
+checking build system type... x86_64-pc-linux-gnu
+checking host system type... x86_64-pc-linux-gnu
+checking for egrep -e... /usr/bin/grep -E
+checking if OS is AIX (to define _ALL_SOURCE)... no
+checking if _THREAD_SAFE is already defined... no
+checking if _THREAD_SAFE is actually needed... no
+checking if _THREAD_SAFE is onwards defined... no
+checking if _REENTRANT is already defined... no
+checking if _REENTRANT is actually needed... no
+checking if _REENTRANT is onwards defined... no
+checking for clang -std=gnu23 option to support large files... none needed
+checking how to print strings... printf
+checking for a sed that does not truncate output... (cached) /usr/bin/sed
+checking for grep that handles long lines and -e... (cached) /usr/bin/grep
+checking for egrep... /usr/bin/grep -E
+checking for fgrep... /usr/bin/grep -F
+checking for ld used by clang -std=gnu23... /usr/bin/ld
+checking if the linker (/usr/bin/ld) is GNU ld... yes
+checking for BSD- or MS-compatible name lister (nm)... /usr/bin/nm -B
+checking the name lister (/usr/bin/nm -B) interface... BSD nm
+checking whether ln -s works... yes
+checking the maximum length of command line arguments... 1572864
+checking how to convert x86_64-pc-linux-gnu file names to x86_64-pc-linux-gnu format... func_convert_file_noop
+checking how to convert x86_64-pc-linux-gnu file names to toolchain format... func_convert_file_noop
+checking for /usr/bin/ld option to reload object files... -r
+checking for file... file
+checking for objdump... objdump
+checking how to recognize dependent libraries... pass_all
+checking for dlltool... no
+checking how to associate runtime and link libraries... printf %s\n
+checking for ranlib... ranlib
+checking for archiver @FILE support... @
+checking for strip... strip
+checking command to parse /usr/bin/nm -B output from clang -std=gnu23 object... ok
+checking for sysroot... no
+checking for a working dd... /usr/bin/dd
+checking how to truncate binary pipes... /usr/bin/dd bs=4096 count=1
+checking for mt... no
+checking if : is a manifest tool... no
+checking for dlfcn.h... yes
+checking which variant of shared library versioning to provide... (default) aix
+checking for objdir... .libs
+checking if clang -std=gnu23 supports -fno-rtti -fno-exceptions... yes
+checking for clang -std=gnu23 option to produce PIC... -fPIC -DPIC
+checking if clang -std=gnu23 PIC flag -fPIC -DPIC works... yes
+checking if clang -std=gnu23 static flag -static works... no
+checking if clang -std=gnu23 supports -c -o file.o... yes
+checking if clang -std=gnu23 supports -c -o file.o... (cached) yes
+checking whether the clang -std=gnu23 linker (/usr/bin/ld -m elf_x86_64) supports shared libraries... yes
+checking dynamic linker characteristics... GNU/Linux ld.so
+checking how to hardcode library paths into programs... immediate
+checking whether stripping libraries is possible... yes
+checking if libtool supports shared libraries... yes
+checking whether to build shared libraries... no
+checking whether to build static libraries... yes
+checking whether to build shared libraries with -version-info... yes
+checking whether to build shared libraries with -no-undefined... no
+checking whether to build shared libraries with -mimpure-text... no
+checking whether to build shared libraries with PIC... yes
+checking whether to build static libraries with PIC... yes
+checking whether to build shared libraries only... no
+checking whether to build static libraries only... yes
+checking for windres... no
+checking if cpp -P is needed... no
+checking if compiler is DEC/Compaq/HP C... no
+checking if compiler is HP-UX C... no
+checking if compiler is IBM C... no
+checking if compiler is Intel C... no
+checking if compiler is clang... yes
+checking if compiler is xlclang... no
+checking if compiler is Apple clang... no
+checking compiler version... clang '715' (raw: 'Homebrew clang version 23.1.2
+Found CUDA installation: /usr/local/cuda, version 13.0
+Found HIP installation: /usr, version 7.15.0' / '7.15')
+checking if compiler is GNU C... no
+checking if compiler is SunPro C... no
+checking if compiler is Tiny C... no
+checking for code coverage support... no
+checking whether build target is a native Windows one... no
+checking if compiler accepts some basic options... yes
+configure: compiler options added: -Qunused-arguments -Werror-implicit-function-declaration 
+checking if compiler optimizer assumed setting might be used... yes
+checking if compiler accepts optimizer enabling options... yes
+configure: compiler options added: -O2
+checking if compiler halts on compilation errors... yes
+checking if compiler halts on negative sized arrays... yes
+checking if compiler halts on function prototype mismatch... yes
+checking if compiler supports hiding library internal symbols... yes
+checking whether build target supports Win32 crypto API... no
+checking whether to build libcurl and curl in "unity" mode... no
+checking whether to support http... yes
+checking whether to support ftp... no
+checking whether to support file... no
+checking whether to support IPFS... no
+checking whether to support ldap... no
+checking whether to support ldaps... no
+checking whether to support rtsp... no
+checking whether to support proxies... yes
+checking whether to support dict... no
+checking whether to support telnet... no
+checking whether to support tftp... no
+checking whether to support pop3... no
+checking whether to support imap... no
+checking whether to support smb... no
+checking whether to support smtp... no
+checking whether to support gopher... no
+checking whether to support mqtt... no
+checking enable curl_global_init_mem debug build... no
+checking whether to provide built-in manual... no
+checking whether to build documentation... yes
+checking whether to enable generation of C code... yes
+checking whether to use libgcc... no
+checking whether to use libbacktrace... no
+checking if X/Open network library is required... no
+checking for gethostbyname... yes
+checking whether build target is a native Windows one... (cached) no
+checking for proto/bsdsocket.h... no
+checking for connect in libraries... yes
+checking for sys/types.h... (cached) yes
+checking for monotonic clock_gettime... yes
+checking for clock_gettime in libraries... no additional lib required
+checking if monotonic clock_gettime works... yes
+checking for sys/types.h... (cached) yes
+checking for raw monotonic clock_gettime... yes
+checking for pkg-config... /usr/bin/pkg-config
+checking for zlib options with pkg-config... found
+checking for zlib.h... yes
+configure: found both libz and libz.h header
+checking whether to enable IPv6... yes
+checking if struct sockaddr_in6 has sin6_scope_id member... yes
+checking if argv can be written to... yes
+checking if GSS-API support is requested... no
+checking whether to enable Windows native SSL/TLS... no
+checking whether to enable Amiga native SSL/TLS (AmiSSL 5)... no
+configure: PKG_CONFIG_LIBDIR is set to "/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/pkgconfig"
+checking for pkg-config... (cached) /usr/bin/pkg-config
+checking for openssl options with pkg-config... found
+configure: pkg-config: SSL_LIBS: "-lssl -lcrypto"
+configure: pkg-config: SSL_LDFLAGS: "-L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib"
+configure: pkg-config: SSL_CPPFLAGS: "-I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/include"
+checking for HMAC_Update in -lcrypto... yes
+checking for SSL_connect in -lssl... yes
+checking for openssl/rsa.h... yes
+checking for openssl/crypto.h... yes
+checking for openssl/pem.h... yes
+checking for openssl/ssl.h... yes
+checking for openssl/err.h... yes
+checking for AWS-LC... no
+checking for BoringSSL... no
+checking for LibreSSL... no
+checking for OpenSSL >= 3... checking for SSL_set_quic_use_legacy_codepoint... no
+checking for SSL_set_quic_tls_cbs... yes
+configure: OpenSSL with QUIC APIv2
+configure: Added /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib to CURL_LIBRARY_PATH
+checking for DES support in OpenSSL... yes
+checking whether to enable Apple OS native certificate validation... no
+configure: built with one SSL backend
+checking whether to use native CA store... no
+checking default CA cert bundle/path... configure: want unset CA /etc/ssl/certs/ca-certificates.crt
+/etc/ssl/certs/ca-certificates.crt
+checking whether to use OpenSSL's built-in CA store... no
+checking CA cert bundle path to embed in the curl tool... no
+checking whether versioned symbols are wanted... no
+checking whether to build with libidn2... no
+checking for sys/types.h... (cached) yes
+checking for sys/select.h... yes
+checking for sys/ioctl.h... yes
+checking for unistd.h... (cached) yes
+checking for arpa/inet.h... yes
+checking for net/if.h... yes
+checking for netinet/in.h... yes
+checking for netinet/in6.h... no
+checking for sys/un.h... yes
+checking for linux/tcp.h... yes
+checking for netinet/tcp.h... yes
+checking for netinet/udp.h... yes
+checking for netinet/ip.h... yes
+checking for netdb.h... yes
+checking for sys/sockio.h... no
+checking for sys/param.h... yes
+checking for termios.h... yes
+checking for termio.h... no
+checking for fcntl.h... yes
+checking for io.h... no
+checking for pwd.h... yes
+checking for utime.h... yes
+checking for sys/utime.h... no
+checking for sys/poll.h... yes
+checking for poll.h... yes
+checking for sys/resource.h... yes
+checking for libgen.h... yes
+checking for locale.h... yes
+checking for stdbool.h... yes
+checking for sys/filio.h... no
+checking for sys/eventfd.h... yes
+checking for an ANSI C-conforming const... yes
+checking for size_t... yes
+checking for sys/types.h... (cached) yes
+checking for struct timeval... yes
+checking runtime libs availability... fine
+checking size of size_t... 8
+checking size of long... 8
+checking size of int... 4
+checking size of time_t... 8
+checking size of off_t... 8
+checking size of curl_off_t... 8
+checking size of curl_socket_t... 4
+checking for ssize_t... yes
+checking for bool... yes
+checking for sa_family_t... yes
+checking for suseconds_t... yes
+checking if time_t is unsigned... no
+checking for struct sockaddr_storage... yes
+checking for sys/types.h... (cached) yes
+checking for recv... yes
+checking for sys/types.h... (cached) yes
+checking for send... yes
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking if alarm can be linked... yes
+checking if alarm is prototyped... yes
+checking if alarm is compilable... yes
+checking if alarm usage allowed... yes
+checking if alarm might be used... yes
+checking for sys/types.h... (cached) yes
+checking for strings.h... (cached) yes
+checking for sys/types.h... (cached) yes
+checking for libgen.h... (cached) yes
+checking if basename can be linked... yes
+checking if basename is prototyped... yes
+checking if basename is compilable... yes
+checking if basename usage allowed... yes
+checking if basename might be used... yes
+checking if closesocket can be linked... no
+checking if closesocket might be used... no
+checking for sys/types.h... (cached) yes
+checking if CloseSocket can be linked... no
+checking if CloseSocket might be used... no
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking for fcntl.h... (cached) yes
+checking if fcntl can be linked... yes
+checking if fcntl is prototyped... yes
+checking if fcntl is compilable... yes
+checking if fcntl usage allowed... yes
+checking if fcntl might be used... yes
+checking if fcntl O_NONBLOCK is compilable... yes
+checking if fcntl O_NONBLOCK usage allowed... yes
+checking if fcntl O_NONBLOCK might be used... yes
+checking whether build target is a native Windows one... (cached) no
+checking for sys/types.h... (cached) yes
+checking for netdb.h... (cached) yes
+checking if freeaddrinfo can be linked... yes
+checking if freeaddrinfo is prototyped... yes
+checking if freeaddrinfo is compilable... yes
+checking if freeaddrinfo usage allowed... yes
+checking if freeaddrinfo might be used... yes
+checking for sys/types.h... (cached) yes
+checking for sys/xattr.h... yes
+checking if fsetxattr can be linked... yes
+checking if fsetxattr is prototyped... yes
+checking if fsetxattr takes 5 args.... yes
+checking if fsetxattr is compilable... yes
+checking if fsetxattr usage allowed... yes
+checking if fsetxattr might be used... yes
+checking for sys/types.h... (cached) yes
+checking if getaddrinfo can be linked... yes
+checking if getaddrinfo is prototyped... yes
+checking if getaddrinfo is compilable... yes
+checking if getaddrinfo seems to work... yes
+checking if getaddrinfo usage allowed... yes
+checking if getaddrinfo might be used... yes
+checking if getaddrinfo is thread-safe... yes
+checking if gethostbyname_r can be linked... yes
+checking if gethostbyname_r is prototyped... yes
+checking if gethostbyname_r takes 3 args.... no
+checking if gethostbyname_r takes 5 args.... no
+checking if gethostbyname_r takes 6 args.... yes
+checking if gethostbyname_r is compilable... yes
+checking if gethostbyname_r usage allowed... yes
+checking if gethostbyname_r might be used... yes
+checking if gethostname can be linked... yes
+checking if gethostname is prototyped... yes
+checking if gethostname is compilable... yes
+checking for gethostname arg 2 data type... size_t
+checking if gethostname usage allowed... yes
+checking if gethostname might be used... yes
+checking for sys/types.h... (cached) yes
+checking for netinet/in.h... (cached) yes
+checking for ifaddrs.h... yes
+checking if getifaddrs can be linked... yes
+checking if getifaddrs is prototyped... yes
+checking if getifaddrs is compilable... yes
+checking if getifaddrs seems to work... yes
+checking if getifaddrs usage allowed... yes
+checking if getifaddrs might be used... yes
+checking if getpeername can be linked... yes
+checking if getpeername is prototyped... yes
+checking if getpeername is compilable... yes
+checking if getpeername usage allowed... yes
+checking if getpeername might be used... yes
+checking if getsockname can be linked... yes
+checking if getsockname is prototyped... yes
+checking if getsockname is compilable... yes
+checking if getsockname usage allowed... yes
+checking if getsockname might be used... yes
+checking for sys/types.h... (cached) yes
+checking if gmtime_r can be linked... yes
+checking if gmtime_r is prototyped... yes
+checking if gmtime_r is compilable... yes
+checking if gmtime_r seems to work... yes
+checking if gmtime_r usage allowed... yes
+checking if gmtime_r might be used... yes
+checking for sys/types.h... (cached) yes
+checking for unistd.h... (cached) yes
+checking for sys/ioctl.h... (cached) yes
+checking for stropts.h... no
+checking if ioctl can be linked... yes
+checking if ioctl is prototyped... yes
+checking if ioctl is compilable... yes
+checking if ioctl usage allowed... yes
+checking if ioctl might be used... yes
+checking if ioctl FIONBIO is compilable... yes
+checking if ioctl FIONBIO usage allowed... yes
+checking if ioctl FIONBIO might be used... yes
+checking if ioctl SIOCGIFADDR is compilable... yes
+checking if ioctl SIOCGIFADDR usage allowed... yes
+checking if ioctl SIOCGIFADDR might be used... yes
+checking if ioctlsocket can be linked... no
+checking if ioctlsocket might be used... no
+checking if IoctlSocket can be linked... no
+checking if IoctlSocket might be used... no
+checking if localtime_r can be linked... yes
+checking if localtime_r is prototyped... yes
+checking if localtime_r is compilable... yes
+checking if localtime_r seems to work... yes
+checking if localtime_r usage allowed... yes
+checking if localtime_r might be used... yes
+checking if memrchr can be linked... yes
+checking if memrchr is prototyped... yes
+checking if memrchr is compilable... yes
+checking if memrchr usage allowed... yes
+checking if memrchr might be used... yes
+checking for sys/types.h... (cached) yes
+checking if sigaction can be linked... yes
+checking if sigaction is prototyped... yes
+checking if sigaction is compilable... yes
+checking if sigaction usage allowed... yes
+checking if sigaction might be used... yes
+checking if siginterrupt can be linked... yes
+checking if siginterrupt is prototyped... yes
+checking if siginterrupt is compilable... yes
+checking if siginterrupt usage allowed... yes
+checking if siginterrupt might be used... yes
+checking if signal can be linked... yes
+checking if signal is prototyped... yes
+checking if signal is compilable... yes
+checking if signal usage allowed... yes
+checking if signal might be used... yes
+checking for sys/types.h... (cached) yes
+checking if sigsetjmp can be linked... no
+checking if sigsetjmp seems a macro... yes
+checking if sigsetjmp is compilable... yes
+checking if sigsetjmp usage allowed... yes
+checking if sigsetjmp might be used... yes
+checking if socket can be linked... yes
+checking if socket is prototyped... yes
+checking if socket is compilable... yes
+checking if socket usage allowed... yes
+checking if socket might be used... yes
+checking if socketpair can be linked... yes
+checking if socketpair is prototyped... yes
+checking if socketpair is compilable... yes
+checking if socketpair usage allowed... yes
+checking if socketpair might be used... yes
+checking if strerror_r can be linked... yes
+checking if strerror_r is prototyped... yes
+checking if strerror_r is compilable... yes
+checking if strerror_r is glibc like... yes
+checking if strerror_r seems to work... yes
+checking if strerror_r usage allowed... yes
+checking if strerror_r might be used... yes
+checking for accept4... yes
+checking for eventfd... yes
+checking for fnmatch... yes
+checking for geteuid... yes
+checking for getpass_r... no
+checking for getppid... yes
+checking for getpwuid... yes
+checking for getpwuid_r... yes
+checking for getrlimit... yes
+checking for mach_absolute_time... no
+checking for pipe... yes
+checking for poll... yes
+checking for sendmmsg... yes
+checking for sendmsg... yes
+checking for setlocale... yes
+checking for setrlimit... yes
+checking for utime... yes
+checking for utimes... yes
+checking for pipe2... yes
+checking for gettimeofday... yes
+checking for if_nametoindex... yes
+checking for realpath... yes
+checking for sched_yield... yes
+checking if strcasecmp can be linked... yes
+checking if strcasecmp is prototyped... yes
+checking if strcasecmp is compilable... yes
+checking if strcasecmp usage allowed... yes
+checking if strcasecmp might be used... yes
+checking if strcmpi can be linked... no
+checking if strcmpi might be used... no
+checking if stricmp can be linked... no
+checking if stricmp might be used... no
+checking if memset_s can be linked... no
+checking if memset_s might be used... no
+checking for memset_explicit... yes
+checking for fseeko... yes
+checking for clang -std=gnu23 options to detect undeclared functions... none needed
+checking for clang -std=gnu23 options to ignore future-version functions... none needed
+checking whether fseeko is declared... yes
+checking how to set a socket into non-blocking mode... fcntl O_NONBLOCK
+checking whether to enable the threaded resolver... yes
+checking for pthread.h... yes
+checking for pthread_create... yes
+checking for dirent.h... yes
+checking for opendir... yes
+checking convert -I options to -isystem... yes
+checking whether to enable curl_easy_setopt()/curl_easy_getinfo() type checking... yes
+checking whether to enable verbose strings... yes
+checking whether to enable SSPI support (Windows native builds only)... no
+checking whether to enable basic authentication method... yes
+checking whether to enable bearer authentication method... yes
+checking whether to enable digest authentication method... yes
+checking whether to enable kerberos authentication method... yes
+checking whether to enable negotiate authentication method... yes
+checking whether to enable aws-sigv4 methods... yes
+checking whether to enable HTTP Message Signatures (RFC 9421)... no
+checking whether to support NTLM... no
+checking whether to enable Unix domain sockets... auto
+checking for struct sockaddr_un.sun_path... yes
+checking whether to support cookies... yes
+checking whether to support socketpair... yes
+checking whether to support HTTP authentication... yes
+checking whether to support DoH... yes
+checking whether to support the MIME API... yes
+checking whether to support binding connections locally... yes
+checking whether to support the form API... yes
+checking whether to support date parsing... yes
+checking whether to support netrc parsing... yes
+checking whether to support progress-meter... yes
+checking whether to support the SHA-512/256 hash algorithm... yes
+checking whether to support DNS shuffling... yes
+checking whether to support curl_easy_option*... yes
+checking whether to support alt-svc... yes
+checking whether to support headers-api... yes
+checking whether to support HSTS... yes
+checking whether to enable HTTPS-RR support... no
+checking for SSL_set0_wbio... yes
+checking whether to support WebSockets... yes
+checking whether hiding of library internal symbols does actually happen... yes
+checking if this build supports HTTPS-proxy... yes
+checking that generated files are newer than configure... done
+configure: creating ./config.status
+config.status: creating Makefile
+config.status: creating docs/Makefile
+config.status: creating docs/examples/Makefile
+config.status: creating docs/libcurl/Makefile
+config.status: creating docs/libcurl/opts/Makefile
+config.status: creating docs/cmdline-opts/Makefile
+config.status: creating include/Makefile
+config.status: creating include/curl/Makefile
+config.status: creating src/Makefile
+config.status: creating lib/Makefile
+config.status: creating scripts/Makefile
+config.status: creating lib/libcurl.vers
+config.status: creating tests/Makefile
+config.status: creating tests/config
+config.status: creating tests/configurehelp.pm
+config.status: creating tests/certs/Makefile
+config.status: creating tests/data/Makefile
+config.status: creating tests/http/config.ini
+config.status: creating tests/http/Makefile
+config.status: creating tests/libtest/Makefile
+config.status: creating tests/perf/Makefile
+config.status: creating tests/server/Makefile
+config.status: creating tests/tunit/Makefile
+config.status: creating tests/unit/Makefile
+config.status: creating projects/Makefile
+config.status: creating projects/vms/Makefile
+config.status: creating curl-config
+config.status: creating libcurl.pc
+config.status: creating lib/curl_config.h
+config.status: executing depfiles commands
+config.status: executing libtool commands
+configure: WARNING: unrecognized options: --without-librtmp
+configure: Configured to build curl/libcurl:
+
+  Host setup:       x86_64-pc-linux-gnu
+  Install prefix:   /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install
+  Compiler:         clang -std=gnu23
+   CFLAGS:          -Qunused-arguments -Werror-implicit-function-declaration -O2
+   CFLAGS extras:   
+   CPPFLAGS:        -D_GNU_SOURCE -DWITH_GZFILEOP -isystem /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/include
+   LDFLAGS:         -L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib
+     curl-config:   -L/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib
+   LIBS:            -lssl -lcrypto -lssl -lcrypto -lz
+
+  curl version:     8.22.0-DEV
+  SSL:              enabled (OpenSSL)
+  SSH:              no       (--with-{libssh,libssh2})
+  zlib:             enabled
+  brotli:           no       (--with-brotli)
+  zstd:             no       (--with-zstd)
+  GSS-API:          no       (--with-gssapi)
+  GSASL:            no       (--with-gsasl)
+  resolver:         POSIX threaded
+  IPv6:             enabled
+  Unix sockets:     enabled
+  IDN:              no       (--with-{libidn2,winidn})
+  Build docs:       enabled  (--disable-docs)
+  Build libcurl:    Shared=no, Static=yes
+  Built-in manual:  no       (--enable-manual)
+  --libcurl option: enabled  (--disable-libcurl-option)
+  Type checking:    enabled  (--disable-typecheck)
+  Verbose errors:   enabled  (--disable-verbose)
+  Code coverage:    disabled
+  SSPI:             no       (--enable-sspi)
+  CA native:        no
+  CA cert bundle:   /etc/ssl/certs/ca-certificates.crt
+  CA cert path:     no
+  CA cert embed:    no
+  CA fallback:      no
+  LDAP:             no       (--enable-ldap / --with-ldap-lib / --with-lber-lib)
+  LDAPS:            no       (--enable-ldaps)
+  IPFS/IPNS:        no       (--enable-ipfs)
+  RTSP:             no       (--enable-rtsp)
+  PSL:              no       (--with-libpsl)
+  Alt-svc:          enabled  (--disable-alt-svc)
+  Headers API:      enabled  (--disable-headers-api)
+  HSTS:             enabled  (--disable-hsts)
+  HTTP1:            enabled  (internal)
+  HTTP2:            no       (--with-nghttp2)
+  HTTP3:            no       (--with-ngtcp2 --with-nghttp3, --with-quiche)
+  proxy-HTTP3:      no      (--enable-proxy-http3)
+  ECH:              no      (--enable-ech)
+  HTTPS RR:         no      (--enable-httpsrr)
+  SSLS-EXPORT:      no      (--enable-ssls-export)
+  Protocols:        http https ws wss
+  Features:         alt-svc AsynchDNS HSTS HTTPS-proxy IPv6 Largefile libz SSL threadsafe UnixSockets
+
+CONFIGURE_EXIT=0
+Making all in lib
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+make  all-am
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+  CC       libcurl_la-altsvc.lo
+  CC       libcurl_la-amigaos.lo
+  CC       libcurl_la-bufq.lo
+  CC       libcurl_la-bufref.lo
+  CC       libcurl_la-api.lo
+  CC       libcurl_la-cf-h1-proxy.lo
+  CC       libcurl_la-cf-h2-proxy.lo
+  CC       libcurl_la-cf-haproxy.lo
+  CC       libcurl_la-cf-https-connect.lo
+  CC       libcurl_la-cf-ip-happy.lo
+  CC       libcurl_la-cf-recvbuf.lo
+  CC       libcurl_la-cf-setup.lo
+  CC       libcurl_la-cf-socket.lo
+  CC       libcurl_la-cfilters.lo
+  CC       libcurl_la-conncache.lo
+  CC       libcurl_la-connect.lo
+  CC       libcurl_la-content_encoding.lo
+  CC       libcurl_la-cookie.lo
+  CC       libcurl_la-creds.lo
+  CC       libcurl_la-cshutdn.lo
+  CC       libcurl_la-curl_addrinfo.lo
+  CC       libcurl_la-curl_endian.lo
+  CC       libcurl_la-curl_fnmatch.lo
+  CC       libcurl_la-curl_fopen.lo
+  CC       libcurl_la-curl_get_line.lo
+  CC       libcurl_la-curl_gethostname.lo
+  CC       libcurl_la-curl_gssapi.lo
+  CC       libcurl_la-curl_memrchr.lo
+  CC       libcurl_la-curl_ntlm_core.lo
+  CC       libcurl_la-curl_range.lo
+  CC       libcurl_la-curl_sasl.lo
+  CC       libcurl_la-curl_sha512_256.lo
+  CC       libcurl_la-curl_share.lo
+  CC       libcurl_la-curl_sspi.lo
+  CC       libcurl_la-curl_threads.lo
+  CC       libcurl_la-curl_trc.lo
+  CC       libcurl_la-cw-out.lo
+  CC       libcurl_la-cw-pause.lo
+  CC       libcurl_la-dict.lo
+  CC       libcurl_la-dynhds.lo
+  CC       libcurl_la-easy.lo
+  CC       libcurl_la-easygetopt.lo
+  CC       libcurl_la-easyoptions.lo
+  CC       libcurl_la-escape.lo
+  CC       libcurl_la-fake_addrinfo.lo
+  CC       libcurl_la-file.lo
+  CC       libcurl_la-fileinfo.lo
+  CC       libcurl_la-formdata.lo
+  CC       libcurl_la-ftp.lo
+  CC       libcurl_la-ftplistparser.lo
+  CC       libcurl_la-getenv.lo
+  CC       libcurl_la-getinfo.lo
+  CC       libcurl_la-gopher.lo
+  CC       libcurl_la-hash.lo
+  CC       libcurl_la-headers.lo
+  CC       libcurl_la-hmac.lo
+  CC       libcurl_la-hsts.lo
+  CC       libcurl_la-http.lo
+  CC       libcurl_la-http1.lo
+  CC       libcurl_la-http2.lo
+  CC       libcurl_la-http_aws_sigv4.lo
+  CC       libcurl_la-http_httpsig.lo
+  CC       libcurl_la-curl_ed25519.lo
+  CC       libcurl_la-http_chunks.lo
+  CC       libcurl_la-http_digest.lo
+  CC       libcurl_la-http_negotiate.lo
+  CC       libcurl_la-http_ntlm.lo
+  CC       libcurl_la-http_proxy.lo
+  CC       libcurl_la-idn.lo
+  CC       libcurl_la-if2ip.lo
+  CC       libcurl_la-imap.lo
+  CC       libcurl_la-ldap.lo
+  CC       libcurl_la-llist.lo
+  CC       libcurl_la-macos.lo
+  CC       libcurl_la-md4.lo
+  CC       libcurl_la-md5.lo
+  CC       libcurl_la-memdebug.lo
+  CC       libcurl_la-mime.lo
+  CC       libcurl_la-mprintf.lo
+  CC       libcurl_la-mqtt.lo
+  CC       libcurl_la-multi.lo
+  CC       libcurl_la-multi_ev.lo
+  CC       libcurl_la-multi_ntfy.lo
+  CC       libcurl_la-netrc.lo
+  CC       libcurl_la-openldap.lo
+  CC       libcurl_la-parsedate.lo
+  CC       libcurl_la-peer.lo
+  CC       libcurl_la-pingpong.lo
+  CC       libcurl_la-pop3.lo
+  CC       libcurl_la-progress.lo
+  CC       libcurl_la-protocol.lo
+  CC       libcurl_la-proxy.lo
+  CC       libcurl_la-psl.lo
+  CC       libcurl_la-rand.lo
+  CC       libcurl_la-request.lo
+  CC       libcurl_la-ratelimit.lo
+  CC       libcurl_la-rtsp.lo
+  CC       libcurl_la-select.lo
+  CC       libcurl_la-sendf.lo
+  CC       libcurl_la-setopt.lo
+  CC       libcurl_la-sha256.lo
+  CC       libcurl_la-slist.lo
+  CC       libcurl_la-smb.lo
+  CC       libcurl_la-smtp.lo
+  CC       libcurl_la-socketpair.lo
+  CC       libcurl_la-socks.lo
+  CC       libcurl_la-socks_gssapi.lo
+  CC       libcurl_la-socks_sspi.lo
+  CC       libcurl_la-splay.lo
+  CC       libcurl_la-strcase.lo
+  CC       libcurl_la-strequal.lo
+  CC       libcurl_la-strerror.lo
+  CC       libcurl_la-telnet.lo
+  CC       libcurl_la-system_win32.lo
+  CC       libcurl_la-tftp.lo
+  CC       libcurl_la-thrdpool.lo
+  CC       libcurl_la-thrdqueue.lo
+  CC       libcurl_la-transfer.lo
+  CC       libcurl_la-uint-bset.lo
+  CC       libcurl_la-uint-hash.lo
+  CC       libcurl_la-uint-hashset.lo
+  CC       libcurl_la-uint-spbset.lo
+  CC       libcurl_la-uint-table.lo
+  CC       libcurl_la-url.lo
+  CC       libcurl_la-urlapi.lo
+  CC       libcurl_la-version.lo
+  CC       libcurl_la-ws.lo
+  CC       libcurlu_la-altsvc.lo
+  CC       libcurlu_la-api.lo
+  CC       libcurlu_la-amigaos.lo
+  CC       libcurlu_la-bufq.lo
+  CC       libcurlu_la-bufref.lo
+  CC       libcurlu_la-cf-h1-proxy.lo
+  CC       libcurlu_la-cf-h2-proxy.lo
+  CC       libcurlu_la-cf-haproxy.lo
+  CC       libcurlu_la-cf-https-connect.lo
+  CC       libcurlu_la-cf-ip-happy.lo
+  CC       libcurlu_la-cf-setup.lo
+  CC       libcurlu_la-cf-recvbuf.lo
+  CC       libcurlu_la-cf-socket.lo
+  CC       libcurlu_la-cfilters.lo
+  CC       libcurlu_la-conncache.lo
+  CC       libcurlu_la-connect.lo
+  CC       libcurlu_la-content_encoding.lo
+  CC       libcurlu_la-cookie.lo
+  CC       libcurlu_la-creds.lo
+  CC       libcurlu_la-cshutdn.lo
+  CC       libcurlu_la-curl_addrinfo.lo
+  CC       libcurlu_la-curl_endian.lo
+  CC       libcurlu_la-curl_fnmatch.lo
+  CC       libcurlu_la-curl_fopen.lo
+  CC       libcurlu_la-curl_get_line.lo
+  CC       libcurlu_la-curl_gethostname.lo
+  CC       libcurlu_la-curl_gssapi.lo
+  CC       libcurlu_la-curl_memrchr.lo
+  CC       libcurlu_la-curl_ntlm_core.lo
+  CC       libcurlu_la-curl_range.lo
+  CC       libcurlu_la-curl_sasl.lo
+  CC       libcurlu_la-curl_sha512_256.lo
+  CC       libcurlu_la-curl_share.lo
+  CC       libcurlu_la-curl_sspi.lo
+  CC       libcurlu_la-curl_threads.lo
+  CC       libcurlu_la-curl_trc.lo
+  CC       libcurlu_la-cw-out.lo
+  CC       libcurlu_la-cw-pause.lo
+  CC       libcurlu_la-dict.lo
+  CC       libcurlu_la-easy.lo
+  CC       libcurlu_la-dynhds.lo
+  CC       libcurlu_la-easygetopt.lo
+  CC       libcurlu_la-easyoptions.lo
+  CC       libcurlu_la-escape.lo
+  CC       libcurlu_la-fake_addrinfo.lo
+  CC       libcurlu_la-file.lo
+  CC       libcurlu_la-fileinfo.lo
+  CC       libcurlu_la-formdata.lo
+  CC       libcurlu_la-ftp.lo
+  CC       libcurlu_la-ftplistparser.lo
+  CC       libcurlu_la-getenv.lo
+  CC       libcurlu_la-getinfo.lo
+  CC       libcurlu_la-gopher.lo
+  CC       libcurlu_la-hash.lo
+  CC       libcurlu_la-headers.lo
+  CC       libcurlu_la-hsts.lo
+  CC       libcurlu_la-hmac.lo
+  CC       libcurlu_la-http.lo
+  CC       libcurlu_la-http2.lo
+  CC       libcurlu_la-http1.lo
+  CC       libcurlu_la-http_aws_sigv4.lo
+  CC       libcurlu_la-http_httpsig.lo
+  CC       libcurlu_la-curl_ed25519.lo
+  CC       libcurlu_la-http_chunks.lo
+  CC       libcurlu_la-http_digest.lo
+  CC       libcurlu_la-http_negotiate.lo
+  CC       libcurlu_la-http_ntlm.lo
+  CC       libcurlu_la-http_proxy.lo
+  CC       libcurlu_la-idn.lo
+  CC       libcurlu_la-if2ip.lo
+  CC       libcurlu_la-imap.lo
+  CC       libcurlu_la-ldap.lo
+  CC       libcurlu_la-llist.lo
+  CC       libcurlu_la-macos.lo
+  CC       libcurlu_la-md4.lo
+  CC       libcurlu_la-md5.lo
+  CC       libcurlu_la-memdebug.lo
+  CC       libcurlu_la-mime.lo
+  CC       libcurlu_la-mprintf.lo
+  CC       libcurlu_la-mqtt.lo
+  CC       libcurlu_la-multi_ev.lo
+  CC       libcurlu_la-multi.lo
+  CC       libcurlu_la-multi_ntfy.lo
+  CC       libcurlu_la-netrc.lo
+  CC       libcurlu_la-openldap.lo
+  CC       libcurlu_la-parsedate.lo
+  CC       libcurlu_la-peer.lo
+  CC       libcurlu_la-pingpong.lo
+  CC       libcurlu_la-pop3.lo
+  CC       libcurlu_la-progress.lo
+  CC       libcurlu_la-protocol.lo
+  CC       libcurlu_la-proxy.lo
+  CC       libcurlu_la-psl.lo
+  CC       libcurlu_la-rand.lo
+  CC       libcurlu_la-ratelimit.lo
+  CC       libcurlu_la-request.lo
+  CC       libcurlu_la-rtsp.lo
+  CC       libcurlu_la-select.lo
+  CC       libcurlu_la-sendf.lo
+  CC       libcurlu_la-setopt.lo
+  CC       libcurlu_la-sha256.lo
+  CC       libcurlu_la-slist.lo
+  CC       libcurlu_la-smtp.lo
+  CC       libcurlu_la-smb.lo
+  CC       libcurlu_la-socketpair.lo
+  CC       libcurlu_la-socks.lo
+  CC       libcurlu_la-socks_gssapi.lo
+  CC       libcurlu_la-socks_sspi.lo
+  CC       libcurlu_la-splay.lo
+  CC       libcurlu_la-strcase.lo
+  CC       libcurlu_la-strequal.lo
+  CC       libcurlu_la-strerror.lo
+  CC       libcurlu_la-system_win32.lo
+  CC       libcurlu_la-telnet.lo
+  CC       libcurlu_la-tftp.lo
+  CC       libcurlu_la-thrdpool.lo
+  CC       libcurlu_la-thrdqueue.lo
+  CC       libcurlu_la-transfer.lo
+  CC       libcurlu_la-uint-bset.lo
+  CC       libcurlu_la-uint-hash.lo
+  CC       libcurlu_la-uint-hashset.lo
+  CC       libcurlu_la-uint-spbset.lo
+  CC       libcurlu_la-uint-table.lo
+  CC       libcurlu_la-url.lo
+  CC       libcurlu_la-urlapi.lo
+  CC       libcurlu_la-version.lo
+  CC       libcurlu_la-ws.lo
+  CC       vauth/libcurlu_la-cleartext.lo
+  CC       vauth/libcurlu_la-cram.lo
+  CC       vauth/libcurlu_la-digest.lo
+  CC       vauth/libcurlu_la-digest_sspi.lo
+  CC       vauth/libcurlu_la-gsasl.lo
+  CC       vauth/libcurlu_la-krb5_gssapi.lo
+  CC       vauth/libcurlu_la-krb5_sspi.lo
+  CC       vauth/libcurlu_la-ntlm.lo
+  CC       vauth/libcurlu_la-ntlm_sspi.lo
+  CC       vauth/libcurlu_la-oauth2.lo
+  CC       vauth/libcurlu_la-spnego_gssapi.lo
+  CC       vauth/libcurlu_la-spnego_sspi.lo
+  CC       vauth/libcurlu_la-vauth.lo
+  CC       vdns/libcurlu_la-asyn-ares.lo
+  CC       vdns/libcurlu_la-asyn-base.lo
+  CC       vdns/libcurlu_la-asyn-thrdd.lo
+  CC       vdns/libcurlu_la-cf-dns.lo
+  CC       vdns/libcurlu_la-dnscache.lo
+  CC       vdns/libcurlu_la-doh.lo
+  CC       vdns/libcurlu_la-hostip.lo
+  CC       vdns/libcurlu_la-hostip4.lo
+  CC       vdns/libcurlu_la-hostip6.lo
+  CC       vdns/libcurlu_la-httpsrr.lo
+  CC       vtls/libcurlu_la-apple.lo
+  CC       vtls/libcurlu_la-cipher_suite.lo
+  CC       vtls/libcurlu_la-gtls.lo
+  CC       vtls/libcurlu_la-hostcheck.lo
+  CC       vtls/libcurlu_la-keylog.lo
+  CC       vtls/libcurlu_la-openssl.lo
+  CC       vtls/libcurlu_la-mbedtls.lo
+  CC       vtls/libcurlu_la-rustls.lo
+  CC       vtls/libcurlu_la-schannel.lo
+  CC       vtls/libcurlu_la-schannel_verify.lo
+  CC       vtls/libcurlu_la-vtls.lo
+  CC       vtls/libcurlu_la-vtls_config.lo
+  CC       vtls/libcurlu_la-vtls_scache.lo
+  CC       vtls/libcurlu_la-vtls_spack.lo
+  CC       vtls/libcurlu_la-wolfssl.lo
+  CC       vtls/libcurlu_la-x509asn1.lo
+  CC       vquic/libcurlu_la-cf-capsule.lo
+  CC       vquic/libcurlu_la-capsule.lo
+  CC       vquic/libcurlu_la-cf-ngtcp2.lo
+  CC       vquic/libcurlu_la-cf-ngtcp2-cmn.lo
+  CC       vquic/libcurlu_la-cf-ngtcp2-proxy.lo
+  CC       vquic/libcurlu_la-cf-quiche.lo
+  CC       vquic/libcurlu_la-vquic.lo
+  CC       vquic/libcurlu_la-vquic-tls.lo
+  CC       vssh/libcurlu_la-libssh2.lo
+  CC       vssh/libcurlu_la-libssh.lo
+  CC       vssh/libcurlu_la-vssh.lo
+  CC       curlx/libcurlu_la-base64.lo
+  CC       curlx/libcurlu_la-basename.lo
+  CC       curlx/libcurlu_la-dynbuf.lo
+  CC       curlx/libcurlu_la-fopen.lo
+  CC       curlx/libcurlu_la-inet_ntop.lo
+  CC       curlx/libcurlu_la-multibyte.lo
+  CC       curlx/libcurlu_la-inet_pton.lo
+  CC       curlx/libcurlu_la-nonblock.lo
+  CC       curlx/libcurlu_la-snprintf.lo
+  CC       curlx/libcurlu_la-strcopy.lo
+  CC       curlx/libcurlu_la-strdup.lo
+  CC       curlx/libcurlu_la-strerr.lo
+  CC       curlx/libcurlu_la-strparse.lo
+  CC       curlx/libcurlu_la-timediff.lo
+  CC       curlx/libcurlu_la-timeval.lo
+  CC       curlx/libcurlu_la-version_win32.lo
+  CC       curlx/libcurlu_la-wait.lo
+  CC       curlx/libcurlu_la-warnless.lo
+  CC       curlx/libcurlu_la-winapi.lo
+  CC       vauth/libcurl_la-cleartext.lo
+  CC       vauth/libcurl_la-cram.lo
+  CC       vauth/libcurl_la-digest.lo
+  CC       vauth/libcurl_la-digest_sspi.lo
+  CC       vauth/libcurl_la-gsasl.lo
+  CC       vauth/libcurl_la-krb5_gssapi.lo
+  CC       vauth/libcurl_la-krb5_sspi.lo
+  CC       vauth/libcurl_la-ntlm.lo
+  CC       vauth/libcurl_la-ntlm_sspi.lo
+  CC       vauth/libcurl_la-oauth2.lo
+  CC       vauth/libcurl_la-spnego_gssapi.lo
+  CC       vauth/libcurl_la-spnego_sspi.lo
+  CC       vauth/libcurl_la-vauth.lo
+  CC       vdns/libcurl_la-asyn-ares.lo
+  CC       vdns/libcurl_la-asyn-base.lo
+  CC       vdns/libcurl_la-asyn-thrdd.lo
+  CC       vdns/libcurl_la-cf-dns.lo
+  CC       vdns/libcurl_la-doh.lo
+  CC       vdns/libcurl_la-dnscache.lo
+  CC       vdns/libcurl_la-hostip.lo
+  CC       vdns/libcurl_la-hostip4.lo
+  CC       vdns/libcurl_la-hostip6.lo
+  CC       vdns/libcurl_la-httpsrr.lo
+  CC       vtls/libcurl_la-apple.lo
+  CC       vtls/libcurl_la-cipher_suite.lo
+  CC       vtls/libcurl_la-gtls.lo
+  CC       vtls/libcurl_la-hostcheck.lo
+  CC       vtls/libcurl_la-keylog.lo
+  CC       vtls/libcurl_la-mbedtls.lo
+  CC       vtls/libcurl_la-openssl.lo
+  CC       vtls/libcurl_la-rustls.lo
+  CC       vtls/libcurl_la-schannel.lo
+  CC       vtls/libcurl_la-schannel_verify.lo
+  CC       vtls/libcurl_la-vtls.lo
+  CC       vtls/libcurl_la-vtls_config.lo
+  CC       vtls/libcurl_la-vtls_scache.lo
+  CC       vtls/libcurl_la-vtls_spack.lo
+  CC       vtls/libcurl_la-wolfssl.lo
+  CC       vtls/libcurl_la-x509asn1.lo
+  CC       vquic/libcurl_la-capsule.lo
+  CC       vquic/libcurl_la-cf-capsule.lo
+  CC       vquic/libcurl_la-cf-ngtcp2.lo
+  CC       vquic/libcurl_la-cf-ngtcp2-cmn.lo
+  CC       vquic/libcurl_la-cf-ngtcp2-proxy.lo
+  CC       vquic/libcurl_la-vquic.lo
+  CC       vquic/libcurl_la-cf-quiche.lo
+  CC       vquic/libcurl_la-vquic-tls.lo
+  CC       vssh/libcurl_la-libssh2.lo
+  CC       vssh/libcurl_la-libssh.lo
+  CC       vssh/libcurl_la-vssh.lo
+  CC       curlx/libcurl_la-base64.lo
+  CC       curlx/libcurl_la-basename.lo
+  CC       curlx/libcurl_la-dynbuf.lo
+  CC       curlx/libcurl_la-fopen.lo
+  CC       curlx/libcurl_la-inet_ntop.lo
+  CC       curlx/libcurl_la-inet_pton.lo
+  CC       curlx/libcurl_la-multibyte.lo
+  CC       curlx/libcurl_la-nonblock.lo
+  CC       curlx/libcurl_la-snprintf.lo
+  CC       curlx/libcurl_la-strcopy.lo
+  CC       curlx/libcurl_la-strdup.lo
+  CC       curlx/libcurl_la-strerr.lo
+  CC       curlx/libcurl_la-strparse.lo
+  CC       curlx/libcurl_la-timediff.lo
+  CC       curlx/libcurl_la-timeval.lo
+  CC       curlx/libcurl_la-version_win32.lo
+  CC       curlx/libcurl_la-wait.lo
+  CC       curlx/libcurl_la-warnless.lo
+  CC       curlx/libcurl_la-winapi.lo
+  CCLD     libcurlu.la
+  CCLD     libcurl.la
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+Making all in docs
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+  RENDER  mk-ca-bundle.1
+  RENDER  curl-config.1
+Making all in .
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+  RENDER  wcurl.1
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making all in cmdline-opts
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+  GENERATE curl.1
+  GENERATE curl.txt
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+Making all in libcurl
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+Making all in opts
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+  RENDER  CURLINFO_ACTIVESOCKET.3
+  RENDER  CURLINFO_APPCONNECT_TIME.3
+  RENDER  CURLINFO_APPCONNECT_TIME_T.3
+  RENDER  CURLINFO_CAINFO.3
+  RENDER  CURLINFO_CAPATH.3
+  RENDER  CURLINFO_CERTINFO.3
+  RENDER  CURLINFO_CONDITION_UNMET.3
+  RENDER  CURLINFO_CONNECT_TIME.3
+  RENDER  CURLINFO_CONN_ID.3
+  RENDER  CURLINFO_CONNECT_TIME_T.3
+  RENDER  CURLINFO_CONTENT_LENGTH_DOWNLOAD.3
+  RENDER  CURLINFO_CONTENT_LENGTH_DOWNLOAD_T.3
+  RENDER  CURLINFO_CONTENT_LENGTH_UPLOAD.3
+  RENDER  CURLINFO_CONTENT_LENGTH_UPLOAD_T.3
+  RENDER  CURLINFO_CONTENT_TYPE.3
+  RENDER  CURLINFO_COOKIELIST.3
+  RENDER  CURLINFO_EARLYDATA_SENT_T.3
+  RENDER  CURLINFO_EFFECTIVE_METHOD.3
+  RENDER  CURLINFO_EFFECTIVE_URL.3
+  RENDER  CURLINFO_FILETIME.3
+  RENDER  CURLINFO_FILETIME_T.3
+  RENDER  CURLINFO_FTP_ENTRY_PATH.3
+  RENDER  CURLINFO_HEADER_SIZE.3
+  RENDER  CURLINFO_HTTP_CONNECTCODE.3
+  RENDER  CURLINFO_HTTP_VERSION.3
+  RENDER  CURLINFO_HTTPAUTH_AVAIL.3
+  RENDER  CURLINFO_HTTPAUTH_USED.3
+  RENDER  CURLINFO_LASTSOCKET.3
+  RENDER  CURLINFO_LOCAL_IP.3
+  RENDER  CURLINFO_LOCAL_PORT.3
+  RENDER  CURLINFO_NAMELOOKUP_TIME.3
+  RENDER  CURLINFO_NAMELOOKUP_TIME_T.3
+  RENDER  CURLINFO_NUM_CONNECTS.3
+  RENDER  CURLINFO_OS_ERRNO.3
+  RENDER  CURLINFO_PRETRANSFER_TIME.3
+  RENDER  CURLINFO_PRETRANSFER_TIME_T.3
+  RENDER  CURLINFO_POSTTRANSFER_TIME_T.3
+  RENDER  CURLINFO_PRIMARY_IP.3
+  RENDER  CURLINFO_PRIMARY_PORT.3
+  RENDER  CURLINFO_PRIVATE.3
+  RENDER  CURLINFO_PROTOCOL.3
+  RENDER  CURLINFO_PROXY_SSL_VERIFYRESULT.3
+  RENDER  CURLINFO_PROXY_ERROR.3
+  RENDER  CURLINFO_PROXYAUTH_AVAIL.3
+  RENDER  CURLINFO_PROXYAUTH_USED.3
+  RENDER  CURLINFO_QUEUE_TIME_T.3
+  RENDER  CURLINFO_REDIRECT_COUNT.3
+  RENDER  CURLINFO_REDIRECT_TIME.3
+  RENDER  CURLINFO_REDIRECT_TIME_T.3
+  RENDER  CURLINFO_REDIRECT_URL.3
+  RENDER  CURLINFO_REQUEST_SIZE.3
+  RENDER  CURLINFO_RESPONSE_CODE.3
+  RENDER  CURLINFO_REFERER.3
+  RENDER  CURLINFO_RETRY_AFTER.3
+  RENDER  CURLINFO_RTSP_CLIENT_CSEQ.3
+  RENDER  CURLINFO_RTSP_CSEQ_RECV.3
+  RENDER  CURLINFO_RTSP_SERVER_CSEQ.3
+  RENDER  CURLINFO_RTSP_SESSION_ID.3
+  RENDER  CURLINFO_SCHEME.3
+  RENDER  CURLINFO_SIZE_DOWNLOAD.3
+  RENDER  CURLINFO_SIZE_DELIVERED.3
+  RENDER  CURLINFO_SIZE_DOWNLOAD_T.3
+  RENDER  CURLINFO_SIZE_UPLOAD_T.3
+  RENDER  CURLINFO_SIZE_UPLOAD.3
+  RENDER  CURLINFO_SPEED_DOWNLOAD.3
+  RENDER  CURLINFO_SPEED_DOWNLOAD_T.3
+  RENDER  CURLINFO_SPEED_UPLOAD.3
+  RENDER  CURLINFO_SPEED_UPLOAD_T.3
+  RENDER  CURLINFO_SSL_ENGINES.3
+  RENDER  CURLINFO_SSL_VERIFYRESULT.3
+  RENDER  CURLINFO_STARTTRANSFER_TIME.3
+  RENDER  CURLINFO_STARTTRANSFER_TIME_T.3
+  RENDER  CURLINFO_TLS_SESSION.3
+  RENDER  CURLINFO_TLS_SSL_PTR.3
+  RENDER  CURLINFO_TOTAL_TIME.3
+  RENDER  CURLINFO_TOTAL_TIME_T.3
+  RENDER  CURLINFO_USED_PROXY.3
+  RENDER  CURLINFO_XFER_ID.3
+  RENDER  CURLMINFO_XFERS_ADDED.3
+  RENDER  CURLMINFO_XFERS_CURRENT.3
+  RENDER  CURLMINFO_XFERS_DONE.3
+  RENDER  CURLMINFO_XFERS_RUNNING.3
+  RENDER  CURLMINFO_XFERS_PENDING.3
+  RENDER  CURLMOPT_CHUNK_LENGTH_PENALTY_SIZE.3
+  RENDER  CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE.3
+  RENDER  CURLMOPT_MAX_CONCURRENT_STREAMS.3
+  RENDER  CURLMOPT_MAX_HOST_CONNECTIONS.3
+  RENDER  CURLMOPT_MAX_TOTAL_CONNECTIONS.3
+  RENDER  CURLMOPT_MAX_PIPELINE_LENGTH.3
+  RENDER  CURLMOPT_MAXCONNECTS.3
+  RENDER  CURLMOPT_NETWORK_CHANGED.3
+  RENDER  CURLMOPT_NOTIFYFUNCTION.3
+  RENDER  CURLMOPT_NOTIFYDATA.3
+  RENDER  CURLMOPT_PIPELINING.3
+  RENDER  CURLMOPT_PIPELINING_SERVER_BL.3
+  RENDER  CURLMOPT_PIPELINING_SITE_BL.3
+  RENDER  CURLMOPT_PUSHDATA.3
+  RENDER  CURLMOPT_PUSHFUNCTION.3
+  RENDER  CURLMOPT_QUICK_EXIT.3
+  RENDER  CURLMOPT_RESOLVE_THREADS_MAX.3
+  RENDER  CURLMOPT_SOCKETDATA.3
+  RENDER  CURLMOPT_SOCKETFUNCTION.3
+  RENDER  CURLMOPT_TIMERFUNCTION.3
+  RENDER  CURLMOPT_TIMERDATA.3
+  RENDER  CURLOPT_ABSTRACT_UNIX_SOCKET.3
+  RENDER  CURLOPT_ACCEPT_ENCODING.3
+  RENDER  CURLOPT_ACCEPTTIMEOUT_MS.3
+  RENDER  CURLOPT_ADDRESS_SCOPE.3
+  RENDER  CURLOPT_ALTSVC.3
+  RENDER  CURLOPT_ALTSVC_CTRL.3
+  RENDER  CURLOPT_AUTOREFERER.3
+  RENDER  CURLOPT_APPEND.3
+  RENDER  CURLOPT_AWS_SIGV4.3
+  RENDER  CURLOPT_BUFFERSIZE.3
+  RENDER  CURLOPT_CAINFO.3
+  RENDER  CURLOPT_CAINFO_BLOB.3
+  RENDER  CURLOPT_CAPATH.3
+  RENDER  CURLOPT_CERTINFO.3
+  RENDER  CURLOPT_CA_CACHE_TIMEOUT.3
+  RENDER  CURLOPT_CHUNK_BGN_FUNCTION.3
+  RENDER  CURLOPT_CHUNK_END_FUNCTION.3
+  RENDER  CURLOPT_CHUNK_DATA.3
+  RENDER  CURLOPT_CLOSESOCKETDATA.3
+  RENDER  CURLOPT_CLOSESOCKETFUNCTION.3
+  RENDER  CURLOPT_CONNECT_ONLY.3
+  RENDER  CURLOPT_CONNECT_TO.3
+  RENDER  CURLOPT_CONNECTTIMEOUT.3
+  RENDER  CURLOPT_CONNECTTIMEOUT_MS.3
+  RENDER  CURLOPT_CONV_FROM_NETWORK_FUNCTION.3
+  RENDER  CURLOPT_CONV_FROM_UTF8_FUNCTION.3
+  RENDER  CURLOPT_CONV_TO_NETWORK_FUNCTION.3
+  RENDER  CURLOPT_COOKIE.3
+  RENDER  CURLOPT_COOKIEFILE.3
+  RENDER  CURLOPT_COOKIEJAR.3
+  RENDER  CURLOPT_COOKIESESSION.3
+  RENDER  CURLOPT_COOKIELIST.3
+  RENDER  CURLOPT_CRLF.3
+  RENDER  CURLOPT_COPYPOSTFIELDS.3
+  RENDER  CURLOPT_CRLFILE.3
+  RENDER  CURLOPT_CURLU.3
+  RENDER  CURLOPT_CUSTOMREQUEST.3
+  RENDER  CURLOPT_DEBUGDATA.3
+  RENDER  CURLOPT_DEBUGFUNCTION.3
+  RENDER  CURLOPT_DEFAULT_PROTOCOL.3
+  RENDER  CURLOPT_DIRLISTONLY.3
+  RENDER  CURLOPT_DISALLOW_USERNAME_IN_URL.3
+  RENDER  CURLOPT_DNS_CACHE_TIMEOUT.3
+  RENDER  CURLOPT_DNS_INTERFACE.3
+  RENDER  CURLOPT_DNS_LOCAL_IP4.3
+  RENDER  CURLOPT_DNS_LOCAL_IP6.3
+  RENDER  CURLOPT_DNS_SERVERS.3
+  RENDER  CURLOPT_DNS_SHUFFLE_ADDRESSES.3
+  RENDER  CURLOPT_DNS_USE_GLOBAL_CACHE.3
+  RENDER  CURLOPT_DOH_SSL_VERIFYHOST.3
+  RENDER  CURLOPT_DOH_SSL_VERIFYSTATUS.3
+  RENDER  CURLOPT_DOH_SSL_VERIFYPEER.3
+  RENDER  CURLOPT_DOH_URL.3
+  RENDER  CURLOPT_ECH.3
+  RENDER  CURLOPT_EGDSOCKET.3
+  RENDER  CURLOPT_ERRORBUFFER.3
+  RENDER  CURLOPT_EXPECT_100_TIMEOUT_MS.3
+  RENDER  CURLOPT_FAILONERROR.3
+  RENDER  CURLOPT_FILETIME.3
+  RENDER  CURLOPT_FNMATCH_DATA.3
+  RENDER  CURLOPT_FNMATCH_FUNCTION.3
+  RENDER  CURLOPT_FOLLOWLOCATION.3
+  RENDER  CURLOPT_FORBID_REUSE.3
+  RENDER  CURLOPT_FTP_ACCOUNT.3
+  RENDER  CURLOPT_FRESH_CONNECT.3
+  RENDER  CURLOPT_FTP_ALTERNATIVE_TO_USER.3
+  RENDER  CURLOPT_FTP_CREATE_MISSING_DIRS.3
+  RENDER  CURLOPT_FTP_SKIP_PASV_IP.3
+  RENDER  CURLOPT_FTP_FILEMETHOD.3
+  RENDER  CURLOPT_FTP_SSL_CCC.3
+  RENDER  CURLOPT_FTP_USE_EPRT.3
+  RENDER  CURLOPT_FTP_USE_EPSV.3
+  RENDER  CURLOPT_FTP_USE_PRET.3
+  RENDER  CURLOPT_FTPPORT.3
+  RENDER  CURLOPT_FTPSSLAUTH.3
+  RENDER  CURLOPT_GSSAPI_DELEGATION.3
+  RENDER  CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS.3
+  RENDER  CURLOPT_HAPROXYPROTOCOL.3
+  RENDER  CURLOPT_HAPROXY_CLIENT_IP.3
+  RENDER  CURLOPT_HEADER.3
+  RENDER  CURLOPT_HEADERDATA.3
+  RENDER  CURLOPT_HEADERFUNCTION.3
+  RENDER  CURLOPT_HEADEROPT.3
+  RENDER  CURLOPT_HSTS_CTRL.3
+  RENDER  CURLOPT_HSTS.3
+  RENDER  CURLOPT_HSTSREADDATA.3
+  RENDER  CURLOPT_HSTSREADFUNCTION.3
+  RENDER  CURLOPT_HSTSWRITEDATA.3
+  RENDER  CURLOPT_HSTSWRITEFUNCTION.3
+  RENDER  CURLOPT_HTTP09_ALLOWED.3
+  RENDER  CURLOPT_HTTP200ALIASES.3
+  RENDER  CURLOPT_HTTP_CONTENT_DECODING.3
+  RENDER  CURLOPT_HTTP_TRANSFER_DECODING.3
+  RENDER  CURLOPT_HTTP_VERSION.3
+  RENDER  CURLOPT_HTTPGET.3
+  RENDER  CURLOPT_HTTPAUTH.3
+  RENDER  CURLOPT_HTTPHEADER.3
+  RENDER  CURLOPT_HTTPPOST.3
+  RENDER  CURLOPT_HTTPPROXYTUNNEL.3
+  RENDER  CURLOPT_HTTPSIG_ALGORITHM.3
+  RENDER  CURLOPT_HTTPSIG_HEADERS.3
+  RENDER  CURLOPT_HTTPSIG_KEYID.3
+  RENDER  CURLOPT_HTTPSIG_KEY.3
+  RENDER  CURLOPT_IGNORE_CONTENT_LENGTH.3
+  RENDER  CURLOPT_INFILESIZE.3
+  RENDER  CURLOPT_INFILESIZE_LARGE.3
+  RENDER  CURLOPT_INTERFACE.3
+  RENDER  CURLOPT_INTERLEAVEDATA.3
+  RENDER  CURLOPT_INTERLEAVEFUNCTION.3
+  RENDER  CURLOPT_IOCTLDATA.3
+  RENDER  CURLOPT_IOCTLFUNCTION.3
+  RENDER  CURLOPT_IPRESOLVE.3
+  RENDER  CURLOPT_ISSUERCERT.3
+  RENDER  CURLOPT_KEEP_SENDING_ON_ERROR.3
+  RENDER  CURLOPT_ISSUERCERT_BLOB.3
+  RENDER  CURLOPT_KEYPASSWD.3
+  RENDER  CURLOPT_KRBLEVEL.3
+  RENDER  CURLOPT_LOCALPORT.3
+  RENDER  CURLOPT_LOCALPORTRANGE.3
+  RENDER  CURLOPT_LOGIN_OPTIONS.3
+  RENDER  CURLOPT_LOW_SPEED_LIMIT.3
+  RENDER  CURLOPT_LOW_SPEED_TIME.3
+  RENDER  CURLOPT_MAIL_AUTH.3
+  RENDER  CURLOPT_MAIL_FROM.3
+  RENDER  CURLOPT_MAIL_RCPT.3
+  RENDER  CURLOPT_MAIL_RCPT_ALLOWFAILS.3
+  RENDER  CURLOPT_MAX_RECV_SPEED_LARGE.3
+  RENDER  CURLOPT_MAX_SEND_SPEED_LARGE.3
+  RENDER  CURLOPT_MAXAGE_CONN.3
+  RENDER  CURLOPT_MAXCONNECTS.3
+  RENDER  CURLOPT_MAXFILESIZE.3
+  RENDER  CURLOPT_MAXFILESIZE_LARGE.3
+  RENDER  CURLOPT_MAXLIFETIME_CONN.3
+  RENDER  CURLOPT_MAXREDIRS.3
+  RENDER  CURLOPT_MIME_OPTIONS.3
+  RENDER  CURLOPT_MIMEPOST.3
+  RENDER  CURLOPT_NETRC.3
+  RENDER  CURLOPT_NETRC_FILE.3
+  RENDER  CURLOPT_NEW_DIRECTORY_PERMS.3
+  RENDER  CURLOPT_NEW_FILE_PERMS.3
+  RENDER  CURLOPT_NOBODY.3
+  RENDER  CURLOPT_NOPROGRESS.3
+  RENDER  CURLOPT_NOPROXY.3
+  RENDER  CURLOPT_NOSIGNAL.3
+  RENDER  CURLOPT_OPENSOCKETDATA.3
+  RENDER  CURLOPT_OPENSOCKETFUNCTION.3
+  RENDER  CURLOPT_PASSWORD.3
+  RENDER  CURLOPT_PATH_AS_IS.3
+  RENDER  CURLOPT_PINNEDPUBLICKEY.3
+  RENDER  CURLOPT_PIPEWAIT.3
+  RENDER  CURLOPT_PORT.3
+  RENDER  CURLOPT_POST.3
+  RENDER  CURLOPT_POSTFIELDS.3
+  RENDER  CURLOPT_POSTFIELDSIZE.3
+  RENDER  CURLOPT_POSTFIELDSIZE_LARGE.3
+  RENDER  CURLOPT_POSTQUOTE.3
+  RENDER  CURLOPT_POSTREDIR.3
+  RENDER  CURLOPT_PRE_PROXY.3
+  RENDER  CURLOPT_PREREQDATA.3
+  RENDER  CURLOPT_PREQUOTE.3
+  RENDER  CURLOPT_PREREQFUNCTION.3
+  RENDER  CURLOPT_PRIVATE.3
+  RENDER  CURLOPT_PROGRESSDATA.3
+  RENDER  CURLOPT_PROGRESSFUNCTION.3
+  RENDER  CURLOPT_PROTOCOLS.3
+  RENDER  CURLOPT_PROTOCOLS_STR.3
+  RENDER  CURLOPT_PROXY.3
+  RENDER  CURLOPT_PROXY_CAINFO.3
+  RENDER  CURLOPT_PROXY_CAINFO_BLOB.3
+  RENDER  CURLOPT_PROXY_CAPATH.3
+  RENDER  CURLOPT_PROXY_ISSUERCERT.3
+  RENDER  CURLOPT_PROXY_ISSUERCERT_BLOB.3
+  RENDER  CURLOPT_PROXY_CRLFILE.3
+  RENDER  CURLOPT_PROXY_KEYPASSWD.3
+  RENDER  CURLOPT_PROXY_PINNEDPUBLICKEY.3
+  RENDER  CURLOPT_PROXY_SERVICE_NAME.3
+  RENDER  CURLOPT_PROXY_SSL_OPTIONS.3
+  RENDER  CURLOPT_PROXY_SSL_CIPHER_LIST.3
+  RENDER  CURLOPT_PROXY_SSL_VERIFYPEER.3
+  RENDER  CURLOPT_PROXY_SSLCERT.3
+  RENDER  CURLOPT_PROXY_SSL_VERIFYHOST.3
+  RENDER  CURLOPT_PROXY_SSLCERT_BLOB.3
+  RENDER  CURLOPT_PROXY_SSLCERTTYPE.3
+  RENDER  CURLOPT_PROXY_SSLKEY.3
+  RENDER  CURLOPT_PROXY_SSLKEY_BLOB.3
+  RENDER  CURLOPT_PROXY_SSLKEYTYPE.3
+  RENDER  CURLOPT_PROXY_SSLVERSION.3
+  RENDER  CURLOPT_PROXY_TLSAUTH_PASSWORD.3
+  RENDER  CURLOPT_PROXY_TLSAUTH_USERNAME.3
+  RENDER  CURLOPT_PROXY_TLS13_CIPHERS.3
+  RENDER  CURLOPT_PROXY_TLSAUTH_TYPE.3
+  RENDER  CURLOPT_PROXY_TRANSFER_MODE.3
+  RENDER  CURLOPT_PROXYAUTH.3
+  RENDER  CURLOPT_PROXYHEADER.3
+  RENDER  CURLOPT_PROXYPASSWORD.3
+  RENDER  CURLOPT_PROXYPORT.3
+  RENDER  CURLOPT_PROXYTYPE.3
+  RENDER  CURLOPT_PROXYUSERNAME.3
+  RENDER  CURLOPT_PROXYUSERPWD.3
+  RENDER  CURLOPT_PUT.3
+  RENDER  CURLOPT_QUICK_EXIT.3
+  RENDER  CURLOPT_QUOTE.3
+  RENDER  CURLOPT_RANDOM_FILE.3
+  RENDER  CURLOPT_READDATA.3
+  RENDER  CURLOPT_RANGE.3
+  RENDER  CURLOPT_READFUNCTION.3
+  RENDER  CURLOPT_REDIR_PROTOCOLS.3
+  RENDER  CURLOPT_REDIR_PROTOCOLS_STR.3
+  RENDER  CURLOPT_REFERER.3
+  RENDER  CURLOPT_REQUEST_TARGET.3
+  RENDER  CURLOPT_RESOLVE.3
+  RENDER  CURLOPT_RESOLVER_START_FUNCTION.3
+  RENDER  CURLOPT_RESOLVER_START_DATA.3
+  RENDER  CURLOPT_RESUME_FROM.3
+  RENDER  CURLOPT_RESUME_FROM_LARGE.3
+  RENDER  CURLOPT_RTSP_CLIENT_CSEQ.3
+  RENDER  CURLOPT_RTSP_REQUEST.3
+  RENDER  CURLOPT_RTSP_SERVER_CSEQ.3
+  RENDER  CURLOPT_RTSP_STREAM_URI.3
+  RENDER  CURLOPT_RTSP_SESSION_ID.3
+  RENDER  CURLOPT_RTSP_TRANSPORT.3
+  RENDER  CURLOPT_SASL_AUTHZID.3
+  RENDER  CURLOPT_SASL_IR.3
+  RENDER  CURLOPT_SEEKDATA.3
+  RENDER  CURLOPT_SEEKFUNCTION.3
+  RENDER  CURLOPT_SERVER_RESPONSE_TIMEOUT.3
+  RENDER  CURLOPT_SERVER_RESPONSE_TIMEOUT_MS.3
+  RENDER  CURLOPT_SERVICE_NAME.3
+  RENDER  CURLOPT_SHARE.3
+  RENDER  CURLOPT_SOCKOPTDATA.3
+  RENDER  CURLOPT_SOCKOPTFUNCTION.3
+  RENDER  CURLOPT_SOCKS5_AUTH.3
+  RENDER  CURLOPT_SOCKS5_GSSAPI_NEC.3
+  RENDER  CURLOPT_SOCKS5_GSSAPI_SERVICE.3
+  RENDER  CURLOPT_SSH_AUTH_TYPES.3
+  RENDER  CURLOPT_SSH_COMPRESSION.3
+  RENDER  CURLOPT_SSH_HOSTKEYDATA.3
+  RENDER  CURLOPT_SSH_HOSTKEYFUNCTION.3
+  RENDER  CURLOPT_SSH_HOST_PUBLIC_KEY_MD5.3
+  RENDER  CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256.3
+  RENDER  CURLOPT_SSH_KEYDATA.3
+  RENDER  CURLOPT_SSH_KEYFUNCTION.3
+  RENDER  CURLOPT_SSH_KNOWNHOSTS.3
+  RENDER  CURLOPT_SSH_PRIVATE_KEYFILE.3
+  RENDER  CURLOPT_SSH_PUBLIC_KEYFILE.3
+  RENDER  CURLOPT_SSL_CIPHER_LIST.3
+  RENDER  CURLOPT_SSL_CTX_DATA.3
+  RENDER  CURLOPT_SSL_CTX_FUNCTION.3
+  RENDER  CURLOPT_SSL_EC_CURVES.3
+  RENDER  CURLOPT_SSL_ENABLE_ALPN.3
+  RENDER  CURLOPT_SSL_ENABLE_NPN.3
+  RENDER  CURLOPT_SSL_OPTIONS.3
+  RENDER  CURLOPT_SSL_FALSESTART.3
+  RENDER  CURLOPT_SSL_SESSIONID_CACHE.3
+  RENDER  CURLOPT_SSL_SIGNATURE_ALGORITHMS.3
+  RENDER  CURLOPT_SSL_VERIFYHOST.3
+  RENDER  CURLOPT_SSL_VERIFYPEER.3
+  RENDER  CURLOPT_SSL_VERIFYSTATUS.3
+  RENDER  CURLOPT_SSLCERT.3
+  RENDER  CURLOPT_SSLCERT_BLOB.3
+  RENDER  CURLOPT_SSLCERTTYPE.3
+  RENDER  CURLOPT_SSLENGINE.3
+  RENDER  CURLOPT_SSLENGINE_DEFAULT.3
+  RENDER  CURLOPT_SSLKEY_BLOB.3
+  RENDER  CURLOPT_SSLKEY.3
+  RENDER  CURLOPT_SSLKEYTYPE.3
+  RENDER  CURLOPT_SSLVERSION.3
+  RENDER  CURLOPT_STDERR.3
+  RENDER  CURLOPT_STREAM_DEPENDS.3
+  RENDER  CURLOPT_STREAM_WEIGHT.3
+  RENDER  CURLOPT_STREAM_DEPENDS_E.3
+  RENDER  CURLOPT_SUPPRESS_CONNECT_HEADERS.3
+  RENDER  CURLOPT_TCP_FASTOPEN.3
+  RENDER  CURLOPT_TCP_KEEPALIVE.3
+  RENDER  CURLOPT_TCP_KEEPIDLE.3
+  RENDER  CURLOPT_TCP_KEEPINTVL.3
+  RENDER  CURLOPT_TCP_KEEPCNT.3
+  RENDER  CURLOPT_TCP_NODELAY.3
+  RENDER  CURLOPT_TELNETOPTIONS.3
+  RENDER  CURLOPT_TFTP_NO_OPTIONS.3
+  RENDER  CURLOPT_TFTP_BLKSIZE.3
+  RENDER  CURLOPT_TIMECONDITION.3
+  RENDER  CURLOPT_TIMEOUT.3
+  RENDER  CURLOPT_TIMEOUT_MS.3
+  RENDER  CURLOPT_TIMEVALUE.3
+  RENDER  CURLOPT_TIMEVALUE_LARGE.3
+  RENDER  CURLOPT_TLS13_CIPHERS.3
+  RENDER  CURLOPT_TLSAUTH_PASSWORD.3
+  RENDER  CURLOPT_TLSAUTH_TYPE.3
+  RENDER  CURLOPT_TLSAUTH_USERNAME.3
+  RENDER  CURLOPT_TRAILERDATA.3
+  RENDER  CURLOPT_TRAILERFUNCTION.3
+  RENDER  CURLOPT_TRANSFER_ENCODING.3
+  RENDER  CURLOPT_TRANSFERTEXT.3
+  RENDER  CURLOPT_UNIX_SOCKET_PATH.3
+  RENDER  CURLOPT_UNRESTRICTED_AUTH.3
+  RENDER  CURLOPT_UPKEEP_INTERVAL_MS.3
+  RENDER  CURLOPT_UPLOAD.3
+  RENDER  CURLOPT_UPLOAD_BUFFERSIZE.3
+  RENDER  CURLOPT_UPLOAD_FLAGS.3
+  RENDER  CURLOPT_URL.3
+  RENDER  CURLOPT_USE_SSL.3
+  RENDER  CURLOPT_USERAGENT.3
+  RENDER  CURLOPT_USERNAME.3
+  RENDER  CURLOPT_USERPWD.3
+  RENDER  CURLOPT_VERBOSE.3
+  RENDER  CURLOPT_WILDCARDMATCH.3
+  RENDER  CURLOPT_WRITEDATA.3
+  RENDER  CURLOPT_WRITEFUNCTION.3
+  RENDER  CURLOPT_XFERINFODATA.3
+  RENDER  CURLOPT_WS_OPTIONS.3
+  RENDER  CURLOPT_XFERINFOFUNCTION.3
+  RENDER  CURLSHOPT_LOCKFUNC.3
+  RENDER  CURLOPT_XOAUTH2_BEARER.3
+  RENDER  CURLSHOPT_SHARE.3
+  RENDER  CURLSHOPT_UNLOCKFUNC.3
+  RENDER  CURLSHOPT_UNSHARE.3
+  RENDER  CURLSHOPT_USERDATA.3
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+  RENDER  curl_easy_cleanup.3
+  RENDER  curl_easy_duphandle.3
+  RENDER  curl_easy_getinfo.3
+  RENDER  curl_easy_escape.3
+  RENDER  curl_easy_header.3
+  RENDER  curl_easy_init.3
+  RENDER  curl_easy_nextheader.3
+  RENDER  curl_easy_option_by_id.3
+  RENDER  curl_easy_option_by_name.3
+  RENDER  curl_easy_option_next.3
+  RENDER  curl_easy_pause.3
+  RENDER  curl_easy_perform.3
+  RENDER  curl_easy_recv.3
+  RENDER  curl_easy_reset.3
+  RENDER  curl_easy_send.3
+  RENDER  curl_easy_ssls_export.3
+  RENDER  curl_easy_setopt.3
+  RENDER  curl_easy_ssls_import.3
+  RENDER  curl_easy_strerror.3
+  RENDER  curl_easy_unescape.3
+  RENDER  curl_easy_upkeep.3
+  RENDER  curl_formadd.3
+  RENDER  curl_escape.3
+  RENDER  curl_formfree.3
+  RENDER  curl_formget.3
+  RENDER  curl_free.3
+  RENDER  curl_getdate.3
+  RENDER  curl_getenv.3
+  RENDER  curl_global_cleanup.3
+  RENDER  curl_global_init.3
+  RENDER  curl_global_init_mem.3
+  RENDER  curl_global_sslset.3
+  RENDER  curl_global_trace.3
+  RENDER  curl_mime_addpart.3
+  RENDER  curl_mime_data.3
+  RENDER  curl_mime_data_cb.3
+  RENDER  curl_mime_encoder.3
+  RENDER  curl_mime_filename.3
+  RENDER  curl_mime_filedata.3
+  RENDER  curl_mime_free.3
+  RENDER  curl_mime_headers.3
+  RENDER  curl_mime_init.3
+  RENDER  curl_mime_name.3
+  RENDER  curl_mime_subparts.3
+  RENDER  curl_mime_type.3
+  RENDER  curl_mprintf.3
+  RENDER  curl_multi_add_handle.3
+  RENDER  curl_multi_assign.3
+  RENDER  curl_multi_cleanup.3
+  RENDER  curl_multi_fdset.3
+  RENDER  curl_multi_get_handles.3
+  RENDER  curl_multi_get_offt.3
+  RENDER  curl_multi_info_read.3
+  RENDER  curl_multi_notify_disable.3
+  RENDER  curl_multi_notify_enable.3
+  RENDER  curl_multi_perform.3
+  RENDER  curl_multi_init.3
+  RENDER  curl_multi_poll.3
+  RENDER  curl_multi_remove_handle.3
+  RENDER  curl_multi_socket.3
+  RENDER  curl_multi_socket_action.3
+  RENDER  curl_multi_setopt.3
+  RENDER  curl_multi_strerror.3
+  RENDER  curl_multi_socket_all.3
+  RENDER  curl_multi_timeout.3
+  RENDER  curl_multi_wait.3
+  RENDER  curl_multi_waitfds.3
+  RENDER  curl_multi_wakeup.3
+  RENDER  curl_pushheader_bynum.3
+  RENDER  curl_pushheader_byname.3
+  RENDER  curl_share_cleanup.3
+  RENDER  curl_share_init.3
+  RENDER  curl_share_setopt.3
+  RENDER  curl_share_strerror.3
+  RENDER  curl_slist_append.3
+  RENDER  curl_slist_free_all.3
+  RENDER  curl_strnequal.3
+  RENDER  curl_strequal.3
+  RENDER  curl_unescape.3
+  RENDER  curl_url.3
+  RENDER  curl_url_cleanup.3
+  RENDER  curl_url_dup.3
+  RENDER  curl_url_get.3
+  RENDER  curl_url_set.3
+  RENDER  curl_version.3
+  RENDER  curl_url_strerror.3
+  RENDER  curl_version_info.3
+  RENDER  curl_ws_meta.3
+  RENDER  curl_ws_recv.3
+  RENDER  curl_ws_send.3
+  RENDER  curl_ws_start_frame.3
+  RENDER  libcurl-easy.3
+  RENDER  libcurl-env-dbg.3
+  RENDER  libcurl-env.3
+  RENDER  libcurl-multi.3
+  RENDER  libcurl-security.3
+  RENDER  libcurl-errors.3
+  RENDER  libcurl-share.3
+  RENDER  libcurl-symbols.md
+  RENDER  libcurl-thread.3
+  RENDER  libcurl-tutorial.3
+  RENDER  libcurl-url.3
+  RENDER  libcurl-ws.3
+  RENDER  libcurl.3
+  RENDER  libcurl-symbols.3
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making all in src
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+  CC       curl-config2setopts.o
+  CC       curl-slist_wc.o
+  CC       curl-terminal.o
+  CC       curl-tool_cb_hdr.o
+  CC       curl-tool_cb_dbg.o
+  CC       curl-tool_cb_prg.o
+  CC       curl-tool_cb_rea.o
+  CC       curl-tool_cb_soc.o
+  CC       curl-tool_cb_see.o
+  CC       curl-tool_cb_wrt.o
+  CC       curl-tool_cfgable.o
+  CC       curl-tool_dirhie.o
+  CC       curl-tool_doswin.o
+  CC       curl-tool_easysrc.o
+  CC       curl-tool_filetime.o
+  CC       curl-tool_findfile.o
+  CC       curl-tool_formparse.o
+  CC       curl-tool_getparam.o
+  CC       curl-tool_getpass.o
+  CC       curl-tool_help.o
+  CC       curl-tool_helpers.o
+  CC       curl-tool_ipfs.o
+  CC       curl-tool_listhelp.o
+  CC       curl-tool_libinfo.o
+  CC       curl-tool_main.o
+  CC       curl-tool_msgs.o
+  CC       curl-tool_operate.o
+  CC       curl-tool_operhlp.o
+  CC       curl-tool_paramhlp.o
+  CC       curl-tool_parsecfg.o
+  CC       curl-tool_setopt.o
+  CC       curl-tool_progress.o
+  CC       curl-tool_ssls.o
+  CC       curl-tool_stderr.o
+  CC       curl-tool_urlglob.o
+  CC       curl-tool_util.o
+  CC       curl-tool_vms.o
+  CC       curl-tool_writeout.o
+  CC       curl-tool_writeout_json.o
+  CC       curl-tool_xattr.o
+  CC       curl-var.o
+echo '/* !checksrc! disable COPYRIGHT all */' > tool_hugehelp.c;   \
+echo '#include "tool_hugehelp.h"' >> tool_hugehelp.c
+echo '/* !checksrc! disable COPYRIGHT all */' > tool_ca_embed.c
+  CC       curlinfo.o
+echo 'extern const void *curl_ca_embed; const void *curl_ca_embed;' >> tool_ca_embed.c
+  CC       libcurltool_la-config2setopts.lo
+  CC       libcurltool_la-slist_wc.lo
+  CC       libcurltool_la-terminal.lo
+  CC       libcurltool_la-tool_cb_dbg.lo
+  CC       libcurltool_la-tool_cb_hdr.lo
+  CC       libcurltool_la-tool_cb_prg.lo
+  CC       libcurltool_la-tool_cb_rea.lo
+  CC       libcurltool_la-tool_cb_see.lo
+  CC       libcurltool_la-tool_cb_soc.lo
+  CC       libcurltool_la-tool_cb_wrt.lo
+  CC       libcurltool_la-tool_cfgable.lo
+  CC       libcurltool_la-tool_dirhie.lo
+  CC       libcurltool_la-tool_doswin.lo
+  CC       libcurltool_la-tool_easysrc.lo
+  CC       libcurltool_la-tool_filetime.lo
+  CC       libcurltool_la-tool_findfile.lo
+  CC       libcurltool_la-tool_formparse.lo
+  CC       libcurltool_la-tool_getparam.lo
+  CC       libcurltool_la-tool_getpass.lo
+  CC       libcurltool_la-tool_help.lo
+  CC       libcurltool_la-tool_helpers.lo
+  CC       libcurltool_la-tool_libinfo.lo
+  CC       libcurltool_la-tool_ipfs.lo
+  CC       libcurltool_la-tool_listhelp.lo
+  CC       libcurltool_la-tool_main.lo
+  CC       libcurltool_la-tool_msgs.lo
+  CC       libcurltool_la-tool_operate.lo
+  CC       libcurltool_la-tool_operhlp.lo
+  CC       libcurltool_la-tool_paramhlp.lo
+  CC       libcurltool_la-tool_parsecfg.lo
+  CC       libcurltool_la-tool_progress.lo
+  CC       libcurltool_la-tool_setopt.lo
+  CC       libcurltool_la-tool_ssls.lo
+  CC       libcurltool_la-tool_stderr.lo
+  CC       libcurltool_la-tool_urlglob.lo
+  CC       libcurltool_la-tool_util.lo
+  CC       libcurltool_la-tool_vms.lo
+  CC       libcurltool_la-tool_writeout.lo
+  CC       libcurltool_la-tool_writeout_json.lo
+  CC       libcurltool_la-tool_xattr.lo
+  CC       libcurltool_la-var.lo
+  CC       toolx/libcurltool_la-tool_time.lo
+  CC       toolx/curl-tool_time.o
+  CC       curl-tool_ca_embed.o
+  CC       curl-tool_hugehelp.o
+  CCLD     curlinfo
+  CCLD     curl
+  CCLD     libcurltool.la
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+Making all in scripts
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+make[1]: Nothing to be done for 'all'.
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+make[1]: Nothing to be done for 'all-am'.
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+== make install ==
+Making install in lib
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib'
+ /bin/sh ../libtool   --mode=install /usr/bin/install -c   libcurl.la '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib'
+libtool: install: /usr/bin/install -c .libs/libcurl.lai /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/libcurl.la
+libtool: install: /usr/bin/install -c .libs/libcurl.a /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/libcurl.a
+libtool: install: chmod 644 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/libcurl.a
+libtool: install: ranlib /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/libcurl.a
+libtool: finish: PATH="/home/msaraiva/.deno/bin:/home/msaraiva/.local/bin:/home/msaraiva/.grok/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/msaraiva/.opencode/bin:/home/msaraiva/.bun/bin/:/home/msaraiva/devtools/node/bin:/home/msaraiva/.grok/bin:/home/msaraiva/.atuin/bin:/home/msaraiva/.local/share/pnpm:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/home/msaraiva/.cargo/bin:/home/msaraiva/.opencode/bin:/home/msaraiva/.bun/bin/:/home/msaraiva/.local/bin:/usr/local/bin:/usr/bin:/home/msaraiva/.lmstudio/bin:/home/msaraiva/.local/share/JetBrains/Toolbox/scripts:/sbin" ldconfig -n /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib
+----------------------------------------------------------------------
+Libraries have been installed in:
+   /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib
+
+If you ever happen to want to link against installed libraries
+in a given directory, LIBDIR, you must either use libtool, and
+specify the full pathname of the library, or use the '-LLIBDIR'
+flag during linking and do at least one of the following:
+   - add LIBDIR to the 'LD_LIBRARY_PATH' environment variable
+     during execution
+   - add LIBDIR to the 'LD_RUN_PATH' environment variable
+     during linking
+   - use the '-Wl,-rpath -Wl,LIBDIR' linker flag
+   - have your system administrator add LIBDIR to '/etc/ld.so.conf'
+
+After a 'make install' for many GNU/Linux systems, 'ldconfig LIBDIR'
+may need to be executed to help locate newly installed libraries,
+but you should consult with a system administrator before updating
+the shared library cache as this should be done with great care
+and consideration. (See the 'Platform-specific configuration notes'
+section of the documentation for more information.)
+
+See any operating system documentation about shared libraries for
+more information, such as the ld(1) and ld.so(8) manual pages.
+----------------------------------------------------------------------
+make[2]: Nothing to be done for 'install-data-am'.
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/lib'
+Making install in docs
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making install in .
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[3]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+ /usr/bin/install -c -m 644 curl-config.1 wcurl.1 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making install in cmdline-opts
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[3]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+ /usr/bin/install -c -m 644 curl.1 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+Making install in libcurl
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+Making install in opts
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[4]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[4]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_ACTIVESOCKET.3 CURLINFO_APPCONNECT_TIME.3 CURLINFO_APPCONNECT_TIME_T.3 CURLINFO_CAINFO.3 CURLINFO_CAPATH.3 CURLINFO_CERTINFO.3 CURLINFO_CONDITION_UNMET.3 CURLINFO_CONNECT_TIME.3 CURLINFO_CONN_ID.3 CURLINFO_CONNECT_TIME_T.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD_T.3 CURLINFO_CONTENT_LENGTH_UPLOAD.3 CURLINFO_CONTENT_LENGTH_UPLOAD_T.3 CURLINFO_CONTENT_TYPE.3 CURLINFO_COOKIELIST.3 CURLINFO_EARLYDATA_SENT_T.3 CURLINFO_EFFECTIVE_METHOD.3 CURLINFO_EFFECTIVE_URL.3 CURLINFO_FILETIME.3 CURLINFO_FILETIME_T.3 CURLINFO_FTP_ENTRY_PATH.3 CURLINFO_HEADER_SIZE.3 CURLINFO_HTTP_CONNECTCODE.3 CURLINFO_HTTP_VERSION.3 CURLINFO_HTTPAUTH_AVAIL.3 CURLINFO_HTTPAUTH_USED.3 CURLINFO_LASTSOCKET.3 CURLINFO_LOCAL_IP.3 CURLINFO_LOCAL_PORT.3 CURLINFO_NAMELOOKUP_TIME.3 CURLINFO_NAMELOOKUP_TIME_T.3 CURLINFO_NUM_CONNECTS.3 CURLINFO_OS_ERRNO.3 CURLINFO_PRETRANSFER_TIME.3 CURLINFO_PRETRANSFER_TIME_T.3 CURLINFO_POSTTRANSFER_TIME_T.3 CURLINFO_PRIMARY_IP.3 CURLINFO_PRIMARY_PORT.3 CURLINFO_PRIVATE.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_PROTOCOL.3 CURLINFO_PROXY_ERROR.3 CURLINFO_PROXY_SSL_VERIFYRESULT.3 CURLINFO_PROXYAUTH_AVAIL.3 CURLINFO_PROXYAUTH_USED.3 CURLINFO_QUEUE_TIME_T.3 CURLINFO_REDIRECT_COUNT.3 CURLINFO_REDIRECT_TIME.3 CURLINFO_REDIRECT_TIME_T.3 CURLINFO_REDIRECT_URL.3 CURLINFO_REFERER.3 CURLINFO_REQUEST_SIZE.3 CURLINFO_RESPONSE_CODE.3 CURLINFO_RETRY_AFTER.3 CURLINFO_RTSP_CLIENT_CSEQ.3 CURLINFO_RTSP_CSEQ_RECV.3 CURLINFO_RTSP_SERVER_CSEQ.3 CURLINFO_RTSP_SESSION_ID.3 CURLINFO_SCHEME.3 CURLINFO_SIZE_DELIVERED.3 CURLINFO_SIZE_DOWNLOAD.3 CURLINFO_SIZE_DOWNLOAD_T.3 CURLINFO_SIZE_UPLOAD.3 CURLINFO_SIZE_UPLOAD_T.3 CURLINFO_SPEED_DOWNLOAD.3 CURLINFO_SPEED_DOWNLOAD_T.3 CURLINFO_SPEED_UPLOAD.3 CURLINFO_SPEED_UPLOAD_T.3 CURLINFO_SSL_ENGINES.3 CURLINFO_SSL_VERIFYRESULT.3 CURLINFO_STARTTRANSFER_TIME.3 CURLINFO_STARTTRANSFER_TIME_T.3 CURLINFO_TLS_SESSION.3 CURLINFO_TLS_SSL_PTR.3 CURLINFO_TOTAL_TIME.3 CURLINFO_TOTAL_TIME_T.3 CURLINFO_USED_PROXY.3 CURLINFO_XFER_ID.3 CURLMINFO_XFERS_ADDED.3 CURLMINFO_XFERS_CURRENT.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLMINFO_XFERS_DONE.3 CURLMINFO_XFERS_PENDING.3 CURLMINFO_XFERS_RUNNING.3 CURLMOPT_CHUNK_LENGTH_PENALTY_SIZE.3 CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE.3 CURLMOPT_MAX_CONCURRENT_STREAMS.3 CURLMOPT_MAX_HOST_CONNECTIONS.3 CURLMOPT_MAX_PIPELINE_LENGTH.3 CURLMOPT_MAX_TOTAL_CONNECTIONS.3 CURLMOPT_MAXCONNECTS.3 CURLMOPT_NETWORK_CHANGED.3 CURLMOPT_NOTIFYDATA.3 CURLMOPT_NOTIFYFUNCTION.3 CURLMOPT_PIPELINING.3 CURLMOPT_PIPELINING_SERVER_BL.3 CURLMOPT_PIPELINING_SITE_BL.3 CURLMOPT_PUSHDATA.3 CURLMOPT_PUSHFUNCTION.3 CURLMOPT_QUICK_EXIT.3 CURLMOPT_RESOLVE_THREADS_MAX.3 CURLMOPT_SOCKETDATA.3 CURLMOPT_SOCKETFUNCTION.3 CURLMOPT_TIMERDATA.3 CURLMOPT_TIMERFUNCTION.3 CURLOPT_ABSTRACT_UNIX_SOCKET.3 CURLOPT_ACCEPT_ENCODING.3 CURLOPT_ACCEPTTIMEOUT_MS.3 CURLOPT_ADDRESS_SCOPE.3 CURLOPT_ALTSVC.3 CURLOPT_ALTSVC_CTRL.3 CURLOPT_APPEND.3 CURLOPT_AUTOREFERER.3 CURLOPT_AWS_SIGV4.3 CURLOPT_BUFFERSIZE.3 CURLOPT_CAINFO.3 CURLOPT_CAINFO_BLOB.3 CURLOPT_CAPATH.3 CURLOPT_CA_CACHE_TIMEOUT.3 CURLOPT_CERTINFO.3 CURLOPT_CHUNK_BGN_FUNCTION.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_CHUNK_DATA.3 CURLOPT_CHUNK_END_FUNCTION.3 CURLOPT_CLOSESOCKETDATA.3 CURLOPT_CLOSESOCKETFUNCTION.3 CURLOPT_CONNECT_ONLY.3 CURLOPT_CONNECT_TO.3 CURLOPT_CONNECTTIMEOUT.3 CURLOPT_CONNECTTIMEOUT_MS.3 CURLOPT_CONV_FROM_NETWORK_FUNCTION.3 CURLOPT_CONV_FROM_UTF8_FUNCTION.3 CURLOPT_CONV_TO_NETWORK_FUNCTION.3 CURLOPT_COOKIE.3 CURLOPT_COOKIEFILE.3 CURLOPT_COOKIEJAR.3 CURLOPT_COOKIELIST.3 CURLOPT_COOKIESESSION.3 CURLOPT_COPYPOSTFIELDS.3 CURLOPT_CRLF.3 CURLOPT_CRLFILE.3 CURLOPT_CURLU.3 CURLOPT_CUSTOMREQUEST.3 CURLOPT_DEBUGDATA.3 CURLOPT_DEBUGFUNCTION.3 CURLOPT_DEFAULT_PROTOCOL.3 CURLOPT_DIRLISTONLY.3 CURLOPT_DISALLOW_USERNAME_IN_URL.3 CURLOPT_DNS_CACHE_TIMEOUT.3 CURLOPT_DNS_INTERFACE.3 CURLOPT_DNS_LOCAL_IP4.3 CURLOPT_DNS_LOCAL_IP6.3 CURLOPT_DNS_SERVERS.3 CURLOPT_DNS_SHUFFLE_ADDRESSES.3 CURLOPT_DNS_USE_GLOBAL_CACHE.3 CURLOPT_DOH_SSL_VERIFYHOST.3 CURLOPT_DOH_SSL_VERIFYPEER.3 CURLOPT_DOH_SSL_VERIFYSTATUS.3 CURLOPT_DOH_URL.3 CURLOPT_ECH.3 CURLOPT_EGDSOCKET.3 CURLOPT_ERRORBUFFER.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_EXPECT_100_TIMEOUT_MS.3 CURLOPT_FAILONERROR.3 CURLOPT_FILETIME.3 CURLOPT_FNMATCH_DATA.3 CURLOPT_FNMATCH_FUNCTION.3 CURLOPT_FOLLOWLOCATION.3 CURLOPT_FORBID_REUSE.3 CURLOPT_FRESH_CONNECT.3 CURLOPT_FTP_ACCOUNT.3 CURLOPT_FTP_ALTERNATIVE_TO_USER.3 CURLOPT_FTP_CREATE_MISSING_DIRS.3 CURLOPT_FTP_FILEMETHOD.3 CURLOPT_FTP_SKIP_PASV_IP.3 CURLOPT_FTP_SSL_CCC.3 CURLOPT_FTP_USE_EPRT.3 CURLOPT_FTP_USE_EPSV.3 CURLOPT_FTP_USE_PRET.3 CURLOPT_FTPPORT.3 CURLOPT_FTPSSLAUTH.3 CURLOPT_GSSAPI_DELEGATION.3 CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS.3 CURLOPT_HAPROXYPROTOCOL.3 CURLOPT_HAPROXY_CLIENT_IP.3 CURLOPT_HEADER.3 CURLOPT_HEADERDATA.3 CURLOPT_HEADERFUNCTION.3 CURLOPT_HEADEROPT.3 CURLOPT_HSTS.3 CURLOPT_HSTS_CTRL.3 CURLOPT_HSTSREADDATA.3 CURLOPT_HSTSREADFUNCTION.3 CURLOPT_HSTSWRITEDATA.3 CURLOPT_HSTSWRITEFUNCTION.3 CURLOPT_HTTP09_ALLOWED.3 CURLOPT_HTTP200ALIASES.3 CURLOPT_HTTP_CONTENT_DECODING.3 CURLOPT_HTTP_TRANSFER_DECODING.3 CURLOPT_HTTP_VERSION.3 CURLOPT_HTTPAUTH.3 CURLOPT_HTTPGET.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_HTTPHEADER.3 CURLOPT_HTTPPOST.3 CURLOPT_HTTPPROXYTUNNEL.3 CURLOPT_HTTPSIG_ALGORITHM.3 CURLOPT_HTTPSIG_HEADERS.3 CURLOPT_HTTPSIG_KEY.3 CURLOPT_HTTPSIG_KEYID.3 CURLOPT_IGNORE_CONTENT_LENGTH.3 CURLOPT_INFILESIZE.3 CURLOPT_INFILESIZE_LARGE.3 CURLOPT_INTERFACE.3 CURLOPT_INTERLEAVEDATA.3 CURLOPT_INTERLEAVEFUNCTION.3 CURLOPT_IOCTLDATA.3 CURLOPT_IOCTLFUNCTION.3 CURLOPT_IPRESOLVE.3 CURLOPT_ISSUERCERT.3 CURLOPT_ISSUERCERT_BLOB.3 CURLOPT_KEEP_SENDING_ON_ERROR.3 CURLOPT_KEYPASSWD.3 CURLOPT_KRBLEVEL.3 CURLOPT_LOCALPORT.3 CURLOPT_LOCALPORTRANGE.3 CURLOPT_LOGIN_OPTIONS.3 CURLOPT_LOW_SPEED_LIMIT.3 CURLOPT_LOW_SPEED_TIME.3 CURLOPT_MAIL_AUTH.3 CURLOPT_MAIL_FROM.3 CURLOPT_MAIL_RCPT.3 CURLOPT_MAIL_RCPT_ALLOWFAILS.3 CURLOPT_MAX_RECV_SPEED_LARGE.3 CURLOPT_MAX_SEND_SPEED_LARGE.3 CURLOPT_MAXAGE_CONN.3 CURLOPT_MAXCONNECTS.3 CURLOPT_MAXFILESIZE.3 CURLOPT_MAXFILESIZE_LARGE.3 CURLOPT_MAXLIFETIME_CONN.3 CURLOPT_MAXREDIRS.3 CURLOPT_MIME_OPTIONS.3 CURLOPT_MIMEPOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_NETRC.3 CURLOPT_NETRC_FILE.3 CURLOPT_NEW_DIRECTORY_PERMS.3 CURLOPT_NEW_FILE_PERMS.3 CURLOPT_NOBODY.3 CURLOPT_NOPROGRESS.3 CURLOPT_NOPROXY.3 CURLOPT_NOSIGNAL.3 CURLOPT_OPENSOCKETDATA.3 CURLOPT_OPENSOCKETFUNCTION.3 CURLOPT_PASSWORD.3 CURLOPT_PATH_AS_IS.3 CURLOPT_PINNEDPUBLICKEY.3 CURLOPT_PIPEWAIT.3 CURLOPT_PORT.3 CURLOPT_POST.3 CURLOPT_POSTFIELDS.3 CURLOPT_POSTFIELDSIZE.3 CURLOPT_POSTFIELDSIZE_LARGE.3 CURLOPT_POSTQUOTE.3 CURLOPT_POSTREDIR.3 CURLOPT_PRE_PROXY.3 CURLOPT_PREQUOTE.3 CURLOPT_PREREQDATA.3 CURLOPT_PREREQFUNCTION.3 CURLOPT_PRIVATE.3 CURLOPT_PROGRESSDATA.3 CURLOPT_PROGRESSFUNCTION.3 CURLOPT_PROTOCOLS.3 CURLOPT_PROTOCOLS_STR.3 CURLOPT_PROXY.3 CURLOPT_PROXY_CAINFO.3 CURLOPT_PROXY_CAINFO_BLOB.3 CURLOPT_PROXY_CAPATH.3 CURLOPT_PROXY_CRLFILE.3 CURLOPT_PROXY_ISSUERCERT.3 CURLOPT_PROXY_ISSUERCERT_BLOB.3 CURLOPT_PROXY_KEYPASSWD.3 CURLOPT_PROXY_PINNEDPUBLICKEY.3 CURLOPT_PROXY_SERVICE_NAME.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_PROXY_SSL_CIPHER_LIST.3 CURLOPT_PROXY_SSL_OPTIONS.3 CURLOPT_PROXY_SSL_VERIFYHOST.3 CURLOPT_PROXY_SSL_VERIFYPEER.3 CURLOPT_PROXY_SSLCERT.3 CURLOPT_PROXY_SSLCERT_BLOB.3 CURLOPT_PROXY_SSLCERTTYPE.3 CURLOPT_PROXY_SSLKEY.3 CURLOPT_PROXY_SSLKEY_BLOB.3 CURLOPT_PROXY_SSLKEYTYPE.3 CURLOPT_PROXY_SSLVERSION.3 CURLOPT_PROXY_TLS13_CIPHERS.3 CURLOPT_PROXY_TLSAUTH_PASSWORD.3 CURLOPT_PROXY_TLSAUTH_TYPE.3 CURLOPT_PROXY_TLSAUTH_USERNAME.3 CURLOPT_PROXY_TRANSFER_MODE.3 CURLOPT_PROXYAUTH.3 CURLOPT_PROXYHEADER.3 CURLOPT_PROXYPASSWORD.3 CURLOPT_PROXYPORT.3 CURLOPT_PROXYTYPE.3 CURLOPT_PROXYUSERNAME.3 CURLOPT_PROXYUSERPWD.3 CURLOPT_PUT.3 CURLOPT_QUICK_EXIT.3 CURLOPT_QUOTE.3 CURLOPT_RANDOM_FILE.3 CURLOPT_RANGE.3 CURLOPT_READDATA.3 CURLOPT_READFUNCTION.3 CURLOPT_REDIR_PROTOCOLS.3 CURLOPT_REDIR_PROTOCOLS_STR.3 CURLOPT_REFERER.3 CURLOPT_REQUEST_TARGET.3 CURLOPT_RESOLVE.3 CURLOPT_RESOLVER_START_DATA.3 CURLOPT_RESOLVER_START_FUNCTION.3 CURLOPT_RESUME_FROM.3 CURLOPT_RESUME_FROM_LARGE.3 CURLOPT_RTSP_CLIENT_CSEQ.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_RTSP_REQUEST.3 CURLOPT_RTSP_SERVER_CSEQ.3 CURLOPT_RTSP_SESSION_ID.3 CURLOPT_RTSP_STREAM_URI.3 CURLOPT_RTSP_TRANSPORT.3 CURLOPT_SASL_AUTHZID.3 CURLOPT_SASL_IR.3 CURLOPT_SEEKDATA.3 CURLOPT_SEEKFUNCTION.3 CURLOPT_SERVER_RESPONSE_TIMEOUT.3 CURLOPT_SERVER_RESPONSE_TIMEOUT_MS.3 CURLOPT_SERVICE_NAME.3 CURLOPT_SHARE.3 CURLOPT_SOCKOPTDATA.3 CURLOPT_SOCKOPTFUNCTION.3 CURLOPT_SOCKS5_AUTH.3 CURLOPT_SOCKS5_GSSAPI_NEC.3 CURLOPT_SOCKS5_GSSAPI_SERVICE.3 CURLOPT_SSH_AUTH_TYPES.3 CURLOPT_SSH_COMPRESSION.3 CURLOPT_SSH_HOSTKEYDATA.3 CURLOPT_SSH_HOSTKEYFUNCTION.3 CURLOPT_SSH_HOST_PUBLIC_KEY_MD5.3 CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256.3 CURLOPT_SSH_KEYDATA.3 CURLOPT_SSH_KEYFUNCTION.3 CURLOPT_SSH_KNOWNHOSTS.3 CURLOPT_SSH_PRIVATE_KEYFILE.3 CURLOPT_SSH_PUBLIC_KEYFILE.3 CURLOPT_SSL_CIPHER_LIST.3 CURLOPT_SSL_CTX_DATA.3 CURLOPT_SSL_CTX_FUNCTION.3 CURLOPT_SSL_EC_CURVES.3 CURLOPT_SSL_ENABLE_ALPN.3 CURLOPT_SSL_ENABLE_NPN.3 CURLOPT_SSL_FALSESTART.3 CURLOPT_SSL_OPTIONS.3 CURLOPT_SSL_SESSIONID_CACHE.3 CURLOPT_SSL_SIGNATURE_ALGORITHMS.3 CURLOPT_SSL_VERIFYHOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_SSL_VERIFYPEER.3 CURLOPT_SSL_VERIFYSTATUS.3 CURLOPT_SSLCERT.3 CURLOPT_SSLCERT_BLOB.3 CURLOPT_SSLCERTTYPE.3 CURLOPT_SSLENGINE.3 CURLOPT_SSLENGINE_DEFAULT.3 CURLOPT_SSLKEY.3 CURLOPT_SSLKEY_BLOB.3 CURLOPT_SSLKEYTYPE.3 CURLOPT_SSLVERSION.3 CURLOPT_STDERR.3 CURLOPT_STREAM_DEPENDS.3 CURLOPT_STREAM_DEPENDS_E.3 CURLOPT_STREAM_WEIGHT.3 CURLOPT_SUPPRESS_CONNECT_HEADERS.3 CURLOPT_TCP_FASTOPEN.3 CURLOPT_TCP_KEEPALIVE.3 CURLOPT_TCP_KEEPIDLE.3 CURLOPT_TCP_KEEPINTVL.3 CURLOPT_TCP_KEEPCNT.3 CURLOPT_TCP_NODELAY.3 CURLOPT_TELNETOPTIONS.3 CURLOPT_TFTP_BLKSIZE.3 CURLOPT_TFTP_NO_OPTIONS.3 CURLOPT_TIMECONDITION.3 CURLOPT_TIMEOUT.3 CURLOPT_TIMEOUT_MS.3 CURLOPT_TIMEVALUE.3 CURLOPT_TIMEVALUE_LARGE.3 CURLOPT_TLS13_CIPHERS.3 CURLOPT_TLSAUTH_PASSWORD.3 CURLOPT_TLSAUTH_TYPE.3 CURLOPT_TLSAUTH_USERNAME.3 CURLOPT_TRAILERDATA.3 CURLOPT_TRAILERFUNCTION.3 CURLOPT_TRANSFER_ENCODING.3 CURLOPT_TRANSFERTEXT.3 CURLOPT_UNIX_SOCKET_PATH.3 CURLOPT_UNRESTRICTED_AUTH.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_UPKEEP_INTERVAL_MS.3 CURLOPT_UPLOAD.3 CURLOPT_UPLOAD_BUFFERSIZE.3 CURLOPT_UPLOAD_FLAGS.3 CURLOPT_URL.3 CURLOPT_USE_SSL.3 CURLOPT_USERAGENT.3 CURLOPT_USERNAME.3 CURLOPT_USERPWD.3 CURLOPT_VERBOSE.3 CURLOPT_WILDCARDMATCH.3 CURLOPT_WRITEDATA.3 CURLOPT_WRITEFUNCTION.3 CURLOPT_WS_OPTIONS.3 CURLOPT_XFERINFODATA.3 CURLOPT_XFERINFOFUNCTION.3 CURLOPT_XOAUTH2_BEARER.3 CURLSHOPT_LOCKFUNC.3 CURLSHOPT_SHARE.3 CURLSHOPT_UNLOCKFUNC.3 CURLSHOPT_UNSHARE.3 CURLSHOPT_USERDATA.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[4]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[4]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[4]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/install -c -m 644 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/docs/libcurl/libcurl.m4 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_easy_cleanup.3 curl_easy_duphandle.3 curl_easy_escape.3 curl_easy_getinfo.3 curl_easy_header.3 curl_easy_init.3 curl_easy_nextheader.3 curl_easy_option_by_id.3 curl_easy_option_by_name.3 curl_easy_option_next.3 curl_easy_pause.3 curl_easy_perform.3 curl_easy_recv.3 curl_easy_reset.3 curl_easy_send.3 curl_easy_setopt.3 curl_easy_ssls_export.3 curl_easy_ssls_import.3 curl_easy_strerror.3 curl_easy_unescape.3 curl_easy_upkeep.3 curl_escape.3 curl_formadd.3 curl_formfree.3 curl_formget.3 curl_free.3 curl_getdate.3 curl_getenv.3 curl_global_cleanup.3 curl_global_init.3 curl_global_init_mem.3 curl_global_sslset.3 curl_global_trace.3 curl_mime_addpart.3 curl_mime_data.3 curl_mime_data_cb.3 curl_mime_encoder.3 curl_mime_filedata.3 curl_mime_filename.3 curl_mime_free.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_mime_headers.3 curl_mime_init.3 curl_mime_name.3 curl_mime_subparts.3 curl_mime_type.3 curl_mprintf.3 curl_multi_add_handle.3 curl_multi_assign.3 curl_multi_cleanup.3 curl_multi_fdset.3 curl_multi_get_handles.3 curl_multi_get_offt.3 curl_multi_info_read.3 curl_multi_init.3 curl_multi_notify_disable.3 curl_multi_notify_enable.3 curl_multi_perform.3 curl_multi_poll.3 curl_multi_remove_handle.3 curl_multi_setopt.3 curl_multi_socket.3 curl_multi_socket_action.3 curl_multi_socket_all.3 curl_multi_strerror.3 curl_multi_timeout.3 curl_multi_wait.3 curl_multi_waitfds.3 curl_multi_wakeup.3 curl_pushheader_byname.3 curl_pushheader_bynum.3 curl_share_cleanup.3 curl_share_init.3 curl_share_setopt.3 curl_share_strerror.3 curl_slist_append.3 curl_slist_free_all.3 curl_strequal.3 curl_strnequal.3 curl_unescape.3 curl_url.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_url_cleanup.3 curl_url_dup.3 curl_url_get.3 curl_url_set.3 curl_url_strerror.3 curl_version.3 curl_version_info.3 curl_ws_meta.3 curl_ws_recv.3 curl_ws_send.3 curl_ws_start_frame.3 libcurl-easy.3 libcurl-env-dbg.3 libcurl-env.3 libcurl-errors.3 libcurl-multi.3 libcurl-security.3 libcurl-share.3 libcurl-symbols.3 libcurl-thread.3 libcurl-tutorial.3 libcurl-url.3 libcurl-ws.3 libcurl.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[4]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making install in src
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+  /bin/sh ../libtool   --mode=install /usr/bin/install -c curl '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+libtool: install: /usr/bin/install -c curl /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin/curl
+make[2]: Nothing to be done for 'install-data-am'.
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/src'
+Making install in scripts
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+ /usr/bin/install -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/scripts/wcurl '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+make[2]: Nothing to be done for 'install-data-am'.
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/scripts'
+make[1]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+make[2]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+ /usr/bin/install -c curl-config '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/bin'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/pkgconfig'
+ /usr/bin/install -c -m 644 libcurl.pc '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/pkgconfig'
+make  install-data-hook
+make[3]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+(cd include && make install)
+make[4]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+Making install in curl
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include/curl'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include/curl'
+make[6]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/include/curl'
+ /usr/bin/install -c -m 644 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/curl.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/curlver.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/easy.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/mprintf.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/stdcheaders.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/multi.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/typecheck-gcc.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/system.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/urlapi.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/options.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/header.h /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/include/curl/websockets.h '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/include/curl'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include/curl'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include/curl'
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+make[6]: Nothing to be done for 'install-exec-am'.
+make[6]: Nothing to be done for 'install-data-am'.
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+make[4]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/include'
+(cd docs && make install)
+make[4]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making install in .
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[6]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+ /usr/bin/install -c -m 644 curl-config.1 wcurl.1 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+Making install in cmdline-opts
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[6]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+ /usr/bin/install -c -m 644 curl.1 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man1'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/cmdline-opts'
+Making install in libcurl
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+Making install in opts
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[7]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[7]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_ACTIVESOCKET.3 CURLINFO_APPCONNECT_TIME.3 CURLINFO_APPCONNECT_TIME_T.3 CURLINFO_CAINFO.3 CURLINFO_CAPATH.3 CURLINFO_CERTINFO.3 CURLINFO_CONDITION_UNMET.3 CURLINFO_CONNECT_TIME.3 CURLINFO_CONN_ID.3 CURLINFO_CONNECT_TIME_T.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD_T.3 CURLINFO_CONTENT_LENGTH_UPLOAD.3 CURLINFO_CONTENT_LENGTH_UPLOAD_T.3 CURLINFO_CONTENT_TYPE.3 CURLINFO_COOKIELIST.3 CURLINFO_EARLYDATA_SENT_T.3 CURLINFO_EFFECTIVE_METHOD.3 CURLINFO_EFFECTIVE_URL.3 CURLINFO_FILETIME.3 CURLINFO_FILETIME_T.3 CURLINFO_FTP_ENTRY_PATH.3 CURLINFO_HEADER_SIZE.3 CURLINFO_HTTP_CONNECTCODE.3 CURLINFO_HTTP_VERSION.3 CURLINFO_HTTPAUTH_AVAIL.3 CURLINFO_HTTPAUTH_USED.3 CURLINFO_LASTSOCKET.3 CURLINFO_LOCAL_IP.3 CURLINFO_LOCAL_PORT.3 CURLINFO_NAMELOOKUP_TIME.3 CURLINFO_NAMELOOKUP_TIME_T.3 CURLINFO_NUM_CONNECTS.3 CURLINFO_OS_ERRNO.3 CURLINFO_PRETRANSFER_TIME.3 CURLINFO_PRETRANSFER_TIME_T.3 CURLINFO_POSTTRANSFER_TIME_T.3 CURLINFO_PRIMARY_IP.3 CURLINFO_PRIMARY_PORT.3 CURLINFO_PRIVATE.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_PROTOCOL.3 CURLINFO_PROXY_ERROR.3 CURLINFO_PROXY_SSL_VERIFYRESULT.3 CURLINFO_PROXYAUTH_AVAIL.3 CURLINFO_PROXYAUTH_USED.3 CURLINFO_QUEUE_TIME_T.3 CURLINFO_REDIRECT_COUNT.3 CURLINFO_REDIRECT_TIME.3 CURLINFO_REDIRECT_TIME_T.3 CURLINFO_REDIRECT_URL.3 CURLINFO_REFERER.3 CURLINFO_REQUEST_SIZE.3 CURLINFO_RESPONSE_CODE.3 CURLINFO_RETRY_AFTER.3 CURLINFO_RTSP_CLIENT_CSEQ.3 CURLINFO_RTSP_CSEQ_RECV.3 CURLINFO_RTSP_SERVER_CSEQ.3 CURLINFO_RTSP_SESSION_ID.3 CURLINFO_SCHEME.3 CURLINFO_SIZE_DELIVERED.3 CURLINFO_SIZE_DOWNLOAD.3 CURLINFO_SIZE_DOWNLOAD_T.3 CURLINFO_SIZE_UPLOAD.3 CURLINFO_SIZE_UPLOAD_T.3 CURLINFO_SPEED_DOWNLOAD.3 CURLINFO_SPEED_DOWNLOAD_T.3 CURLINFO_SPEED_UPLOAD.3 CURLINFO_SPEED_UPLOAD_T.3 CURLINFO_SSL_ENGINES.3 CURLINFO_SSL_VERIFYRESULT.3 CURLINFO_STARTTRANSFER_TIME.3 CURLINFO_STARTTRANSFER_TIME_T.3 CURLINFO_TLS_SESSION.3 CURLINFO_TLS_SSL_PTR.3 CURLINFO_TOTAL_TIME.3 CURLINFO_TOTAL_TIME_T.3 CURLINFO_USED_PROXY.3 CURLINFO_XFER_ID.3 CURLMINFO_XFERS_ADDED.3 CURLMINFO_XFERS_CURRENT.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLMINFO_XFERS_DONE.3 CURLMINFO_XFERS_PENDING.3 CURLMINFO_XFERS_RUNNING.3 CURLMOPT_CHUNK_LENGTH_PENALTY_SIZE.3 CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE.3 CURLMOPT_MAX_CONCURRENT_STREAMS.3 CURLMOPT_MAX_HOST_CONNECTIONS.3 CURLMOPT_MAX_PIPELINE_LENGTH.3 CURLMOPT_MAX_TOTAL_CONNECTIONS.3 CURLMOPT_MAXCONNECTS.3 CURLMOPT_NETWORK_CHANGED.3 CURLMOPT_NOTIFYDATA.3 CURLMOPT_NOTIFYFUNCTION.3 CURLMOPT_PIPELINING.3 CURLMOPT_PIPELINING_SERVER_BL.3 CURLMOPT_PIPELINING_SITE_BL.3 CURLMOPT_PUSHDATA.3 CURLMOPT_PUSHFUNCTION.3 CURLMOPT_QUICK_EXIT.3 CURLMOPT_RESOLVE_THREADS_MAX.3 CURLMOPT_SOCKETDATA.3 CURLMOPT_SOCKETFUNCTION.3 CURLMOPT_TIMERDATA.3 CURLMOPT_TIMERFUNCTION.3 CURLOPT_ABSTRACT_UNIX_SOCKET.3 CURLOPT_ACCEPT_ENCODING.3 CURLOPT_ACCEPTTIMEOUT_MS.3 CURLOPT_ADDRESS_SCOPE.3 CURLOPT_ALTSVC.3 CURLOPT_ALTSVC_CTRL.3 CURLOPT_APPEND.3 CURLOPT_AUTOREFERER.3 CURLOPT_AWS_SIGV4.3 CURLOPT_BUFFERSIZE.3 CURLOPT_CAINFO.3 CURLOPT_CAINFO_BLOB.3 CURLOPT_CAPATH.3 CURLOPT_CA_CACHE_TIMEOUT.3 CURLOPT_CERTINFO.3 CURLOPT_CHUNK_BGN_FUNCTION.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_CHUNK_DATA.3 CURLOPT_CHUNK_END_FUNCTION.3 CURLOPT_CLOSESOCKETDATA.3 CURLOPT_CLOSESOCKETFUNCTION.3 CURLOPT_CONNECT_ONLY.3 CURLOPT_CONNECT_TO.3 CURLOPT_CONNECTTIMEOUT.3 CURLOPT_CONNECTTIMEOUT_MS.3 CURLOPT_CONV_FROM_NETWORK_FUNCTION.3 CURLOPT_CONV_FROM_UTF8_FUNCTION.3 CURLOPT_CONV_TO_NETWORK_FUNCTION.3 CURLOPT_COOKIE.3 CURLOPT_COOKIEFILE.3 CURLOPT_COOKIEJAR.3 CURLOPT_COOKIELIST.3 CURLOPT_COOKIESESSION.3 CURLOPT_COPYPOSTFIELDS.3 CURLOPT_CRLF.3 CURLOPT_CRLFILE.3 CURLOPT_CURLU.3 CURLOPT_CUSTOMREQUEST.3 CURLOPT_DEBUGDATA.3 CURLOPT_DEBUGFUNCTION.3 CURLOPT_DEFAULT_PROTOCOL.3 CURLOPT_DIRLISTONLY.3 CURLOPT_DISALLOW_USERNAME_IN_URL.3 CURLOPT_DNS_CACHE_TIMEOUT.3 CURLOPT_DNS_INTERFACE.3 CURLOPT_DNS_LOCAL_IP4.3 CURLOPT_DNS_LOCAL_IP6.3 CURLOPT_DNS_SERVERS.3 CURLOPT_DNS_SHUFFLE_ADDRESSES.3 CURLOPT_DNS_USE_GLOBAL_CACHE.3 CURLOPT_DOH_SSL_VERIFYHOST.3 CURLOPT_DOH_SSL_VERIFYPEER.3 CURLOPT_DOH_SSL_VERIFYSTATUS.3 CURLOPT_DOH_URL.3 CURLOPT_ECH.3 CURLOPT_EGDSOCKET.3 CURLOPT_ERRORBUFFER.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_EXPECT_100_TIMEOUT_MS.3 CURLOPT_FAILONERROR.3 CURLOPT_FILETIME.3 CURLOPT_FNMATCH_DATA.3 CURLOPT_FNMATCH_FUNCTION.3 CURLOPT_FOLLOWLOCATION.3 CURLOPT_FORBID_REUSE.3 CURLOPT_FRESH_CONNECT.3 CURLOPT_FTP_ACCOUNT.3 CURLOPT_FTP_ALTERNATIVE_TO_USER.3 CURLOPT_FTP_CREATE_MISSING_DIRS.3 CURLOPT_FTP_FILEMETHOD.3 CURLOPT_FTP_SKIP_PASV_IP.3 CURLOPT_FTP_SSL_CCC.3 CURLOPT_FTP_USE_EPRT.3 CURLOPT_FTP_USE_EPSV.3 CURLOPT_FTP_USE_PRET.3 CURLOPT_FTPPORT.3 CURLOPT_FTPSSLAUTH.3 CURLOPT_GSSAPI_DELEGATION.3 CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS.3 CURLOPT_HAPROXYPROTOCOL.3 CURLOPT_HAPROXY_CLIENT_IP.3 CURLOPT_HEADER.3 CURLOPT_HEADERDATA.3 CURLOPT_HEADERFUNCTION.3 CURLOPT_HEADEROPT.3 CURLOPT_HSTS.3 CURLOPT_HSTS_CTRL.3 CURLOPT_HSTSREADDATA.3 CURLOPT_HSTSREADFUNCTION.3 CURLOPT_HSTSWRITEDATA.3 CURLOPT_HSTSWRITEFUNCTION.3 CURLOPT_HTTP09_ALLOWED.3 CURLOPT_HTTP200ALIASES.3 CURLOPT_HTTP_CONTENT_DECODING.3 CURLOPT_HTTP_TRANSFER_DECODING.3 CURLOPT_HTTP_VERSION.3 CURLOPT_HTTPAUTH.3 CURLOPT_HTTPGET.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_HTTPHEADER.3 CURLOPT_HTTPPOST.3 CURLOPT_HTTPPROXYTUNNEL.3 CURLOPT_HTTPSIG_ALGORITHM.3 CURLOPT_HTTPSIG_HEADERS.3 CURLOPT_HTTPSIG_KEY.3 CURLOPT_HTTPSIG_KEYID.3 CURLOPT_IGNORE_CONTENT_LENGTH.3 CURLOPT_INFILESIZE.3 CURLOPT_INFILESIZE_LARGE.3 CURLOPT_INTERFACE.3 CURLOPT_INTERLEAVEDATA.3 CURLOPT_INTERLEAVEFUNCTION.3 CURLOPT_IOCTLDATA.3 CURLOPT_IOCTLFUNCTION.3 CURLOPT_IPRESOLVE.3 CURLOPT_ISSUERCERT.3 CURLOPT_ISSUERCERT_BLOB.3 CURLOPT_KEEP_SENDING_ON_ERROR.3 CURLOPT_KEYPASSWD.3 CURLOPT_KRBLEVEL.3 CURLOPT_LOCALPORT.3 CURLOPT_LOCALPORTRANGE.3 CURLOPT_LOGIN_OPTIONS.3 CURLOPT_LOW_SPEED_LIMIT.3 CURLOPT_LOW_SPEED_TIME.3 CURLOPT_MAIL_AUTH.3 CURLOPT_MAIL_FROM.3 CURLOPT_MAIL_RCPT.3 CURLOPT_MAIL_RCPT_ALLOWFAILS.3 CURLOPT_MAX_RECV_SPEED_LARGE.3 CURLOPT_MAX_SEND_SPEED_LARGE.3 CURLOPT_MAXAGE_CONN.3 CURLOPT_MAXCONNECTS.3 CURLOPT_MAXFILESIZE.3 CURLOPT_MAXFILESIZE_LARGE.3 CURLOPT_MAXLIFETIME_CONN.3 CURLOPT_MAXREDIRS.3 CURLOPT_MIME_OPTIONS.3 CURLOPT_MIMEPOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_NETRC.3 CURLOPT_NETRC_FILE.3 CURLOPT_NEW_DIRECTORY_PERMS.3 CURLOPT_NEW_FILE_PERMS.3 CURLOPT_NOBODY.3 CURLOPT_NOPROGRESS.3 CURLOPT_NOPROXY.3 CURLOPT_NOSIGNAL.3 CURLOPT_OPENSOCKETDATA.3 CURLOPT_OPENSOCKETFUNCTION.3 CURLOPT_PASSWORD.3 CURLOPT_PATH_AS_IS.3 CURLOPT_PINNEDPUBLICKEY.3 CURLOPT_PIPEWAIT.3 CURLOPT_PORT.3 CURLOPT_POST.3 CURLOPT_POSTFIELDS.3 CURLOPT_POSTFIELDSIZE.3 CURLOPT_POSTFIELDSIZE_LARGE.3 CURLOPT_POSTQUOTE.3 CURLOPT_POSTREDIR.3 CURLOPT_PRE_PROXY.3 CURLOPT_PREQUOTE.3 CURLOPT_PREREQDATA.3 CURLOPT_PREREQFUNCTION.3 CURLOPT_PRIVATE.3 CURLOPT_PROGRESSDATA.3 CURLOPT_PROGRESSFUNCTION.3 CURLOPT_PROTOCOLS.3 CURLOPT_PROTOCOLS_STR.3 CURLOPT_PROXY.3 CURLOPT_PROXY_CAINFO.3 CURLOPT_PROXY_CAINFO_BLOB.3 CURLOPT_PROXY_CAPATH.3 CURLOPT_PROXY_CRLFILE.3 CURLOPT_PROXY_ISSUERCERT.3 CURLOPT_PROXY_ISSUERCERT_BLOB.3 CURLOPT_PROXY_KEYPASSWD.3 CURLOPT_PROXY_PINNEDPUBLICKEY.3 CURLOPT_PROXY_SERVICE_NAME.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_PROXY_SSL_CIPHER_LIST.3 CURLOPT_PROXY_SSL_OPTIONS.3 CURLOPT_PROXY_SSL_VERIFYHOST.3 CURLOPT_PROXY_SSL_VERIFYPEER.3 CURLOPT_PROXY_SSLCERT.3 CURLOPT_PROXY_SSLCERT_BLOB.3 CURLOPT_PROXY_SSLCERTTYPE.3 CURLOPT_PROXY_SSLKEY.3 CURLOPT_PROXY_SSLKEY_BLOB.3 CURLOPT_PROXY_SSLKEYTYPE.3 CURLOPT_PROXY_SSLVERSION.3 CURLOPT_PROXY_TLS13_CIPHERS.3 CURLOPT_PROXY_TLSAUTH_PASSWORD.3 CURLOPT_PROXY_TLSAUTH_TYPE.3 CURLOPT_PROXY_TLSAUTH_USERNAME.3 CURLOPT_PROXY_TRANSFER_MODE.3 CURLOPT_PROXYAUTH.3 CURLOPT_PROXYHEADER.3 CURLOPT_PROXYPASSWORD.3 CURLOPT_PROXYPORT.3 CURLOPT_PROXYTYPE.3 CURLOPT_PROXYUSERNAME.3 CURLOPT_PROXYUSERPWD.3 CURLOPT_PUT.3 CURLOPT_QUICK_EXIT.3 CURLOPT_QUOTE.3 CURLOPT_RANDOM_FILE.3 CURLOPT_RANGE.3 CURLOPT_READDATA.3 CURLOPT_READFUNCTION.3 CURLOPT_REDIR_PROTOCOLS.3 CURLOPT_REDIR_PROTOCOLS_STR.3 CURLOPT_REFERER.3 CURLOPT_REQUEST_TARGET.3 CURLOPT_RESOLVE.3 CURLOPT_RESOLVER_START_DATA.3 CURLOPT_RESOLVER_START_FUNCTION.3 CURLOPT_RESUME_FROM.3 CURLOPT_RESUME_FROM_LARGE.3 CURLOPT_RTSP_CLIENT_CSEQ.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_RTSP_REQUEST.3 CURLOPT_RTSP_SERVER_CSEQ.3 CURLOPT_RTSP_SESSION_ID.3 CURLOPT_RTSP_STREAM_URI.3 CURLOPT_RTSP_TRANSPORT.3 CURLOPT_SASL_AUTHZID.3 CURLOPT_SASL_IR.3 CURLOPT_SEEKDATA.3 CURLOPT_SEEKFUNCTION.3 CURLOPT_SERVER_RESPONSE_TIMEOUT.3 CURLOPT_SERVER_RESPONSE_TIMEOUT_MS.3 CURLOPT_SERVICE_NAME.3 CURLOPT_SHARE.3 CURLOPT_SOCKOPTDATA.3 CURLOPT_SOCKOPTFUNCTION.3 CURLOPT_SOCKS5_AUTH.3 CURLOPT_SOCKS5_GSSAPI_NEC.3 CURLOPT_SOCKS5_GSSAPI_SERVICE.3 CURLOPT_SSH_AUTH_TYPES.3 CURLOPT_SSH_COMPRESSION.3 CURLOPT_SSH_HOSTKEYDATA.3 CURLOPT_SSH_HOSTKEYFUNCTION.3 CURLOPT_SSH_HOST_PUBLIC_KEY_MD5.3 CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256.3 CURLOPT_SSH_KEYDATA.3 CURLOPT_SSH_KEYFUNCTION.3 CURLOPT_SSH_KNOWNHOSTS.3 CURLOPT_SSH_PRIVATE_KEYFILE.3 CURLOPT_SSH_PUBLIC_KEYFILE.3 CURLOPT_SSL_CIPHER_LIST.3 CURLOPT_SSL_CTX_DATA.3 CURLOPT_SSL_CTX_FUNCTION.3 CURLOPT_SSL_EC_CURVES.3 CURLOPT_SSL_ENABLE_ALPN.3 CURLOPT_SSL_ENABLE_NPN.3 CURLOPT_SSL_FALSESTART.3 CURLOPT_SSL_OPTIONS.3 CURLOPT_SSL_SESSIONID_CACHE.3 CURLOPT_SSL_SIGNATURE_ALGORITHMS.3 CURLOPT_SSL_VERIFYHOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_SSL_VERIFYPEER.3 CURLOPT_SSL_VERIFYSTATUS.3 CURLOPT_SSLCERT.3 CURLOPT_SSLCERT_BLOB.3 CURLOPT_SSLCERTTYPE.3 CURLOPT_SSLENGINE.3 CURLOPT_SSLENGINE_DEFAULT.3 CURLOPT_SSLKEY.3 CURLOPT_SSLKEY_BLOB.3 CURLOPT_SSLKEYTYPE.3 CURLOPT_SSLVERSION.3 CURLOPT_STDERR.3 CURLOPT_STREAM_DEPENDS.3 CURLOPT_STREAM_DEPENDS_E.3 CURLOPT_STREAM_WEIGHT.3 CURLOPT_SUPPRESS_CONNECT_HEADERS.3 CURLOPT_TCP_FASTOPEN.3 CURLOPT_TCP_KEEPALIVE.3 CURLOPT_TCP_KEEPIDLE.3 CURLOPT_TCP_KEEPINTVL.3 CURLOPT_TCP_KEEPCNT.3 CURLOPT_TCP_NODELAY.3 CURLOPT_TELNETOPTIONS.3 CURLOPT_TFTP_BLKSIZE.3 CURLOPT_TFTP_NO_OPTIONS.3 CURLOPT_TIMECONDITION.3 CURLOPT_TIMEOUT.3 CURLOPT_TIMEOUT_MS.3 CURLOPT_TIMEVALUE.3 CURLOPT_TIMEVALUE_LARGE.3 CURLOPT_TLS13_CIPHERS.3 CURLOPT_TLSAUTH_PASSWORD.3 CURLOPT_TLSAUTH_TYPE.3 CURLOPT_TLSAUTH_USERNAME.3 CURLOPT_TRAILERDATA.3 CURLOPT_TRAILERFUNCTION.3 CURLOPT_TRANSFER_ENCODING.3 CURLOPT_TRANSFERTEXT.3 CURLOPT_UNIX_SOCKET_PATH.3 CURLOPT_UNRESTRICTED_AUTH.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_UPKEEP_INTERVAL_MS.3 CURLOPT_UPLOAD.3 CURLOPT_UPLOAD_BUFFERSIZE.3 CURLOPT_UPLOAD_FLAGS.3 CURLOPT_URL.3 CURLOPT_USE_SSL.3 CURLOPT_USERAGENT.3 CURLOPT_USERNAME.3 CURLOPT_USERPWD.3 CURLOPT_VERBOSE.3 CURLOPT_WILDCARDMATCH.3 CURLOPT_WRITEDATA.3 CURLOPT_WRITEFUNCTION.3 CURLOPT_WS_OPTIONS.3 CURLOPT_XFERINFODATA.3 CURLOPT_XFERINFOFUNCTION.3 CURLOPT_XOAUTH2_BEARER.3 CURLSHOPT_LOCKFUNC.3 CURLSHOPT_SHARE.3 CURLSHOPT_UNLOCKFUNC.3 CURLSHOPT_UNSHARE.3 CURLSHOPT_USERDATA.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[7]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[7]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[7]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/install -c -m 644 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/docs/libcurl/libcurl.m4 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_easy_cleanup.3 curl_easy_duphandle.3 curl_easy_escape.3 curl_easy_getinfo.3 curl_easy_header.3 curl_easy_init.3 curl_easy_nextheader.3 curl_easy_option_by_id.3 curl_easy_option_by_name.3 curl_easy_option_next.3 curl_easy_pause.3 curl_easy_perform.3 curl_easy_recv.3 curl_easy_reset.3 curl_easy_send.3 curl_easy_setopt.3 curl_easy_ssls_export.3 curl_easy_ssls_import.3 curl_easy_strerror.3 curl_easy_unescape.3 curl_easy_upkeep.3 curl_escape.3 curl_formadd.3 curl_formfree.3 curl_formget.3 curl_free.3 curl_getdate.3 curl_getenv.3 curl_global_cleanup.3 curl_global_init.3 curl_global_init_mem.3 curl_global_sslset.3 curl_global_trace.3 curl_mime_addpart.3 curl_mime_data.3 curl_mime_data_cb.3 curl_mime_encoder.3 curl_mime_filedata.3 curl_mime_filename.3 curl_mime_free.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_mime_headers.3 curl_mime_init.3 curl_mime_name.3 curl_mime_subparts.3 curl_mime_type.3 curl_mprintf.3 curl_multi_add_handle.3 curl_multi_assign.3 curl_multi_cleanup.3 curl_multi_fdset.3 curl_multi_get_handles.3 curl_multi_get_offt.3 curl_multi_info_read.3 curl_multi_init.3 curl_multi_notify_disable.3 curl_multi_notify_enable.3 curl_multi_perform.3 curl_multi_poll.3 curl_multi_remove_handle.3 curl_multi_setopt.3 curl_multi_socket.3 curl_multi_socket_action.3 curl_multi_socket_all.3 curl_multi_strerror.3 curl_multi_timeout.3 curl_multi_wait.3 curl_multi_waitfds.3 curl_multi_wakeup.3 curl_pushheader_byname.3 curl_pushheader_bynum.3 curl_share_cleanup.3 curl_share_init.3 curl_share_setopt.3 curl_share_strerror.3 curl_slist_append.3 curl_slist_free_all.3 curl_strequal.3 curl_strnequal.3 curl_unescape.3 curl_url.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_url_cleanup.3 curl_url_dup.3 curl_url_get.3 curl_url_set.3 curl_url_strerror.3 curl_version.3 curl_version_info.3 curl_ws_meta.3 curl_ws_recv.3 curl_ws_send.3 curl_ws_start_frame.3 libcurl-easy.3 libcurl-env-dbg.3 libcurl-env.3 libcurl-errors.3 libcurl-multi.3 libcurl-security.3 libcurl-share.3 libcurl-symbols.3 libcurl-thread.3 libcurl-tutorial.3 libcurl-url.3 libcurl-ws.3 libcurl.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[7]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[4]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs'
+(cd docs/libcurl && make install)
+make[4]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+Making install in opts
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[6]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_ACTIVESOCKET.3 CURLINFO_APPCONNECT_TIME.3 CURLINFO_APPCONNECT_TIME_T.3 CURLINFO_CAINFO.3 CURLINFO_CAPATH.3 CURLINFO_CERTINFO.3 CURLINFO_CONDITION_UNMET.3 CURLINFO_CONNECT_TIME.3 CURLINFO_CONN_ID.3 CURLINFO_CONNECT_TIME_T.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD.3 CURLINFO_CONTENT_LENGTH_DOWNLOAD_T.3 CURLINFO_CONTENT_LENGTH_UPLOAD.3 CURLINFO_CONTENT_LENGTH_UPLOAD_T.3 CURLINFO_CONTENT_TYPE.3 CURLINFO_COOKIELIST.3 CURLINFO_EARLYDATA_SENT_T.3 CURLINFO_EFFECTIVE_METHOD.3 CURLINFO_EFFECTIVE_URL.3 CURLINFO_FILETIME.3 CURLINFO_FILETIME_T.3 CURLINFO_FTP_ENTRY_PATH.3 CURLINFO_HEADER_SIZE.3 CURLINFO_HTTP_CONNECTCODE.3 CURLINFO_HTTP_VERSION.3 CURLINFO_HTTPAUTH_AVAIL.3 CURLINFO_HTTPAUTH_USED.3 CURLINFO_LASTSOCKET.3 CURLINFO_LOCAL_IP.3 CURLINFO_LOCAL_PORT.3 CURLINFO_NAMELOOKUP_TIME.3 CURLINFO_NAMELOOKUP_TIME_T.3 CURLINFO_NUM_CONNECTS.3 CURLINFO_OS_ERRNO.3 CURLINFO_PRETRANSFER_TIME.3 CURLINFO_PRETRANSFER_TIME_T.3 CURLINFO_POSTTRANSFER_TIME_T.3 CURLINFO_PRIMARY_IP.3 CURLINFO_PRIMARY_PORT.3 CURLINFO_PRIVATE.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLINFO_PROTOCOL.3 CURLINFO_PROXY_ERROR.3 CURLINFO_PROXY_SSL_VERIFYRESULT.3 CURLINFO_PROXYAUTH_AVAIL.3 CURLINFO_PROXYAUTH_USED.3 CURLINFO_QUEUE_TIME_T.3 CURLINFO_REDIRECT_COUNT.3 CURLINFO_REDIRECT_TIME.3 CURLINFO_REDIRECT_TIME_T.3 CURLINFO_REDIRECT_URL.3 CURLINFO_REFERER.3 CURLINFO_REQUEST_SIZE.3 CURLINFO_RESPONSE_CODE.3 CURLINFO_RETRY_AFTER.3 CURLINFO_RTSP_CLIENT_CSEQ.3 CURLINFO_RTSP_CSEQ_RECV.3 CURLINFO_RTSP_SERVER_CSEQ.3 CURLINFO_RTSP_SESSION_ID.3 CURLINFO_SCHEME.3 CURLINFO_SIZE_DELIVERED.3 CURLINFO_SIZE_DOWNLOAD.3 CURLINFO_SIZE_DOWNLOAD_T.3 CURLINFO_SIZE_UPLOAD.3 CURLINFO_SIZE_UPLOAD_T.3 CURLINFO_SPEED_DOWNLOAD.3 CURLINFO_SPEED_DOWNLOAD_T.3 CURLINFO_SPEED_UPLOAD.3 CURLINFO_SPEED_UPLOAD_T.3 CURLINFO_SSL_ENGINES.3 CURLINFO_SSL_VERIFYRESULT.3 CURLINFO_STARTTRANSFER_TIME.3 CURLINFO_STARTTRANSFER_TIME_T.3 CURLINFO_TLS_SESSION.3 CURLINFO_TLS_SSL_PTR.3 CURLINFO_TOTAL_TIME.3 CURLINFO_TOTAL_TIME_T.3 CURLINFO_USED_PROXY.3 CURLINFO_XFER_ID.3 CURLMINFO_XFERS_ADDED.3 CURLMINFO_XFERS_CURRENT.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLMINFO_XFERS_DONE.3 CURLMINFO_XFERS_PENDING.3 CURLMINFO_XFERS_RUNNING.3 CURLMOPT_CHUNK_LENGTH_PENALTY_SIZE.3 CURLMOPT_CONTENT_LENGTH_PENALTY_SIZE.3 CURLMOPT_MAX_CONCURRENT_STREAMS.3 CURLMOPT_MAX_HOST_CONNECTIONS.3 CURLMOPT_MAX_PIPELINE_LENGTH.3 CURLMOPT_MAX_TOTAL_CONNECTIONS.3 CURLMOPT_MAXCONNECTS.3 CURLMOPT_NETWORK_CHANGED.3 CURLMOPT_NOTIFYDATA.3 CURLMOPT_NOTIFYFUNCTION.3 CURLMOPT_PIPELINING.3 CURLMOPT_PIPELINING_SERVER_BL.3 CURLMOPT_PIPELINING_SITE_BL.3 CURLMOPT_PUSHDATA.3 CURLMOPT_PUSHFUNCTION.3 CURLMOPT_QUICK_EXIT.3 CURLMOPT_RESOLVE_THREADS_MAX.3 CURLMOPT_SOCKETDATA.3 CURLMOPT_SOCKETFUNCTION.3 CURLMOPT_TIMERDATA.3 CURLMOPT_TIMERFUNCTION.3 CURLOPT_ABSTRACT_UNIX_SOCKET.3 CURLOPT_ACCEPT_ENCODING.3 CURLOPT_ACCEPTTIMEOUT_MS.3 CURLOPT_ADDRESS_SCOPE.3 CURLOPT_ALTSVC.3 CURLOPT_ALTSVC_CTRL.3 CURLOPT_APPEND.3 CURLOPT_AUTOREFERER.3 CURLOPT_AWS_SIGV4.3 CURLOPT_BUFFERSIZE.3 CURLOPT_CAINFO.3 CURLOPT_CAINFO_BLOB.3 CURLOPT_CAPATH.3 CURLOPT_CA_CACHE_TIMEOUT.3 CURLOPT_CERTINFO.3 CURLOPT_CHUNK_BGN_FUNCTION.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_CHUNK_DATA.3 CURLOPT_CHUNK_END_FUNCTION.3 CURLOPT_CLOSESOCKETDATA.3 CURLOPT_CLOSESOCKETFUNCTION.3 CURLOPT_CONNECT_ONLY.3 CURLOPT_CONNECT_TO.3 CURLOPT_CONNECTTIMEOUT.3 CURLOPT_CONNECTTIMEOUT_MS.3 CURLOPT_CONV_FROM_NETWORK_FUNCTION.3 CURLOPT_CONV_FROM_UTF8_FUNCTION.3 CURLOPT_CONV_TO_NETWORK_FUNCTION.3 CURLOPT_COOKIE.3 CURLOPT_COOKIEFILE.3 CURLOPT_COOKIEJAR.3 CURLOPT_COOKIELIST.3 CURLOPT_COOKIESESSION.3 CURLOPT_COPYPOSTFIELDS.3 CURLOPT_CRLF.3 CURLOPT_CRLFILE.3 CURLOPT_CURLU.3 CURLOPT_CUSTOMREQUEST.3 CURLOPT_DEBUGDATA.3 CURLOPT_DEBUGFUNCTION.3 CURLOPT_DEFAULT_PROTOCOL.3 CURLOPT_DIRLISTONLY.3 CURLOPT_DISALLOW_USERNAME_IN_URL.3 CURLOPT_DNS_CACHE_TIMEOUT.3 CURLOPT_DNS_INTERFACE.3 CURLOPT_DNS_LOCAL_IP4.3 CURLOPT_DNS_LOCAL_IP6.3 CURLOPT_DNS_SERVERS.3 CURLOPT_DNS_SHUFFLE_ADDRESSES.3 CURLOPT_DNS_USE_GLOBAL_CACHE.3 CURLOPT_DOH_SSL_VERIFYHOST.3 CURLOPT_DOH_SSL_VERIFYPEER.3 CURLOPT_DOH_SSL_VERIFYSTATUS.3 CURLOPT_DOH_URL.3 CURLOPT_ECH.3 CURLOPT_EGDSOCKET.3 CURLOPT_ERRORBUFFER.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_EXPECT_100_TIMEOUT_MS.3 CURLOPT_FAILONERROR.3 CURLOPT_FILETIME.3 CURLOPT_FNMATCH_DATA.3 CURLOPT_FNMATCH_FUNCTION.3 CURLOPT_FOLLOWLOCATION.3 CURLOPT_FORBID_REUSE.3 CURLOPT_FRESH_CONNECT.3 CURLOPT_FTP_ACCOUNT.3 CURLOPT_FTP_ALTERNATIVE_TO_USER.3 CURLOPT_FTP_CREATE_MISSING_DIRS.3 CURLOPT_FTP_FILEMETHOD.3 CURLOPT_FTP_SKIP_PASV_IP.3 CURLOPT_FTP_SSL_CCC.3 CURLOPT_FTP_USE_EPRT.3 CURLOPT_FTP_USE_EPSV.3 CURLOPT_FTP_USE_PRET.3 CURLOPT_FTPPORT.3 CURLOPT_FTPSSLAUTH.3 CURLOPT_GSSAPI_DELEGATION.3 CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS.3 CURLOPT_HAPROXYPROTOCOL.3 CURLOPT_HAPROXY_CLIENT_IP.3 CURLOPT_HEADER.3 CURLOPT_HEADERDATA.3 CURLOPT_HEADERFUNCTION.3 CURLOPT_HEADEROPT.3 CURLOPT_HSTS.3 CURLOPT_HSTS_CTRL.3 CURLOPT_HSTSREADDATA.3 CURLOPT_HSTSREADFUNCTION.3 CURLOPT_HSTSWRITEDATA.3 CURLOPT_HSTSWRITEFUNCTION.3 CURLOPT_HTTP09_ALLOWED.3 CURLOPT_HTTP200ALIASES.3 CURLOPT_HTTP_CONTENT_DECODING.3 CURLOPT_HTTP_TRANSFER_DECODING.3 CURLOPT_HTTP_VERSION.3 CURLOPT_HTTPAUTH.3 CURLOPT_HTTPGET.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_HTTPHEADER.3 CURLOPT_HTTPPOST.3 CURLOPT_HTTPPROXYTUNNEL.3 CURLOPT_HTTPSIG_ALGORITHM.3 CURLOPT_HTTPSIG_HEADERS.3 CURLOPT_HTTPSIG_KEY.3 CURLOPT_HTTPSIG_KEYID.3 CURLOPT_IGNORE_CONTENT_LENGTH.3 CURLOPT_INFILESIZE.3 CURLOPT_INFILESIZE_LARGE.3 CURLOPT_INTERFACE.3 CURLOPT_INTERLEAVEDATA.3 CURLOPT_INTERLEAVEFUNCTION.3 CURLOPT_IOCTLDATA.3 CURLOPT_IOCTLFUNCTION.3 CURLOPT_IPRESOLVE.3 CURLOPT_ISSUERCERT.3 CURLOPT_ISSUERCERT_BLOB.3 CURLOPT_KEEP_SENDING_ON_ERROR.3 CURLOPT_KEYPASSWD.3 CURLOPT_KRBLEVEL.3 CURLOPT_LOCALPORT.3 CURLOPT_LOCALPORTRANGE.3 CURLOPT_LOGIN_OPTIONS.3 CURLOPT_LOW_SPEED_LIMIT.3 CURLOPT_LOW_SPEED_TIME.3 CURLOPT_MAIL_AUTH.3 CURLOPT_MAIL_FROM.3 CURLOPT_MAIL_RCPT.3 CURLOPT_MAIL_RCPT_ALLOWFAILS.3 CURLOPT_MAX_RECV_SPEED_LARGE.3 CURLOPT_MAX_SEND_SPEED_LARGE.3 CURLOPT_MAXAGE_CONN.3 CURLOPT_MAXCONNECTS.3 CURLOPT_MAXFILESIZE.3 CURLOPT_MAXFILESIZE_LARGE.3 CURLOPT_MAXLIFETIME_CONN.3 CURLOPT_MAXREDIRS.3 CURLOPT_MIME_OPTIONS.3 CURLOPT_MIMEPOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_NETRC.3 CURLOPT_NETRC_FILE.3 CURLOPT_NEW_DIRECTORY_PERMS.3 CURLOPT_NEW_FILE_PERMS.3 CURLOPT_NOBODY.3 CURLOPT_NOPROGRESS.3 CURLOPT_NOPROXY.3 CURLOPT_NOSIGNAL.3 CURLOPT_OPENSOCKETDATA.3 CURLOPT_OPENSOCKETFUNCTION.3 CURLOPT_PASSWORD.3 CURLOPT_PATH_AS_IS.3 CURLOPT_PINNEDPUBLICKEY.3 CURLOPT_PIPEWAIT.3 CURLOPT_PORT.3 CURLOPT_POST.3 CURLOPT_POSTFIELDS.3 CURLOPT_POSTFIELDSIZE.3 CURLOPT_POSTFIELDSIZE_LARGE.3 CURLOPT_POSTQUOTE.3 CURLOPT_POSTREDIR.3 CURLOPT_PRE_PROXY.3 CURLOPT_PREQUOTE.3 CURLOPT_PREREQDATA.3 CURLOPT_PREREQFUNCTION.3 CURLOPT_PRIVATE.3 CURLOPT_PROGRESSDATA.3 CURLOPT_PROGRESSFUNCTION.3 CURLOPT_PROTOCOLS.3 CURLOPT_PROTOCOLS_STR.3 CURLOPT_PROXY.3 CURLOPT_PROXY_CAINFO.3 CURLOPT_PROXY_CAINFO_BLOB.3 CURLOPT_PROXY_CAPATH.3 CURLOPT_PROXY_CRLFILE.3 CURLOPT_PROXY_ISSUERCERT.3 CURLOPT_PROXY_ISSUERCERT_BLOB.3 CURLOPT_PROXY_KEYPASSWD.3 CURLOPT_PROXY_PINNEDPUBLICKEY.3 CURLOPT_PROXY_SERVICE_NAME.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_PROXY_SSL_CIPHER_LIST.3 CURLOPT_PROXY_SSL_OPTIONS.3 CURLOPT_PROXY_SSL_VERIFYHOST.3 CURLOPT_PROXY_SSL_VERIFYPEER.3 CURLOPT_PROXY_SSLCERT.3 CURLOPT_PROXY_SSLCERT_BLOB.3 CURLOPT_PROXY_SSLCERTTYPE.3 CURLOPT_PROXY_SSLKEY.3 CURLOPT_PROXY_SSLKEY_BLOB.3 CURLOPT_PROXY_SSLKEYTYPE.3 CURLOPT_PROXY_SSLVERSION.3 CURLOPT_PROXY_TLS13_CIPHERS.3 CURLOPT_PROXY_TLSAUTH_PASSWORD.3 CURLOPT_PROXY_TLSAUTH_TYPE.3 CURLOPT_PROXY_TLSAUTH_USERNAME.3 CURLOPT_PROXY_TRANSFER_MODE.3 CURLOPT_PROXYAUTH.3 CURLOPT_PROXYHEADER.3 CURLOPT_PROXYPASSWORD.3 CURLOPT_PROXYPORT.3 CURLOPT_PROXYTYPE.3 CURLOPT_PROXYUSERNAME.3 CURLOPT_PROXYUSERPWD.3 CURLOPT_PUT.3 CURLOPT_QUICK_EXIT.3 CURLOPT_QUOTE.3 CURLOPT_RANDOM_FILE.3 CURLOPT_RANGE.3 CURLOPT_READDATA.3 CURLOPT_READFUNCTION.3 CURLOPT_REDIR_PROTOCOLS.3 CURLOPT_REDIR_PROTOCOLS_STR.3 CURLOPT_REFERER.3 CURLOPT_REQUEST_TARGET.3 CURLOPT_RESOLVE.3 CURLOPT_RESOLVER_START_DATA.3 CURLOPT_RESOLVER_START_FUNCTION.3 CURLOPT_RESUME_FROM.3 CURLOPT_RESUME_FROM_LARGE.3 CURLOPT_RTSP_CLIENT_CSEQ.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_RTSP_REQUEST.3 CURLOPT_RTSP_SERVER_CSEQ.3 CURLOPT_RTSP_SESSION_ID.3 CURLOPT_RTSP_STREAM_URI.3 CURLOPT_RTSP_TRANSPORT.3 CURLOPT_SASL_AUTHZID.3 CURLOPT_SASL_IR.3 CURLOPT_SEEKDATA.3 CURLOPT_SEEKFUNCTION.3 CURLOPT_SERVER_RESPONSE_TIMEOUT.3 CURLOPT_SERVER_RESPONSE_TIMEOUT_MS.3 CURLOPT_SERVICE_NAME.3 CURLOPT_SHARE.3 CURLOPT_SOCKOPTDATA.3 CURLOPT_SOCKOPTFUNCTION.3 CURLOPT_SOCKS5_AUTH.3 CURLOPT_SOCKS5_GSSAPI_NEC.3 CURLOPT_SOCKS5_GSSAPI_SERVICE.3 CURLOPT_SSH_AUTH_TYPES.3 CURLOPT_SSH_COMPRESSION.3 CURLOPT_SSH_HOSTKEYDATA.3 CURLOPT_SSH_HOSTKEYFUNCTION.3 CURLOPT_SSH_HOST_PUBLIC_KEY_MD5.3 CURLOPT_SSH_HOST_PUBLIC_KEY_SHA256.3 CURLOPT_SSH_KEYDATA.3 CURLOPT_SSH_KEYFUNCTION.3 CURLOPT_SSH_KNOWNHOSTS.3 CURLOPT_SSH_PRIVATE_KEYFILE.3 CURLOPT_SSH_PUBLIC_KEYFILE.3 CURLOPT_SSL_CIPHER_LIST.3 CURLOPT_SSL_CTX_DATA.3 CURLOPT_SSL_CTX_FUNCTION.3 CURLOPT_SSL_EC_CURVES.3 CURLOPT_SSL_ENABLE_ALPN.3 CURLOPT_SSL_ENABLE_NPN.3 CURLOPT_SSL_FALSESTART.3 CURLOPT_SSL_OPTIONS.3 CURLOPT_SSL_SESSIONID_CACHE.3 CURLOPT_SSL_SIGNATURE_ALGORITHMS.3 CURLOPT_SSL_VERIFYHOST.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_SSL_VERIFYPEER.3 CURLOPT_SSL_VERIFYSTATUS.3 CURLOPT_SSLCERT.3 CURLOPT_SSLCERT_BLOB.3 CURLOPT_SSLCERTTYPE.3 CURLOPT_SSLENGINE.3 CURLOPT_SSLENGINE_DEFAULT.3 CURLOPT_SSLKEY.3 CURLOPT_SSLKEY_BLOB.3 CURLOPT_SSLKEYTYPE.3 CURLOPT_SSLVERSION.3 CURLOPT_STDERR.3 CURLOPT_STREAM_DEPENDS.3 CURLOPT_STREAM_DEPENDS_E.3 CURLOPT_STREAM_WEIGHT.3 CURLOPT_SUPPRESS_CONNECT_HEADERS.3 CURLOPT_TCP_FASTOPEN.3 CURLOPT_TCP_KEEPALIVE.3 CURLOPT_TCP_KEEPIDLE.3 CURLOPT_TCP_KEEPINTVL.3 CURLOPT_TCP_KEEPCNT.3 CURLOPT_TCP_NODELAY.3 CURLOPT_TELNETOPTIONS.3 CURLOPT_TFTP_BLKSIZE.3 CURLOPT_TFTP_NO_OPTIONS.3 CURLOPT_TIMECONDITION.3 CURLOPT_TIMEOUT.3 CURLOPT_TIMEOUT_MS.3 CURLOPT_TIMEVALUE.3 CURLOPT_TIMEVALUE_LARGE.3 CURLOPT_TLS13_CIPHERS.3 CURLOPT_TLSAUTH_PASSWORD.3 CURLOPT_TLSAUTH_TYPE.3 CURLOPT_TLSAUTH_USERNAME.3 CURLOPT_TRAILERDATA.3 CURLOPT_TRAILERFUNCTION.3 CURLOPT_TRANSFER_ENCODING.3 CURLOPT_TRANSFERTEXT.3 CURLOPT_UNIX_SOCKET_PATH.3 CURLOPT_UNRESTRICTED_AUTH.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 CURLOPT_UPKEEP_INTERVAL_MS.3 CURLOPT_UPLOAD.3 CURLOPT_UPLOAD_BUFFERSIZE.3 CURLOPT_UPLOAD_FLAGS.3 CURLOPT_URL.3 CURLOPT_USE_SSL.3 CURLOPT_USERAGENT.3 CURLOPT_USERNAME.3 CURLOPT_USERPWD.3 CURLOPT_VERBOSE.3 CURLOPT_WILDCARDMATCH.3 CURLOPT_WRITEDATA.3 CURLOPT_WRITEFUNCTION.3 CURLOPT_WS_OPTIONS.3 CURLOPT_XFERINFODATA.3 CURLOPT_XFERINFOFUNCTION.3 CURLOPT_XOAUTH2_BEARER.3 CURLSHOPT_LOCKFUNC.3 CURLSHOPT_SHARE.3 CURLSHOPT_UNLOCKFUNC.3 CURLSHOPT_UNSHARE.3 CURLSHOPT_USERDATA.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl/opts'
+make[5]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[6]: Entering directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[6]: Nothing to be done for 'install-exec-am'.
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/install -c -m 644 /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/curl/docs/libcurl/libcurl.m4 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/aclocal'
+ /usr/bin/mkdir -p '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_easy_cleanup.3 curl_easy_duphandle.3 curl_easy_escape.3 curl_easy_getinfo.3 curl_easy_header.3 curl_easy_init.3 curl_easy_nextheader.3 curl_easy_option_by_id.3 curl_easy_option_by_name.3 curl_easy_option_next.3 curl_easy_pause.3 curl_easy_perform.3 curl_easy_recv.3 curl_easy_reset.3 curl_easy_send.3 curl_easy_setopt.3 curl_easy_ssls_export.3 curl_easy_ssls_import.3 curl_easy_strerror.3 curl_easy_unescape.3 curl_easy_upkeep.3 curl_escape.3 curl_formadd.3 curl_formfree.3 curl_formget.3 curl_free.3 curl_getdate.3 curl_getenv.3 curl_global_cleanup.3 curl_global_init.3 curl_global_init_mem.3 curl_global_sslset.3 curl_global_trace.3 curl_mime_addpart.3 curl_mime_data.3 curl_mime_data_cb.3 curl_mime_encoder.3 curl_mime_filedata.3 curl_mime_filename.3 curl_mime_free.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_mime_headers.3 curl_mime_init.3 curl_mime_name.3 curl_mime_subparts.3 curl_mime_type.3 curl_mprintf.3 curl_multi_add_handle.3 curl_multi_assign.3 curl_multi_cleanup.3 curl_multi_fdset.3 curl_multi_get_handles.3 curl_multi_get_offt.3 curl_multi_info_read.3 curl_multi_init.3 curl_multi_notify_disable.3 curl_multi_notify_enable.3 curl_multi_perform.3 curl_multi_poll.3 curl_multi_remove_handle.3 curl_multi_setopt.3 curl_multi_socket.3 curl_multi_socket_action.3 curl_multi_socket_all.3 curl_multi_strerror.3 curl_multi_timeout.3 curl_multi_wait.3 curl_multi_waitfds.3 curl_multi_wakeup.3 curl_pushheader_byname.3 curl_pushheader_bynum.3 curl_share_cleanup.3 curl_share_init.3 curl_share_setopt.3 curl_share_strerror.3 curl_slist_append.3 curl_slist_free_all.3 curl_strequal.3 curl_strnequal.3 curl_unescape.3 curl_url.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+ /usr/bin/install -c -m 644 curl_url_cleanup.3 curl_url_dup.3 curl_url_get.3 curl_url_set.3 curl_url_strerror.3 curl_version.3 curl_version_info.3 curl_ws_meta.3 curl_ws_recv.3 curl_ws_send.3 curl_ws_start_frame.3 libcurl-easy.3 libcurl-env-dbg.3 libcurl-env.3 libcurl-errors.3 libcurl-multi.3 libcurl-security.3 libcurl-share.3 libcurl-symbols.3 libcurl-thread.3 libcurl-tutorial.3 libcurl-url.3 libcurl-ws.3 libcurl.3 '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/share/man/man3'
+make[6]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[5]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[4]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build/docs/libcurl'
+make[3]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+make[2]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+make[1]: Leaving directory '/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/build'
+INSTALL_EXIT=0
+== TLS verification disable check (none expected) ==
+8: *     CURLOPT_SSL_VERIFYPEER / CURLOPT_SSL_VERIFYHOST at all.
+81:    /* TLS verification defaults are left untouched (no VERIFYPEER/VERIFYHOST here). */
+== probe compile ==
+  clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/include -o /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/probe/curl_probe_clang /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/probe/curl_probe.c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/install/lib/libcurl.a /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/libssl.a /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-clang/install/lib/libcrypto.a -lz -ldl -pthread
+COMPILE_EXIT=0
+local http server port: 55489
+python3 -m http.server pid 2653648
+== probe run ==
+$ /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/curl-clang/probe/curl_probe_clang http://127.0.0.1:55489/probe.txt campfire-f00-curl-probe-body
+curl_version() = libcurl/8.22.0-DEV OpenSSL/4.0.3 zlib/1.3.1.zlib-ng
+curl_version_info: version=8.22.0-DEV host=x86_64-pc-linux-gnu ssl_version=OpenSSL/4.0.3
+PASS ssl-feature: CURL_VERSION_SSL set
+PASS ssl-backend: OpenSSL/4.0.3
+GET http://127.0.0.1:55489/probe.txt -> HTTP 200, 28 bytes
+PASS easy-get: body matches expected
+CURL_PROBE: ALL CHECKS PASSED
+PROBE_EXIT=0
+== local server log ==
+127.0.0.1 - - [04/Oct/2026 21:29:00] "GET /probe.txt HTTP/1.1" 200 -
+== static-link check (no libcurl/libssl in ldd) ==
+	linux-vdso.so.1 (0x00007f35ff12f000)
+	libz.so.1 => /lib64/libz.so.1 (0x00007f35ff0d9000)
+	libc.so.6 => /lib64/libc.so.6 (0x00007f35fe600000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f35ff131000)

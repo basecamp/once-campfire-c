@@ -1,0 +1,69 @@
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/ascii.c -o obj/ascii.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/attribute.c -o obj/attribute.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/char_ref.c -o obj/char_ref.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/error.c -o obj/error.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/foreign_attrs.c -o obj/foreign_attrs.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/parser.c -o obj/parser.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/string_buffer.c -o obj/string_buffer.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/string_piece.c -o obj/string_piece.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/svg_attrs.c -o obj/svg_attrs.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/svg_tags.c -o obj/svg_tags.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/tag.c -o obj/tag.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/tag_lookup.c -o obj/tag_lookup.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/token_buffer.c -o obj/token_buffer.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/tokenizer.c -o obj/tokenizer.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/utf8.c -o obj/utf8.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/util.c -o obj/util.o
++ for f in $FILES
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c99 -Wall -O2 -fPIC -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src -c /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src/vector.c -o obj/vector.o
++ ar rcs libgumbo.a obj/ascii.o obj/attribute.o obj/char_ref.o obj/error.o obj/foreign_attrs.o obj/parser.o obj/string_buffer.o obj/string_piece.o obj/svg_attrs.o obj/svg_tags.o obj/tag_lookup.o obj/tag.o obj/token_buffer.o obj/tokenizer.o obj/utf8.o obj/util.o obj/vector.o
++ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/gumbo/gumbo-parser/src probe.c libgumbo.a -o probe
++ set +x
+=== probe run ===
+ok: doc1: gumbo_parse returns output
+ok: doc1: parse status OK
+ok: doc1: no document error
+ok: doc1: root element is <html>
+ok: doc1: html has 2 children
+ok: doc1: first child is <head>
+ok: doc1: second child is <body>
+ok: doc1: head > title > "Hi"
+ok: doc1: body first child is <p>
+ok: doc1: p has 2 attributes
+ok: doc1: p attribute class="a"
+ok: doc1: p attribute id="b"
+ok: doc1: p has 3 children
+ok: doc1: p text "Hi "
+ok: doc1: p child <b>
+ok: doc1: b > "world"
+ok: doc1: p trailing text "!"
+ok: doc1 serialization -> <html><head><title>Hi</title></head><body><p class="a" id="b">Hi <b>world</b>!</p></body></html>
+ok: doc2: gumbo_parse returns output
+ok: doc2: parse status OK
+ok: doc2: document has <!DOCTYPE html>
+ok: doc2: implied <body>
+ok: doc2: body > table
+ok: doc2: implied <tbody> inserted by HTML5 tree building
+ok: doc2: tbody > tr > td
+ok: doc2: td > "cell"
+ok: doc2 serialization -> <html><head></head><body><table><tbody><tr><td>cell</td></tr></tbody></table></body></html>
+probe_result: READY (0 failure(s))
+
+=== build.sh exit: 0 (set -euo pipefail; probe is its final command) ===
+=== separate probe re-run exit: 0 ===

@@ -1,0 +1,29 @@
+{
+  "name": "libxcrypt",
+  "repo": "https://github.com/besser82/libxcrypt",
+  "pinned_commit": "db70b42bd7b2a5b00a8580c8dec0aa66791c950a",
+  "checked_out_commit": "db70b42bd7b2a5b00a8580c8dec0aa66791c950a",
+  "source_identity": "git commit db70b42bd7b2a5b00a8580c8dec0aa66791c950a fetched by SHA (no archive)",
+  "archive_sha256": null,
+  "license": "LGPL-2.1-or-later (SPDX: LGPL-2.1-or-later)",
+  "license_file": "vendor/src/libxcrypt/COPYING.LIB",
+  "fetch_script": "vendor/scripts/libxcrypt.sh",
+  "build_command": "cd vendor/src/libxcrypt && ./autogen.sh && cd vendor/build/libxcrypt-clang && CC=clang ../../src/libxcrypt/configure --disable-shared --enable-static --disable-werror --prefix=$PWD/prefix && make -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I. probe.c .libs/libcrypt.a -o probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/libxcrypt-clang/.libs/libcrypt.a",
+      "size": 673668,
+      "sha256": "6f9c1bd5e5dba910625eb3f5ddbc5b83e19851b4f78d8ce8f4da4ad85de5d637"
+    },
+    {
+      "path": "vendor/build/libxcrypt-clang/probe",
+      "size": 471048,
+      "sha256": "095d46bf68f5bc4c7d7a4e5eeefb076dfcdf7495b7e3d949b3eb7c4cd23b9d56"
+    }
+  ],
+  "probe_command": "vendor/build/libxcrypt-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "ok: rust-ref vector as $2b$ (cost 12) -> $2b$12$I/2qP3ixlNN..JU2dXSN0umG7/Folk3aUaqgSHn/Rl0G82O9WYk66\nok: OpenBSD regress vector as $2b$ (cost 5) -> $2b$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW\nok: published OpenBSD $2a$ body (cost 5) -> $2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW\nok: repeated call is deterministic -> $2b$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW\nok: 4 concurrent crypt_r x 25 rounds are state-independent\nprobe_result: READY (0 failure(s))\nprobe exit: 0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Static clang build (libtool archive .libs/libcrypt.a); bcrypt is in the default hash set (lib/hashes.conf: 'bcrypt $2b$ 16 STRONG,DEFAULT,ALT,FREEBSD,NETBSD,OPENBSD,OWL,SOLARIS,SUSE'). Probe uses crypt_r only (no global crypt state); 4 pthreads x 25 rounds on distinct crypt_data buffers each reproduce precomputed single-threaded results. Known-answer vector A is the tmp/rust-ref/vectors/rails_compat.json passwords.digests[0] digest for 'secret123456' ('$2a$12$I/2qP3ixlNN..JU2dXSN0umG7/Folk3aUaqgSHn/Rl0G82O9WYk66') asserted with an explicit '$2b$12$I/2qP3ixlNN..JU2dXSN0u' salt and cost 12; libxcrypt documents $2a$/$2b$ equality except for the historic >72-byte wraparound and this password is 12 bytes. Vector B is the standard published OpenBSD bcrypt regress vector (password 'U*U', salt '$2a$05$CCCCCCCCCCCCCCCCCCCCC.', published digest '$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW'), asserted as the primary explicit $2b$ case with the $2a$ body as cross-check. Build note: upstream configure defaults to -Werror, which clang 23 trips in two optional non-bcrypt hash files (crypt-sm3-yescrypt.c, crypt-gost-yescrypt.c) with -Wincompatible-pointer-types-discards-qualifiers; the final recipe uses upstream's documented --disable-werror option. No upstream source was patched and no extra compiler flags were added."
+}

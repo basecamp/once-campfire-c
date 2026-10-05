@@ -1,0 +1,28 @@
+{
+  "name": "nghttp2",
+  "repo": "https://github.com/nghttp2/nghttp2",
+  "pinned_commit": "85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2",
+  "checked_out_commit": "85e300c79fb6dbcfa9c1013215c8710c1c2cd3d2",
+  "archive_sha256": null,
+  "license": "MIT (SPDX: MIT)",
+  "license_file": "vendor/src/nghttp2/COPYING",
+  "fetch_script": "vendor/scripts/nghttp2.sh",
+  "build_command": "cmake -S vendor/src/nghttp2 -B vendor/build/nghttp2-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF && cmake --build vendor/build/nghttp2-clang -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/nghttp2/lib/includes vendor/build/nghttp2-clang/probe.c vendor/build/nghttp2-clang/lib/libnghttp2.a -o vendor/build/nghttp2-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/nghttp2-clang/lib/libnghttp2.a",
+      "size": 334836,
+      "sha256": "3e9bd73feda2e52ee5fc0fbab5aebfa345d0f5b00b691d7edf67471eac30b6a5"
+    },
+    {
+      "path": "vendor/build/nghttp2-clang/probe",
+      "size": 206776,
+      "sha256": "f4b892edb479128aa174d35f9e69aff0059cf9c34220c0785c3d9619b65a27fc"
+    }
+  ],
+  "probe_command": "vendor/build/nghttp2-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "ok: HPACK inflate consumes the block\nok: HPACK inflate emits the header\nok: HPACK inflate reports FINAL\nprobe_result: READY (0 failure(s))\nprobe exit: 0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Static cmake build of the library only: ENABLE_LIB_ONLY=ON disables the nghttp/nghttpd/nghttpx/h2load applications, examples and HPACK tools (no separate proxy/server executable); BUILD_STATIC_LIBS=ON, BUILD_SHARED_LIBS=OFF, BUILD_TESTING=OFF, ENABLE_WERROR=OFF (upstream default); no extra dependencies (no c-ares/libev needed in lib-only mode). Probe links libnghttp2.a directly and checks nghttp2_version(): version_str '1.70.0' and version_num 0x014600; creates and destroys a client session via nghttp2_session_callbacks_new + nghttp2_session_client_new; initializes the HPACK deflater (nghttp2_hd_deflate_new) and inflater (nghttp2_hd_inflate_new), then deflates ':method: GET' with nghttp2_hd_deflate_hd and inflates it back with nghttp2_hd_inflate_hd2 using the documented drain loop until NGHTTP2_HD_INFLATE_FINAL (with nghttp2_hd_inflate_end_headers), confirming the exact header round-trips. No upstream source was modified."
+}

@@ -1,0 +1,37 @@
+{
+  "name": "OpenSSL",
+  "pinned_commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+  "checked_out_commit": "af1775b60dfa141a4ad762585052cabeb9f37e9e",
+  "source_identity": "git commit af1775b60dfa141a4ad762585052cabeb9f37e9e fetched by SHA (no archive)",
+  "license": "Apache-2.0 (upstream file: vendor/src/openssl/LICENSE.txt)",
+  "license_file": "vendor/src/openssl/LICENSE.txt",
+  "compiler": "filc (pizfix) clang version 20.1.8 (Fil-C 0.685 git@github.com:pizlonator/llvm-project-deluge.git bb0d0a64eed297ab8e171002033208fb08ad9941)",
+  "build_command": "cd /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/build && CC=/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc perl /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/src/openssl/Configure no-asm no-shared --prefix=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install --openssldir=/home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/vendor/build/openssl-filc/install/ssl --libdir=lib && make -j16 && make install_sw",
+  "artifacts": [
+    {
+      "path": "vendor/build/openssl-filc/install/lib/libcrypto.a",
+      "size": 48854272,
+      "sha256": "ee0f4fa97c33b4c32089dc7fe72da0c82211453946f774877a67c83711b18fab"
+    },
+    {
+      "path": "vendor/build/openssl-filc/install/lib/libssl.a",
+      "size": 12213260,
+      "sha256": "cb8cd0284d4817d1bce3d813c2324c6328e839998e20b34a75558cfda1b56282"
+    },
+    {
+      "path": "vendor/build/openssl-filc/install/bin/openssl",
+      "size": 43946248,
+      "sha256": "089c346e8db65223d61096578fd4e716e23a374f4a6ba7f09dbd819b05488e13"
+    },
+    {
+      "path": "vendor/build/openssl-filc/probe/openssl_probe_filc",
+      "size": 26018664,
+      "sha256": "bddd6288828afe19198ee5d63e66c7d08bd2417475acfdd209215ba2f8353e42"
+    }
+  ],
+  "probe_command": "/home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I<prefix>/include -o vendor/build/openssl-filc/probe/openssl_probe_filc vendor/build/openssl-filc/probe/openssl_probe.c <prefix>/lib/libcrypto.a -ldl -pthread && vendor/build/openssl-filc/probe/openssl_probe_filc",
+  "probe_result": "READY",
+  "probe_log_tail": "== probe build ==\n$ /home/msaraiva/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/filcc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I vendor/build/openssl-filc/install/include -o vendor/build/openssl-filc/probe/openssl_probe_filc vendor/build/openssl-filc/probe/openssl_probe.c vendor/build/openssl-filc/install/lib/libcrypto.a -ldl -pthread\nprobe_build_exit=0\n\n== probe run ==\n$ vendor/build/openssl-filc/probe/openssl_probe_filc\nOpenSSL_version(OPENSSL_VERSION) = OpenSSL 4.0.3 29 Sep 2026\ncompile-time OPENSSL_VERSION_TEXT = OpenSSL 4.0.3 29 Sep 2026\nPASS hmac-sha256-rfc4231-tc2: 5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843\nPASS pbkdf2-sha256-c1: 120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b\nPASS pbkdf2-sha256-c2: ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43\nPASS rand-status: RAND_status() == 1\nPASS rand-bytes: 2x32 bytes, distinct, non-zero sample 256ea804\nOPENSSL_PROBE: ALL CHECKS PASSED\nprobe_exit=0",
+  "failure_exact": null,
+  "notes": "Same pinned source revision as the clang probe (af1775b60dfa141a4ad762585052cabeb9f37e9e, vendor/src/openssl, unmodified) and the identical probe source (vendor/build/openssl-filc/probe/openssl_probe.c, sha256 333d11ca3150bc6ea5a1beb1d7d6b941dd59cf1a4c42db87c941a40210df6ce5, byte-identical copy of vendor/build/openssl-clang/probe/openssl_probe.c). Configure reported 'Configuring OpenSSL version 4.0.3 for target linux-x86_64'; configdata.pm --dump lists 'Disabled features: asm [option] OPENSSL_NO_ASM', so no-asm is confirmed in the Fil-C build as the contract requires. install/lib contains only libcrypto.a and libssl.a (no libcrypto.so/libssl.so; ossl-modules/legacy.so is the standard provider module installed by install_sw), so no-shared is confirmed. CC is the pinned pizfix Fil-C driver (Fil-C 0.685, clang 20.1.8); no upstream flags were changed and no warning suppressions or -Werror additions were made. make exit 0, make install_sw exit 0. Probe KATs are the same vectors as the clang probe and pass: HMAC-SHA256 RFC 4231 TC2; PBKDF2-HMAC-SHA256 c=1/c=2; RAND_status/RAND_bytes. Probe binary is a Fil-C PIE with interpreter <pizfix>/lib/ld-fil1-x86_64.so; libcrypto.a is Fil-C compiled. Full build+probe log: vendor/probes/openssl-filc.log (4502 lines, no error lines). OpenSSL was built first so libcurl could link against this Fil-C prefix."
+}

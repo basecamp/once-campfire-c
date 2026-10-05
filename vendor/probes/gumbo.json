@@ -1,0 +1,29 @@
+{
+  "name": "gumbo",
+  "repo": "https://github.com/sparklemotion/nokogiri (gumbo-parser subtree at v1.19.4)",
+  "pinned_commit": "8cfb9daae9ee4a0837508eab43c40fbc8c4138c9",
+  "checked_out_commit": "8cfb9daae9ee4a0837508eab43c40fbc8c4138c9",
+  "source_identity": "git commit 8cfb9daae9ee4a0837508eab43c40fbc8c4138c9 fetched by SHA (no archive)",
+  "archive_sha256": null,
+  "license": "Apache-2.0 (SPDX: Apache-2.0)",
+  "license_file": "vendor/src/gumbo/gumbo-parser/src/README.md",
+  "fetch_script": "vendor/scripts/gumbo.sh",
+  "build_command": "SRCDIR=vendor/src/gumbo/gumbo-parser/src; for f in ascii attribute char_ref error foreign_attrs parser string_buffer string_piece svg_attrs svg_tags tag tag_lookup token_buffer tokenizer utf8 util vector; do clang -std=c99 -Wall -O2 -fPIC -I$SRCDIR -c $SRCDIR/$f.c -o vendor/build/gumbo-clang/obj/$f.o; done && ar rcs vendor/build/gumbo-clang/libgumbo.a vendor/build/gumbo-clang/obj/*.o && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -I$SRCDIR vendor/build/gumbo-clang/probe.c vendor/build/gumbo-clang/libgumbo.a -o vendor/build/gumbo-clang/probe",
+  "artifacts": [
+    {
+      "path": "vendor/build/gumbo-clang/libgumbo.a",
+      "size": 567376,
+      "sha256": "87cf913769018668b07251cd26699dba9344abcbc058e227e17466c31607da47"
+    },
+    {
+      "path": "vendor/build/gumbo-clang/probe",
+      "size": 397584,
+      "sha256": "e56993f8c2d89c7c9ecdfaca9eddc3b46ef775df0a90b45cd58700e302b144fd"
+    }
+  ],
+  "probe_command": "vendor/build/gumbo-clang/probe",
+  "probe_result": "READY",
+  "probe_log_tail": "ok: doc2: implied <tbody> inserted by HTML5 tree building\nok: doc2: tbody > tr > td\nok: doc2: td > \"cell\"\nok: doc2 serialization -> <html><head></head><body><table><tbody><tr><td>cell</td></tr></tbody></table></body></html>\nprobe_result: READY (0 failure(s))\nprobe exit: 0",
+  "compiler": "Homebrew clang version 23.1.2",
+  "notes": "Fetched from the Nokogiri v1.19.4 commit with a blob:none partial fetch plus sparse checkout of 'gumbo-parser/' only; only vendor/src/gumbo/gumbo-parser/** is kept (no Ruby tree): CHANGES.md, Makefile, fuzzer/, gperf-filter.sed, src/, test/, THANKS.md. C sources are the 17 files listed in upstream gumbo-parser/src/Makefile (generated gperf tag/attribute tables are committed and were not regenerated; no gperf/ragel run). Built with clang preserving upstream -std=c99 -Wall. Probe parses two small documents with the nokogiri_gumbo.h API: doc1 checks root html, head/body split, title/body/p/b/text nodes and attribute name/value pairs, and byte-exact serialization by a minimal tree walker; doc2 checks HTML5 implied <body> and <tbody> insertion for a table and its serialization. Both serializations match the expected strings byte-for-byte."
+}
