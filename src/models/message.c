@@ -14,14 +14,12 @@
  * Reference translation notes:
  *  - Rust `tx.now()` is the injected process clock; C uses cf_now_us(NULL)
  *    (cf.h: "Determinism belongs in injected test clocks").
- *  - Rust `tx.rich_text()` is the pipeline the FTS body is computed with; the
- *    frozen headers carry cf_richtext through read functions but declare no
- *    pipeline operations and no transaction accessor.  The three declarations
- *    in the marked block below are the mechanical translation of
+ *  - Rust `tx.rich_text()` is the pipeline the FTS body is computed with;
  *    rich_text.rs RichText::{to_plain_text, mentioned_user_ids} and
- *    database.rs Tx::rich_text; they are proposed for src/richtext.h
- *    (R02) / src/cf.h (D02, integrator) and are declared here only until that
- *    header lands.  See docs/devel/evidence/D01-model-message.md.
+ *    database.rs Tx::rich_text arrive through src/richtext.h (R02), the
+ *    integrator-ratified boundary whose signatures are identical to the local
+ *    declarations this file used to carry.  See
+ *    docs/devel/evidence/D01-model-message.md.
  *  - The reference builds `IN (?, ?, ...)` / `NOT IN (?, ?, ...)` with
  *    runtime placeholders.  C forbids runtime SQL, so the variable-length
  *    lists are passed as a JSON array to SQLite's built-in json_each: same
@@ -40,22 +38,11 @@
 #include "models/room.h"
 #include "models/sound.h"
 #include "models/user.h"
+#include "richtext.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* --- pending R02/D02 boundary (proposed, see the file comment) ------------ */
-
-/* Rust RichText::to_plain_text: Action Text HTML -> plain text. */
-cf_err cf_richtext_to_plain_text(cf_db *db, const cf_richtext *rich_text,
-                                 cf_span html, cf_str *out);
-/* Rust RichText::mentioned_user_ids: attached users, document order, unique. */
-cf_err cf_richtext_mentioned_user_ids(cf_db *db, const cf_richtext *rich_text,
-                                      cf_span html, cf_int64_vector *out);
-/* Rust Tx::rich_text: the pipeline the transaction carries (never NULL while
- * a mutation callback runs; D02/R02 wiring). */
-const cf_richtext *cf_tx_rich_text(cf_tx *tx);
 
 /* --- constants and fixed statements --------------------------------------- */
 
