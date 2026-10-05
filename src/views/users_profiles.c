@@ -364,9 +364,12 @@ static cf_err profile_hidden_field(const char *name, const char *value,
     cf_view_attrs_init(&attrs);
     CF_VIEW_TRY(cf_view_attr_cstr(&attrs, "type", "hidden"));
     CF_VIEW_TRY(cf_view_attr_cstr(&attrs, "name", name));
+    /* The sanitized id's span is stored in attrs and consumed by the
+     * cf_view_legacy_tag call below, outside this block; it must therefore
+     * outlive the block (declared at function scope, like attrs). */
+    char id[128];
     {
         /* sanitize_to_id: ']' removed, others non-id become '_'. */
-        char id[128];
         size_t at = 0;
         for (const char *p = name; *p != '\0' && at + 1 < sizeof id; p++) {
             if (*p == ']') continue;
@@ -573,20 +576,20 @@ cf_err cf_view_users_profile_membership(
     {
         cf_view_attrs button_opts;
         cf_view_attrs_init(&button_opts);
+        char cls[64]; /* must outlive button_opts' borrowed span (used at
+                         cf_view_button_to below, outside this snprintf's
+                         original block) */
         CF_VIEW_TRY(cf_view_attr_cstr(&button_opts, "role", "checkbox"));
         CF_VIEW_TRY(
             cf_view_attr_cstr(&button_opts, "aria-checked", "true"));
         CF_VIEW_TRY(cf_view_attr(&button_opts, "aria-labelledby",
                                  cf_view_span_of(&label_id)));
         CF_VIEW_TRY(cf_view_attr_cstr(&button_opts, "tabindex", "0"));
-        {
-            char cls[64];
-            snprintf(cls, sizeof cls, "btn %s",
-                     membership->involvement.ptr != NULL
-                         ? membership->involvement.ptr
-                         : "");
-            CF_VIEW_TRY(cf_view_attr_cstr(&button_opts, "class", cls));
-        }
+        snprintf(cls, sizeof cls, "btn %s",
+                 membership->involvement.ptr != NULL
+                     ? membership->involvement.ptr
+                     : "");
+        CF_VIEW_TRY(cf_view_attr_cstr(&button_opts, "class", cls));
         cf_builder button_form = {0};
         rc = cf_view_button_to(
             &button_form, cf_view_span_of(&url), &button_opts,

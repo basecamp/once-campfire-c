@@ -109,16 +109,18 @@ cf_err cf_qr_code_svg(cf_span data, cf_str *out_svg) {
         cf_builder_dispose(&out);
         return rc;
     }
-    /* cf_str is NUL-terminated with len excluding the NUL. */
-    unsigned char *owned = malloc(out.len + 1);
+    /* cf_str is NUL-terminated with len excluding the NUL.  Capture the
+     * length before disposing: cf_builder_dispose zeroes the struct. */
+    size_t len = out.len;
+    unsigned char *owned = malloc(len + 1);
     if (owned == NULL) {
         cf_builder_dispose(&out);
         return CF_NOMEM;
     }
-    if (out.len != 0) memcpy(owned, out.ptr, out.len);
-    owned[out.len] = '\0';
+    if (len != 0) memcpy(owned, out.ptr, len);
+    owned[len] = '\0';
     cf_builder_dispose(&out);
     out_svg->ptr = (char *)owned;
-    out_svg->len = out.len;
+    out_svg->len = len;
     return CF_OK;
 }
