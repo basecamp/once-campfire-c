@@ -177,8 +177,12 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
                    handler != NULL && method != NULL);
         if (strcmp(disp, "implement") != 0) continue;
         /* Every H03 row is bound (reference errors, the small built-ins and
-         * both conductor methods); the rest are packets not yet landed. */
-        bool bound = strcmp(task, "H03") == 0;
+         * both conductor methods); landed packets are added to this list as
+         * their actions verify; the rest are packets not yet landed. */
+        bool bound = strcmp(task, "H03") == 0 ||
+                     strcmp(task, "A-welcome") == 0 ||
+                     strcmp(task, "A-first_runs") == 0 ||
+                     strcmp(task, "A-sessions") == 0;
         if (!bound) {
             expected_501[yyjson_get_int(id)] = true;
             expected_count++;
@@ -195,9 +199,10 @@ CF_TEST(dev_501_registrations_are_exactly_the_unlanded_packets) {
         if (is_501) actual_count++;
     }
     CF_CHECK(actual_count == expected_count);
-    /* The four POST conductor rows are bound now (A01's cf_check_csrf);
-     * everything else still unbound is a packet that has not landed yet. */
-    CF_CHECK(actual_count == 118);
+    /* The four POST conductor rows are bound (A01's cf_check_csrf) and the
+     * A-welcome / A-first_runs / A-sessions rows are rebound to their real
+     * symbols; everything else unbound is a packet that has not landed. */
+    CF_CHECK(actual_count == 112);
 }
 
 CF_TEST_MAIN()

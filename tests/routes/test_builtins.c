@@ -317,9 +317,10 @@ CF_TEST(dev_501_is_test_visible_and_named) {
     CF_REQUIRE(app != NULL);
     cf_response resp;
 
-    run_get(app, "/", NULL, &resp);
+    /* A still-unlanded packet row (accounts/users#index). */
+    run_get(app, "/account/users", NULL, &resp);
     CF_CHECK(resp.status == 501);
-    expect_body(&resp, "501 Not Implemented: route 1 cf_action_welcome_show (/)\n");
+    expect_body(&resp, "501 Not Implemented: route 19 cf_action_accounts_users_index (/account/users(.:format))\n");
     {
         cf_request req;
         h03_req_init(&req);

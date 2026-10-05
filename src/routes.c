@@ -19,6 +19,7 @@
  * 400). HEAD matches GET. Missing verbs/routes return CF_NOT_FOUND.
  */
 #include "routes.h"
+#include "actions/actions.h"
 
 #include "auth.h" /* cf_check_csrf/cf_auth_halted (conductor POST rows) */
 #include "context.h"
@@ -69,13 +70,13 @@ static const cf_route_default cf_defaults_r90[] = { {"format", "json"} };
 
 static const cf_route cf_route_table[177] = {
     {1, CF_GET, "/", "welcome#show", "cf_action_welcome_show", "A-welcome", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_welcome_show},
     {2, CF_GET, "/first_run/new(.:format)", "first_runs#new", "cf_action_first_runs_new", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {3, CF_GET, "/first_run/edit(.:format)", "first_runs#edit", "cf_action_first_runs_edit", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {4, CF_GET, "/first_run(.:format)", "first_runs#show", "cf_action_first_runs_show", "A-first_runs", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_first_runs_show},
     {5, CF_PATCH, "/first_run(.:format)", "first_runs#update", "cf_action_first_runs_update", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {6, CF_PUT, "/first_run(.:format)", "first_runs#update", "cf_action_first_runs_update", "H03", CF_ROUTE_REFERENCE_ERROR,
@@ -83,7 +84,7 @@ static const cf_route cf_route_table[177] = {
     {7, CF_DELETE, "/first_run(.:format)", "first_runs#destroy", "cf_action_first_runs_destroy", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {8, CF_POST, "/first_run(.:format)", "first_runs#create", "cf_action_first_runs_create", "A-first_runs", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_first_runs_create},
     {9, CF_GET, "/session/transfers/:id(.:format)", "sessions/transfers#show", "cf_action_sessions_transfers_show", "A-sessions-transfers", CF_ROUTE_IMPLEMENT,
      NULL, 0, CF_ROUTE_DEV_501},
     {10, CF_PATCH, "/session/transfers/:id(.:format)", "sessions/transfers#update", "cf_action_sessions_transfers_update", "A-sessions-transfers", CF_ROUTE_IMPLEMENT,
@@ -91,7 +92,7 @@ static const cf_route cf_route_table[177] = {
     {11, CF_PUT, "/session/transfers/:id(.:format)", "sessions/transfers#update", "cf_action_sessions_transfers_update", "A-sessions-transfers", CF_ROUTE_IMPLEMENT,
      NULL, 0, CF_ROUTE_DEV_501},
     {12, CF_GET, "/session/new(.:format)", "sessions#new", "cf_action_sessions_new", "A-sessions", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_sessions_new},
     {13, CF_GET, "/session/edit(.:format)", "sessions#edit", "cf_action_sessions_edit", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {14, CF_GET, "/session(.:format)", "sessions#show", "cf_action_sessions_show", "H03", CF_ROUTE_REFERENCE_ERROR,
@@ -101,9 +102,9 @@ static const cf_route cf_route_table[177] = {
     {16, CF_PUT, "/session(.:format)", "sessions#update", "cf_action_sessions_update", "H03", CF_ROUTE_REFERENCE_ERROR,
      NULL, 0, cf_action_reference_action_not_found},
     {17, CF_DELETE, "/session(.:format)", "sessions#destroy", "cf_action_sessions_destroy", "A-sessions", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_sessions_destroy},
     {18, CF_POST, "/session(.:format)", "sessions#create", "cf_action_sessions_create", "A-sessions", CF_ROUTE_IMPLEMENT,
-     NULL, 0, CF_ROUTE_DEV_501},
+     NULL, 0, cf_action_sessions_create},
     {19, CF_GET, "/account/users(.:format)", "accounts/users#index", "cf_action_accounts_users_index", "A-accounts-users", CF_ROUTE_IMPLEMENT,
      NULL, 0, CF_ROUTE_DEV_501},
     {20, CF_POST, "/account/users(.:format)", "accounts/users#create", "cf_action_accounts_users_create", "H03", CF_ROUTE_REFERENCE_ERROR,
