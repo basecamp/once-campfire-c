@@ -8,25 +8,39 @@
  *
  * C differences fixed by 01-foundation-http.md, taken over the Rust source:
  *  - parameter depth 32 (Rust: 100) and 4096 total parameter nodes;
- *  - multipart is bounded to 100 non-file fields and 16 files;
- *  - uploads are rejected with CF_INVALID until S01 lands (partial multipart:
- *    structure and non-file fields only; see the H02 evidence).
+ *  - multipart is bounded to 100 non-file fields and 16 files.
  *
- * Error codes: malformed shapes, encodings, type conflicts and strict-JSON
- * failures are CF_INVALID; the fixed bounds above are CF_LIMIT. Both are
- * "malformed HTTP/params" (400) per 00-contracts.md.
+ * Multipart file parts are real `ActionDispatch::Http::UploadedFile` values
+ * (cf.h cf_param_upload): the part's decoded bytes are spooled to a unique
+ * 0600 temp file (the RackMultipart convention the pinned kit uses) whose
+ * read-only FD the upload node borrows; the normalized original filename and
+ * the declared Content-Type are copied into the params arena. Blank
+ * filenames are dropped (Rack) and the 16-file bound is CF_LIMIT. Text
+ * fields keep the pre-upload semantics (a nameless non-file part is
+ * CF_INVALID, stricter than Rack's synthesized name, preserved here).
+ *
+ * Error codes: malformed shapes, encodings, type conflicts, strict-JSON
+ * failures and spool I/O failures are CF_INVALID; the fixed bounds above are
+ * CF_LIMIT. Both are "malformed HTTP/params" (400) per 00-contracts.md.
  *
  * The tree is one arena per cf_params: every node, key and string is bump
- * allocated and released by cf_params_destroy. Bounds are checked before the
- * arena grows (params_new_node). No pointer escapes cf_params' lifetime
- * except the borrowed const cf_param* accessor results the contract defines. */
+ * allocated and released by cf_params_destroy, which also closes every spool
+ * FD. Bounds are checked before the arena grows (params_new_node). No
+ * pointer escapes cf_params' lifetime except the borrowed const cf_param*
+ * accessor results the contract defines. */
 #define CF_HTTP_PARAMS_INTERNALS 1
 #include "http/params.h"
 
+#include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+static int hex_value(unsigned char c); /* defined with the form decoder */
 
 #include "yyjson.h"
 
@@ -245,6 +259,210 @@ static cf_err arena_span_copy(cf_params *p, const unsigned char *bytes, size_t l
         memcpy(copy, bytes, len);
     }
     *out = (cf_span){copy, len};
+    return CF_OK;
+}
+
+/* ------------------------------------------------- multipart upload spool */
+
+/* Record an owned spool FD so cf_params_destroy (and nothing else) closes
+ * it. The upload nodes borrow the FD. */
+static cf_err params_spool_record(cf_params *p, int fd) {
+    struct cf_params_spool *entry = malloc(sizeof *entry);
+    if (entry == NULL) return CF_NOMEM;
+    entry->fd = fd;
+    entry->next = p->spools;
+    p->spools = entry;
+    return CF_OK;
+}
+
+/* Spool one file part's decoded bytes to a unique 0600 temp file
+ * (RackMultipart*, like the pinned kit's `tempfile::Builder::new()
+ * .prefix("RackMultipart")`) and return its read-only FD positioned at 0.
+ * The file is unlinked immediately: the FD is the only handle, so no name
+ * ever reaches the filesystem layer and a crash leaks nothing. Spool
+ * failures map to CF_INVALID exactly like the pin's `io_error` ->
+ * `ParamError::Invalid` (a 400). */
+static cf_err params_spool_part(cf_params *p, cf_span bytes, int *out_fd) {
+    const char *dir = getenv("TMPDIR");
+    if (dir == NULL || dir[0] == '\0') dir = "/tmp";
+    size_t dir_len = strlen(dir);
+    if (dir_len > 4000) return CF_INVALID;
+    char path[4096];
+    int n = snprintf(path, sizeof path, "%s%sRackMultipartXXXXXX", dir,
+                     dir[dir_len - 1] == '/' ? "" : "/");
+    if (n <= 0 || (size_t)n >= sizeof path) return CF_INVALID;
+    int fd = mkstemp(path);
+    if (fd < 0) return CF_INVALID;
+    (void)unlink(path); /* the FD is the only handle */
+    (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+    size_t off = 0;
+    while (off < bytes.len) {
+        ssize_t written = write(fd, bytes.ptr + off, bytes.len - off);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return CF_INVALID;
+        }
+        off += (size_t)written;
+    }
+    if (lseek(fd, 0, SEEK_SET) < 0) {
+        close(fd);
+        return CF_INVALID;
+    }
+    cf_err err = params_spool_record(p, fd);
+    if (err != CF_OK) {
+        close(fd);
+        return err;
+    }
+    *out_fd = fd;
+    return CF_OK;
+}
+
+/* Rust `String::from_utf8_lossy`: invalid sequences become U+FFFD. A
+ * truncated but otherwise valid prefix is one replacement for the whole
+ * remainder; any other invalid sequence replaces its first byte and parsing
+ * continues at the next byte (the std Utf8Error error_len rules). The
+ * result is copied into the params arena. */
+static cf_err lossy_utf8_copy(cf_params *p, const unsigned char *s, size_t n,
+                              cf_span *out) {
+    if (n == 0) {
+        *out = (cf_span){NULL, 0};
+        return CF_OK;
+    }
+    if (n > (SIZE_MAX - 1) / 3) return CF_NOMEM;
+    unsigned char *buf = arena_alloc(p, n * 3);
+    if (buf == NULL) return CF_NOMEM;
+    static const unsigned char REPLACEMENT[3] = {0xEF, 0xBF, 0xBD};
+    size_t w = 0, i = 0;
+    while (i < n) {
+        unsigned char c = s[i];
+        if (c < 0x80) {
+            buf[w++] = c;
+            i++;
+            continue;
+        }
+        size_t need;
+        if (c >= 0xC2 && c <= 0xDF) {
+            need = 1;
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            need = 2;
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            need = 3;
+        } else {
+            memcpy(buf + w, REPLACEMENT, 3);
+            w += 3;
+            i++;
+            continue;
+        }
+        size_t have = n - i - 1; /* continuation bytes present */
+        size_t bad = 0;           /* 1-based position of the first invalid byte */
+        size_t check = have < need ? have : need;
+        for (size_t k = 1; k <= check; k++) {
+            unsigned char d = s[i + k];
+            if (d < 0x80 || d > 0xBF) {
+                bad = k;
+                break;
+            }
+            if (k == 1 &&
+                ((c == 0xE0 && d < 0xA0) || (c == 0xED && d > 0x9F) ||
+                 (c == 0xF0 && d < 0x90) || (c == 0xF4 && d > 0x8F))) {
+                bad = 1;
+                break;
+            }
+        }
+        if (bad != 0) {
+            /* std Utf8Error::error_len = Some(k): replace the k bytes of the
+             * invalid sequence and continue after them. */
+            memcpy(buf + w, REPLACEMENT, 3);
+            w += 3;
+            i += bad;
+        } else if (have < need) {
+            /* truncated valid prefix: one replacement for the remainder
+             * (error_len = None) */
+            memcpy(buf + w, REPLACEMENT, 3);
+            w += 3;
+            i = n;
+        } else {
+            memcpy(buf + w, s + i, need + 1);
+            w += need + 1;
+            i += need + 1;
+        }
+    }
+    *out = (cf_span){buf, w};
+    return CF_OK;
+}
+
+/* Rack `normalize_filename`: unescape when every `%` is a valid escape, then
+ * keep only the basename (browsers on Windows send full paths). Both steps
+ * are lossy UTF-8, exactly like the pinned kit's
+ * `percent_decode` + `String::from_utf8_lossy` + `rsplit(['/', '\\'])`. */
+static cf_err normalize_filename(cf_params *p, cf_span raw, cf_span *out) {
+    bool all_valid = true;
+    for (size_t i = 0; i < raw.len; i++) {
+        if (raw.ptr[i] != '%') continue;
+        if (i + 2 >= raw.len || hex_value(raw.ptr[i + 1]) < 0 ||
+            hex_value(raw.ptr[i + 2]) < 0) {
+            all_valid = false;
+            break;
+        }
+    }
+    cf_span unescaped;
+    cf_err err = lossy_utf8_copy(p, raw.ptr, raw.len, &unescaped);
+    if (err != CF_OK) return err;
+    if (all_valid) {
+        unsigned char *buf = arena_alloc(p, unescaped.len > 0 ? unescaped.len : 1);
+        if (buf == NULL) return CF_NOMEM;
+        size_t w = 0;
+        for (size_t i = 0; i < unescaped.len; i++) {
+            if (unescaped.ptr[i] == '%' && i + 2 < unescaped.len) {
+                int hi = hex_value(unescaped.ptr[i + 1]);
+                int lo = hex_value(unescaped.ptr[i + 2]);
+                if (hi >= 0 && lo >= 0) {
+                    buf[w++] = (unsigned char)((hi << 4) | lo);
+                    i += 2;
+                    continue;
+                }
+            }
+            buf[w++] = unescaped.ptr[i];
+        }
+        err = lossy_utf8_copy(p, buf, w, &unescaped);
+        if (err != CF_OK) return err;
+    }
+    if (unescaped.len == 0) {
+        *out = unescaped;
+        return CF_OK;
+    }
+    size_t start = 0;
+    for (size_t i = unescaped.len; i > 0; i--) {
+        if (unescaped.ptr[i - 1] == '/' || unescaped.ptr[i - 1] == '\\') {
+            start = i;
+            break;
+        }
+    }
+    *out = (cf_span){unescaped.ptr + start, unescaped.len - start};
+    return CF_OK;
+}
+
+/* A CF_PARAM_UPLOAD value node: copies the normalized filename and declared
+ * content type into the arena and borrows the spool FD (already recorded by
+ * params_spool_part). */
+static cf_err param_upload_new(cf_params *p, cf_span filename,
+                               cf_span content_type, bool has_content_type,
+                               int64_t size, int fd, cf_param **out) {
+    cf_param *n;
+    cf_err err = params_new_node(p, CF_PARAM_UPLOAD, &n);
+    if (err != CF_OK) return err;
+    err = arena_span_copy(p, filename.ptr, filename.len, &n->u.upload.filename);
+    if (err != CF_OK) return err;
+    if (has_content_type) {
+        err = arena_span_copy(p, content_type.ptr, content_type.len,
+                              &n->u.upload.content_type);
+        if (err != CF_OK) return err;
+    }
+    n->u.upload.has_content_type = has_content_type;
+    n->u.upload.size = size;
+    n->u.upload.fd = fd;
+    *out = n;
     return CF_OK;
 }
 
@@ -1023,6 +1241,21 @@ static cf_err store_pair(cf_params *p, cf_span key, bool has_value, cf_span valu
     return store_nested(p, &p->root, key, v, 0, &stored);
 }
 
+/* store_pair for an upload value (the key follows the same bracket-notation
+ * nesting as every other multipart part). */
+static cf_err store_upload_pair(cf_params *p, cf_span key, cf_span filename,
+                                cf_span content_type, bool has_content_type,
+                                int64_t size, int fd) {
+    if (!utf8_valid(key.ptr, key.len)) return CF_INVALID;
+    if (top_level_key_len(key) == 0) return CF_OK; /* skip empty top-level key */
+    cf_param *v;
+    cf_err err = param_upload_new(p, filename, content_type, has_content_type,
+                                  size, fd, &v);
+    if (err != CF_OK) return err;
+    struct stored_result stored;
+    return store_nested(p, &p->root, key, v, 0, &stored);
+}
+
 /* `body.rs::form_pairs` / `params.rs::query_pairs`. Form bodies drop one
  * trailing NUL and must be UTF-8; query strings are decoded per component. */
 static cf_err parse_urlencoded(cf_params *p, cf_span input, bool form_body) {
@@ -1227,24 +1460,33 @@ static bool content_type_boundary(cf_span ct, cf_span *out) {
     return false;
 }
 
-/* Content-Disposition parameters needed here: the field name and whether a
- * filename part was present (its value is not used; uploads are rejected). */
+/* Content-Disposition parameters needed here: the field name, the raw
+ * filename / filename* values (not yet normalized) and the part's declared
+ * Content-Type. `has_filename` is true when either filename parameter was
+ * present; the star value wins when both are, like the pin's parse. */
 struct part_disposition {
     cf_span name;
     bool has_name;
     bool has_filename;
-    bool filename_empty;
+    bool has_filename_star;
+    cf_span filename;
+    cf_span filename_star;
+    bool has_content_type;
+    cf_span content_type;
 };
 
-/* Unescape a quoted parameter into the arena (Rack keeps the backslash only
- * for filename escapes; those values are not used here). */
-static cf_err unescape_quoted(cf_params *p, cf_span raw, cf_span *out) {
+/* Unescape a quoted parameter into the arena. Rack keeps the backslash only
+ * for the `filename` parameter (IE sends unescaped Windows paths); every
+ * other parameter drops it, exactly like the pinned parse_disposition. */
+static cf_err unescape_quoted(cf_params *p, cf_span raw, bool keep_backslash,
+                              cf_span *out) {
     unsigned char *buf = arena_alloc(p, raw.len > 0 ? raw.len : 1);
     if (buf == NULL) return CF_NOMEM;
     size_t w = 0;
     for (size_t i = 0; i < raw.len; i++) {
         if (raw.ptr[i] == '\\' && i + 1 < raw.len) {
             i++;
+            if (keep_backslash && raw.ptr[i] != '"') buf[w++] = '\\';
             buf[w++] = raw.ptr[i];
         } else {
             buf[w++] = raw.ptr[i];
@@ -1256,8 +1498,7 @@ static cf_err unescape_quoted(cf_params *p, cf_span raw, cf_span *out) {
 
 /* Scan one header value for `name=` / `filename=` / `filename*=` parameters,
  * Rack style. Unquoted values are trimmed; quoted values are unescaped into
- * the arena. `name` and `filename` are borrowed from the caller's header
- * scan buffer, not yet copied. */
+ * the arena. */
 static cf_err scan_disposition(cf_params *p, cf_span value, struct part_disposition *out) {
     size_t i = 0;
     while (i < value.len && value.ptr[i] != ';') i++;
@@ -1289,7 +1530,9 @@ static cf_err scan_disposition(cf_params *p, cf_span value, struct part_disposit
             }
             cf_span raw = {value.ptr + vs, i - vs};
             i++;
-            cf_err err = unescape_quoted(p, raw, &pval);
+            cf_err err = unescape_quoted(p, raw,
+                                         span_eq_cstr_ci(pname, "filename"),
+                                         &pval);
             if (err != CF_OK) return err;
         } else {
             size_t vs = i;
@@ -1298,22 +1541,30 @@ static cf_err scan_disposition(cf_params *p, cf_span value, struct part_disposit
             while (ve > vs && (value.ptr[ve - 1] == ' ' || value.ptr[ve - 1] == '\t')) ve--;
             pval = (cf_span){value.ptr + vs, ve - vs};
         }
+        bool is_filename = span_eq_cstr_ci(pname, "filename");
+        bool is_star = span_eq_cstr_ci(pname, "filename*");
         if (span_eq_cstr_ci(pname, "name")) {
             out->name = pval;
             out->has_name = true;
-        } else if (span_eq_cstr_ci(pname, "filename")) {
+        } else if (is_filename) {
             out->has_filename = true;
-            out->filename_empty = pval.len == 0;
-        } else if (span_eq_cstr_ci(pname, "filename*")) {
-            out->has_filename = true;
-            out->filename_empty = pval.len == 0;
+            out->filename = pval;
+        } else if (is_star) {
+            out->has_filename_star = true;
+            out->filename_star = pval;
         }
     }
     return CF_OK;
 }
 
-/* Headers of one part: values are spans inside the request body. */
+/* Headers of one part: values are spans inside the request body. The
+ * Content-ID fallback for the name applies only when no Content-Disposition
+ * header is present (the pin's `match`); Content-Type reads as the first
+ * matching header. */
 static cf_err scan_part_headers(cf_params *p, cf_span headers, struct part_disposition *out) {
+    bool has_disposition = false;
+    bool has_content_id = false;
+    cf_span content_id = {NULL, 0};
     size_t pos = 0;
     while (pos < headers.len) {
         size_t end = pos;
@@ -1331,15 +1582,24 @@ static cf_err scan_part_headers(cf_params *p, cf_span headers, struct part_dispo
                 value.len--;
             }
             if (span_eq_cstr_ci(name, "content-disposition")) {
+                has_disposition = true;
                 cf_err err = scan_disposition(p, value, out);
                 if (err != CF_OK) return err;
-            } else if (!out->has_name && span_eq_cstr_ci(name, "content-id")) {
-                out->name = value;
-                out->has_name = value.len > 0;
+            } else if (!has_content_id && span_eq_cstr_ci(name, "content-id")) {
+                has_content_id = true;
+                content_id = value;
+            } else if (!out->has_content_type &&
+                       span_eq_cstr_ci(name, "content-type")) {
+                out->has_content_type = true;
+                out->content_type = value;
             }
         }
         if (end == headers.len) break;
         pos = end + 1;
+    }
+    if (!has_disposition && has_content_id && content_id.len > 0) {
+        out->name = content_id;
+        out->has_name = true;
     }
     return CF_OK;
 }
@@ -1405,9 +1665,50 @@ static cf_err parse_multipart(cf_params *p, cf_span body, cf_span boundary) {
             err = scan_part_headers(p, headers, &part);
             if (err != CF_OK) return err;
         }
-        if (part.has_filename) {
-            /* A blank filename means no file was selected: Rack drops the part. */
-            if (!part.filename_empty) files++;
+        if (part.has_filename || part.has_filename_star) {
+            /* filename* wins over filename, and the value is the part after
+             * its charset'lang' prefix (RFC 5987, the pin's splitn(3, '\'')).
+             * Normalization happens before the blank-filename drop: Rack
+             * drops the part when the *normalized* name is empty. */
+            cf_span raw_name;
+            if (part.has_filename_star) {
+                cf_span star = part.filename_star;
+                size_t at = 0;
+                int quotes = 0;
+                while (at < star.len && quotes < 2) {
+                    if (star.ptr[at] == '\'') quotes++;
+                    at++;
+                }
+                raw_name = (cf_span){star.ptr + at, star.len - at};
+            } else {
+                raw_name = part.filename;
+            }
+            cf_span filename;
+            err = normalize_filename(p, raw_name, &filename);
+            if (err != CF_OK) return err;
+            if (filename.len == 0) { /* no file selected: Rack drops the part */
+                cur = next;
+                continue;
+            }
+            files++;
+            if (files > CF_MULTIPART_FILE_LIMIT) return CF_LIMIT;
+            cf_span declared = {NULL, 0};
+            if (part.has_content_type) {
+                err = lossy_utf8_copy(p, part.content_type.ptr,
+                                      part.content_type.len, &declared);
+                if (err != CF_OK) return err;
+            }
+            int fd = -1;
+            err = params_spool_part(p, value, &fd);
+            if (err != CF_OK) return err;
+            /* Rack names a nameless part after the file (the pin's
+             * Part::name fallback). */
+            cf_span key = part.has_name && part.name.len > 0 ? part.name
+                                                             : filename;
+            err = store_upload_pair(p, key, filename, declared,
+                                    part.has_content_type, (int64_t)value.len,
+                                    fd);
+            if (err != CF_OK) return err;
             cur = next;
             continue;
         }
@@ -1419,10 +1720,6 @@ static cf_err parse_multipart(cf_params *p, cf_span body, cf_span boundary) {
         if (err != CF_OK) return err;
         cur = next;
     }
-    /* Bounds before behavior: the file cap is checked first, then H02's
-     * deliberate rejection of upload staging until S01 lands. */
-    if (files > CF_MULTIPART_FILE_LIMIT) return CF_LIMIT;
-    if (files > 0) return CF_INVALID;
     return CF_OK;
 }
 
@@ -1535,6 +1832,13 @@ cf_err cf_params_parse(const cf_request *req, cf_params **out) {
 
 void cf_params_destroy(cf_params *params) {
     if (params == NULL) return;
+    struct cf_params_spool *spool = params->spools;
+    while (spool != NULL) {
+        struct cf_params_spool *next = spool->next;
+        if (spool->fd >= 0) close(spool->fd);
+        free(spool);
+        spool = next;
+    }
     struct cf_params_block *b = params->blocks;
     while (b != NULL) {
         struct cf_params_block *next = b->next;
@@ -1598,8 +1902,36 @@ static cf_err param_copy(cf_params *dst, const cf_param *src, size_t depth, cf_p
         *out = obj;
         return CF_OK;
     }
-    case CF_PARAM_UPLOAD:
-        return CF_INVALID; /* no upload nodes exist until S01 */
+    case CF_PARAM_UPLOAD: {
+        /* A deep copy shares the spool file through its own dup'd FD (the
+         * spool file is unlinked, so each params owns one reference). */
+        cf_param *n;
+        err = params_new_node(dst, CF_PARAM_UPLOAD, &n);
+        if (err != CF_OK) return err;
+        err = arena_span_copy(dst, src->u.upload.filename.ptr,
+                              src->u.upload.filename.len,
+                              &n->u.upload.filename);
+        if (err != CF_OK) return err;
+        if (src->u.upload.has_content_type) {
+            err = arena_span_copy(dst, src->u.upload.content_type.ptr,
+                                  src->u.upload.content_type.len,
+                                  &n->u.upload.content_type);
+            if (err != CF_OK) return err;
+        }
+        n->u.upload.has_content_type = src->u.upload.has_content_type;
+        n->u.upload.size = src->u.upload.size;
+        int fd = dup(src->u.upload.fd);
+        if (fd < 0) return CF_IO;
+        (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+        err = params_spool_record(dst, fd);
+        if (err != CF_OK) {
+            close(fd);
+            return err;
+        }
+        n->u.upload.fd = fd;
+        *out = n;
+        return CF_OK;
+    }
     }
     return CF_INTERNAL;
 }
@@ -1707,6 +2039,20 @@ cf_err cf_param_bool(const cf_param *param, bool *present, bool *out) {
     if (param->kind != CF_PARAM_BOOL) return CF_INVALID;
     *present = true;
     *out = param->u.boolean;
+    return CF_OK;
+}
+
+cf_err cf_param_upload(const cf_param *param, cf_upload *out) {
+    if (out == NULL) return CF_INVALID;
+    memset(out, 0, sizeof *out);
+    out->fd = -1;
+    if (param == NULL) return CF_NOT_FOUND;
+    if (param->kind != CF_PARAM_UPLOAD) return CF_INVALID;
+    out->filename = param->u.upload.filename;
+    out->content_type = param->u.upload.content_type;
+    out->has_content_type = param->u.upload.has_content_type;
+    out->size = param->u.upload.size;
+    out->fd = param->u.upload.fd;
     return CF_OK;
 }
 

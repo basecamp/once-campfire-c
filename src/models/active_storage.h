@@ -60,6 +60,14 @@ void cf_attachment_vector_dispose(cf_attachment_vector *vector);
 cf_err cf_blob_find(cf_db *db, int64_t id, cf_blob *out);
 /* Rust: Blob::create — blob.id/created_at are assigned, other fields copied. */
 cf_err cf_blob_create(cf_tx *tx, const cf_blob *blob, cf_blob *out);
+/* storage/src/blob.rs Blob::update_metadata (`update!(metadata:)`): writes the
+ * JSON text for the row (the C API takes the id; callers do not rely on a
+ * mutated record). */
+cf_err cf_blob_update_metadata(cf_tx *tx, int64_t blob_id, cf_str metadata);
+/* storage/src/blob.rs blob::attachment_records: the (record_type, record_id)
+ * of every attachment of a blob, ordered by attachment id. Only those fields
+ * are filled; dispose with cf_attachment_vector_dispose. */
+cf_err cf_attachment_records_for_blob(cf_db *db, int64_t blob_id, cf_attachment_vector *out);
 /* Rust: Attachment::find_for */
 cf_err cf_attachment_find_for(cf_db *db, cf_str record_type, int64_t record_id, cf_str name, bool *found, cf_attachment *out);
 /* Rust: Attachment::create */

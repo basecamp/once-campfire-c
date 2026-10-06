@@ -76,7 +76,7 @@ CABLE_SRCS := src/cable/socket.c src/cable/protocol.c \
 	src/cable/revocation.c
 JOBS_SRCS := src/jobs/queue.c src/jobs/handlers.c
 STORAGE_SRCS := src/storage/files.c src/storage/process.c \
-	src/storage/active_storage.c src/storage/media.c
+	src/storage/active_storage.c src/storage/media.c src/storage/marcel.c
 INTEGRATIONS_SRCS := src/integrations/http.c src/integrations/unfurl.c \
 	src/integrations/webhook.c src/integrations/push.c \
 	src/integrations/host_resolve.c
@@ -358,6 +358,7 @@ UNIT_TEST_SRCS := \
 	tests/storage/test_process.c \
 	tests/storage/test_active_storage.c \
 	tests/storage/test_media.c \
+	tests/storage/test_marcel.c \
 	tests/integrations/test_unfurl.c \
 	tests/integrations/test_webhook.c \
 	tests/integrations/test_push.c \

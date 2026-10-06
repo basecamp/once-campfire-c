@@ -57,9 +57,11 @@
 #include "db/db_testutil.h"
 #include "db/writer.h"
 #include "http/http_internal.h"
+#include "models/active_storage.h"
 #include "models/message.h"
 #include "models/room.h"
 #include "models/user.h"
+#include "storage/active_storage.h"
 #include "richtext.h"
 #include "views.h"
 
@@ -70,12 +72,15 @@
 #include "../views/support/golden.h"
 #include "../views/support/golden_b.h"
 
+#include <dirent.h>
 #include <limits.h>
 #include <sqlite3.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 /* cf.h is frozen and no packet-action header exists yet (the integrator's
@@ -88,13 +93,15 @@ cf_err cf_action_messages_update(cf_ctx *ctx);
 cf_err cf_action_messages_destroy(cf_ctx *ctx);
 
 /* The create writer callback, for the D02 revalidation case.  The struct
- * mirrors src/actions/messages.c exactly; a layout change there breaks this
- * declaration loudly. */
+ * mirrors src/actions/messages.c exactly (staged blob arm included); a
+ * layout change there breaks this declaration loudly. */
 struct msg_create_write {
     int64_t room_id;
     int64_t creator_id;
     cf_new_message attributes;
     cf_message message;
+    cf_blob blob; /* owned when staged != NULL */
+    const cf_active_staged *staged; /* borrowed; NULL when no upload */
 };
 cf_err msg_create_write_cb(cf_tx *tx, void *arg);
 
@@ -158,13 +165,18 @@ static char *dup_str(const char *text) {
     return copy;
 }
 
+static const char *g_storage_override;
+
 static cf_config *make_views_b_config(const char *database_path) {
     cf_config *config = calloc(1, sizeof *config);
     if (config == NULL) return NULL;
     config->host = dup_str("0.0.0.0");
     config->public_origin = dup_str(ORIGIN);
     config->database_path = dup_str(database_path);
-    config->storage_path = dup_str("storage/files");
+    /* Attachment tests point the disk service at their own scratch root. */
+    config->storage_path = dup_str(g_storage_override != NULL
+                                       ? g_storage_override
+                                       : "storage/files");
     config->secret_key_base = dup_str(NEWS_SECRET);
     config->secret_key_base_len = strlen(NEWS_SECRET);
     config->loops = 1;
@@ -1729,6 +1741,484 @@ CF_TEST(messages_create_invalid_attachment_is_500) {
     cf_response_dispose(&resp);
     CF_CHECK(count_rows(env.scratch.db, "SELECT count(*) FROM messages") == 0);
     env_close(&env);
+}
+
+/* --- acceptance: attachment upload (H02 cf_param_upload + S02 staging) --- */
+
+/* A per-test storage root under the system temp dir; the config override is
+ * set before env_open and removed with the tree at the end. */
+static bool storage_root_make(char *out, size_t cap) {
+    snprintf(out, cap, "/tmp/cf-msg-attach-XXXXXX");
+    if (mkdtemp(out) == NULL) return false;
+    g_storage_override = out;
+    return true;
+}
+
+static void storage_root_remove(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d != NULL) {
+            struct dirent *entry;
+            while ((entry = readdir(d)) != NULL) {
+                if (strcmp(entry->d_name, ".") == 0 ||
+                    strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+                char child[4096];
+                snprintf(child, sizeof child, "%s/%s", path, entry->d_name);
+                storage_root_remove(child);
+            }
+            closedir(d);
+        }
+        (void)rmdir(path);
+    } else {
+        (void)unlink(path);
+    }
+}
+
+static void storage_key_path(const char *root, const char *key, char *out,
+                             size_t cap) {
+    snprintf(out, cap, "%s/%c%c/%c%c/%s", root, key[0], key[1], key[2],
+             key[3], key);
+}
+
+static int dir_entry_count(const char *path) {
+    DIR *d = opendir(path);
+    if (d == NULL) return -1;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        count++;
+    }
+    closedir(d);
+    return count;
+}
+
+/* --- multipart builder ------------------------------------------------------ */
+
+struct mpbuf {
+    char *p;
+    size_t len, cap;
+};
+
+static void mp_need(struct mpbuf *m, size_t extra) {
+    if (m->len + extra + 1 <= m->cap) return;
+    size_t ncap = m->cap ? m->cap : 256;
+    while (ncap < m->len + extra + 1) ncap *= 2;
+    char *np = realloc(m->p, ncap);
+    if (np == NULL) abort();
+    m->p = np;
+    m->cap = ncap;
+}
+
+static void mp_add(struct mpbuf *m, const void *bytes, size_t n) {
+    mp_need(m, n);
+    memcpy(m->p + m->len, bytes, n);
+    m->len += n;
+    m->p[m->len] = '\0';
+}
+
+static void mp_adds(struct mpbuf *m, const char *text) {
+    mp_add(m, text, strlen(text));
+}
+
+static void mp_start(struct mpbuf *m, const char *boundary) {
+    memset(m, 0, sizeof *m);
+    mp_adds(m, "--");
+    mp_adds(m, boundary);
+    mp_adds(m, "\r\n");
+}
+
+static void mp_next(struct mpbuf *m, const char *boundary) {
+    mp_adds(m, "--");
+    mp_adds(m, boundary);
+    mp_adds(m, "\r\n");
+}
+
+static void mp_field(struct mpbuf *m, const char *name, const char *value) {
+    mp_adds(m, "Content-Disposition: form-data; name=\"");
+    mp_adds(m, name);
+    mp_adds(m, "\"\r\n\r\n");
+    mp_adds(m, value);
+    mp_adds(m, "\r\n");
+}
+
+static void mp_file(struct mpbuf *m, const char *name, const char *filename,
+                    const char *content_type, const void *data, size_t len) {
+    mp_adds(m, "Content-Disposition: form-data; name=\"");
+    mp_adds(m, name);
+    mp_adds(m, "\"; filename=\"");
+    mp_adds(m, filename);
+    mp_adds(m, "\"\r\nContent-Type: ");
+    mp_adds(m, content_type);
+    mp_adds(m, "\r\n\r\n");
+    mp_add(m, data, len);
+    mp_adds(m, "\r\n");
+}
+
+static void mp_finish(struct mpbuf *m, const char *boundary) {
+    mp_adds(m, "--");
+    mp_adds(m, boundary);
+    mp_adds(m, "--\r\n");
+}
+
+/* A multipart POST whose body span borrows the builder (the request must not
+ * outlive it). */
+static void req_multipart(cf_request *req, cf_method method, const char *path,
+                          const struct mpbuf *m, const char *cookie,
+                          const char *accept) {
+    cf_test_req_init(req);
+    req->method = method;
+    req->original_method = method;
+    req->path = SP(path);
+    req->target = SP(path);
+    req->body = (cf_span){(const unsigned char *)m->p, m->len};
+    CF_REQUIRE(cf_test_req_header(req, SP("Content-Type"),
+                                  SP("multipart/form-data; boundary=B")) ==
+               CF_OK);
+    CF_REQUIRE(cf_test_req_header(req, SP("Sec-Fetch-Site"),
+                                  SP("same-origin")) == CF_OK);
+    if (accept != NULL) {
+        CF_REQUIRE(cf_test_req_header(req, SP("Accept"), SP(accept)) == CF_OK);
+    }
+    if (cookie != NULL) {
+        CF_REQUIRE(cf_test_req_header(req, SP("Cookie"), SP(cookie)) == CF_OK);
+    }
+}
+
+CF_TEST(messages_create_with_attachment_stages_and_renders) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    static const char payload[] = "attachment payload";
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_field(&m, "message[body]", "hello");
+    mp_next(&m, "B");
+    mp_field(&m, "message[client_message_id]", "attach-1");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "notes.txt", "text/plain", payload,
+            sizeof payload - 1);
+    mp_finish(&m, "B");
+
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_POST, "/rooms/100/messages", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    CF_CHECK(body_contains(&resp, "id=\"message_attach-1\""));
+    CF_CHECK(body_contains(&resp, "<span>notes.txt</span>"));
+    CF_CHECK(body_contains(&resp, "/rails/active_storage/blobs/redirect/"));
+    cf_response_dispose(&resp);
+    free(m.p);
+
+    /* Rows: the message, the blob (identified + analyzed) and the
+     * attachment. */
+    CF_CHECK(count_rows(env.scratch.db, "SELECT count(*) FROM messages") == 1);
+    char text[2048];
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT filename FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "notes.txt") == 0);
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT content_type FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "text/plain") == 0);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT byte_size FROM active_storage_blobs") ==
+             (int64_t)(sizeof payload - 1));
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT metadata FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "{\"identified\":true,\"analyzed\":true}") == 0);
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT service_name FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "local") == 0);
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT checksum FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "vvPgt6kVohmiNxyJvEdg8w==") == 0);
+    char key[64];
+    CF_REQUIRE(one_text(env.scratch.db,
+                        "SELECT key FROM active_storage_blobs", key,
+                        sizeof key));
+    CF_CHECK(strlen(key) == 28);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_attachments "
+                        "WHERE name='attachment' AND record_type='Message' AND "
+                        "blob_id=(SELECT id FROM active_storage_blobs)") == 1);
+    /* The published file holds the bytes; staging left nothing in tmp. */
+    char path[512];
+    storage_key_path(root, key, path, sizeof path);
+    size_t file_len = 0;
+    char *file = NULL;
+    {
+        FILE *f = fopen(path, "rb");
+        CF_REQUIRE(f != NULL);
+        CF_REQUIRE(fseek(f, 0, SEEK_END) == 0);
+        long len = ftell(f);
+        CF_REQUIRE(len >= 0 && fseek(f, 0, SEEK_SET) == 0);
+        file = malloc((size_t)len + 1);
+        CF_REQUIRE(file != NULL);
+        file_len = fread(file, 1, (size_t)len, f);
+        fclose(f);
+    }
+    CF_CHECK(file_len == sizeof payload - 1 &&
+             memcmp(file, payload, file_len) == 0);
+    free(file);
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof tmp_path, "%s/tmp", root);
+    CF_CHECK(dir_entry_count(tmp_path) == 0);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
+}
+
+CF_TEST(messages_update_replaces_and_deletes_attachment) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    /* Create an attachment message first. */
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_field(&m, "message[body]", "with file");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "first.txt", "text/plain",
+            "first payload", 13);
+    mp_finish(&m, "B");
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_POST, "/rooms/100/messages", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    cf_response_dispose(&resp);
+    free(m.p);
+    int64_t message_id = count_rows(env.scratch.db, "SELECT max(id) FROM messages");
+    int64_t old_blob = count_rows(env.scratch.db,
+                                  "SELECT max(id) FROM active_storage_blobs");
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_attachments") ==
+             1);
+
+    /* Replace through the real PATCH route (multipart upload). */
+    char path[64];
+    snprintf(path, sizeof path, "/rooms/100/messages/%lld",
+             (long long)message_id);
+    mp_start(&m, "B");
+    mp_field(&m, "message[body]", "with file");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "second.txt", "text/plain",
+            "second payload", 14);
+    mp_finish(&m, "B");
+    req_multipart(&req, CF_PATCH, path, &m, cookie, TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    cf_response_dispose(&resp);
+    free(m.p);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_blobs") == 2);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_attachments") ==
+             1);
+    CF_CHECK(count_rows(
+                 env.scratch.db,
+                 "SELECT blob_id FROM active_storage_attachments") !=
+             old_blob);
+    CF_CHECK(env.event_count >= 1);
+    CF_CHECK(env.events[env.event_count - 1].kind == CF_EVENT_PURGE_BLOB);
+    CF_CHECK(env.events[env.event_count - 1].blob_id == old_blob);
+
+    /* Detach with an empty permitted value (the reference's Delete arm). */
+    int64_t new_blob = count_rows(env.scratch.db,
+                                  "SELECT max(id) FROM active_storage_blobs");
+    mp_start(&m, "B");
+    mp_field(&m, "message[attachment]", "");
+    mp_finish(&m, "B");
+    req_multipart(&req, CF_PATCH, path, &m, cookie, TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    cf_response_dispose(&resp);
+    free(m.p);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_attachments") ==
+             0);
+    CF_CHECK(env.events[env.event_count - 1].kind == CF_EVENT_PURGE_BLOB);
+    CF_CHECK(env.events[env.event_count - 1].blob_id == new_blob);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
+}
+
+CF_TEST(messages_attachment_signed_blob_reference) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    seed_message(env.scratch.db, 300, "seed", 100, GOLDEN_DAVID,
+                 "2026-09-26 12:00:00.000000", "2026-09-26 12:00:00.000000");
+    /* An existing (direct-uploaded) blob. */
+    exec_sql(env.scratch.db,
+             "INSERT INTO active_storage_blobs (id, byte_size, checksum, "
+             "content_type, created_at, filename, key, metadata, service_name) "
+             "VALUES (7, 4, 'abc', 'text/plain', '2026-09-26 12:00:00', "
+             "'ext.txt', '0123456789abcdefghijklmnopqrs', "
+             "'{\"identified\":true}', 'local')");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    cf_span secret = SP(NEWS_SECRET);
+    cf_str signed_id = {0};
+    CF_REQUIRE(cf_active_blob_sign(secret, 7, false, 0, &signed_id) == CF_OK);
+
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_adds(&m, "Content-Disposition: form-data; name=\"message[attachment]\""
+                "\r\n\r\n");
+    mp_add(&m, signed_id.ptr, signed_id.len);
+    mp_adds(&m, "\r\n");
+    mp_finish(&m, "B");
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_PATCH, "/rooms/100/messages/300", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    cf_response_dispose(&resp);
+    free(m.p);
+    cf_str_dispose(&signed_id);
+
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT blob_id FROM active_storage_attachments WHERE "
+                        "record_id=300 AND name='attachment'") == 7);
+    /* The update's analyze job runs the tool-free analyzer (metadata merge,
+     * attachment-record touch). */
+    char text[256];
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT metadata FROM active_storage_blobs WHERE id=7",
+                      text, sizeof text) &&
+             strcmp(text, "{\"identified\":true,\"analyzed\":true}") == 0);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
+}
+
+CF_TEST(messages_attachment_over_cap_is_400_and_leaves_nothing) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    /* 16 MiB + 1 decoded bytes: the S01 staging cap rejects it. */
+    size_t payload_len = (size_t)16 * 1024 * 1024 + 1;
+    char *payload = malloc(payload_len);
+    CF_REQUIRE(payload != NULL);
+    memset(payload, 'x', payload_len);
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_field(&m, "message[body]", "too big");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "big.bin", "application/octet-stream",
+            payload, payload_len);
+    mp_finish(&m, "B");
+    free(payload);
+
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_POST, "/rooms/100/messages", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 400);
+    cf_response_dispose(&resp);
+    free(m.p);
+    CF_CHECK(count_rows(env.scratch.db, "SELECT count(*) FROM messages") == 0);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_blobs") == 0);
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof tmp_path, "%s/tmp", root);
+    CF_CHECK(dir_entry_count(tmp_path) == 0);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
+}
+
+/* An image upload commits the rows, then the synchronous analyze arm stops at
+ * the documented S03 boundary (no pinned vips): 500 with the message/blob/
+ * attachment committed and the metadata unanalyzed, exactly the reference's
+ * failure shape for an analyzer that raises. */
+CF_TEST(messages_attachment_image_stops_at_s03) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    static const char png[] = "\x89PNG\r\n\x1a\n\x00\x00";
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_field(&m, "message[client_message_id]", "img-1");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "pic.png", "application/octet-stream",
+            png, sizeof png - 1);
+    mp_finish(&m, "B");
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_POST, "/rooms/100/messages", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 500);
+    cf_response_dispose(&resp);
+    free(m.p);
+
+    CF_CHECK(count_rows(env.scratch.db, "SELECT count(*) FROM messages") == 1);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_blobs") == 1);
+    char text[256];
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT content_type FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "image/png") == 0);
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT metadata FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "{\"identified\":true}") == 0);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
 }
 
 CF_TEST(messages_create_delivers_webhooks_to_active_bots) {

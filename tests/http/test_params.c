@@ -13,10 +13,12 @@
 
 #include "cf_test.h"
 
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static cf_span S(const char *s) {
     return (cf_span){(const unsigned char *)s, strlen(s)};
@@ -1303,13 +1305,48 @@ CF_TEST(multipart_fields_and_structure) {
     cf_params_destroy(params);
 }
 
-CF_TEST(multipart_upload_rejected_until_s01) {
+/* One multipart file part, Rack style. */
+static void mb_file(struct mbuf *m, const char *name, const char *filename,
+                    const char *content_type, const char *value) {
+    mb_add(m, "Content-Disposition: form-data; name=\"");
+    mb_add(m, name);
+    mb_add(m, "\"; filename=\"");
+    mb_add(m, filename);
+    mb_add(m, "\"");
+    if (content_type != NULL) {
+        mb_add(m, "\r\nContent-Type: ");
+        mb_add(m, content_type);
+    }
+    mb_add(m, "\r\n\r\n");
+    mb_add(m, value);
+    mb_add(m, "\r\n");
+}
+
+/* Reads a spool FD from offset 0 and compares exactly (binary safe). */
+static int upload_bytes_are(const cf_upload *u, const void *want, size_t n) {
+    if (u->size != (int64_t)n) return 0;
+    char buf[256];
+    if (n >= sizeof buf) return 0;
+    ssize_t got = pread(u->fd, buf, n, 0);
+    return got == (ssize_t)n && memcmp(buf, want, n) == 0;
+}
+
+static int upload_text_is(const cf_upload *u, const char *want) {
+    return upload_bytes_are(u, want, strlen(want));
+}
+
+CF_TEST(multipart_upload_parts_are_staged) {
     struct mbuf m;
     mb_start(&m, "B");
     mb_field(&m, "note", "n");
     mb_next(&m);
-    mb_part_raw(&m, "Content-Disposition: form-data; name=\"file\"; filename=\"cat.png\"\r\n"
-                     "Content-Type: image/png", "bytes");
+    mb_add(&m, "Content-Disposition: form-data; name=\"message[attachment]\"; "
+               "filename=\"cat.png\"\r\nContent-Type: image/png\r\n\r\n");
+    static const char binary[] = {'P', 'N', 'G', '\0', (char)0xFF, 'D'};
+    mb_addb(&m, binary, sizeof binary); /* embedded NUL / non-UTF-8 bytes */
+    mb_add(&m, "\r\n");
+    mb_next(&m);
+    mb_part_raw(&m, "Content-Disposition: form-data; name=\"skip\"; filename=\"\"", "ignored");
     mb_finish(&m);
 
     struct reqb b;
@@ -1317,28 +1354,184 @@ CF_TEST(multipart_upload_rejected_until_s01) {
     reqb_ct(&b, "multipart/form-data; boundary=B");
     reqb_body_span(&b, B(m.p, m.len));
     cf_params *params = NULL;
-    /* H02 rejects upload staging explicitly; S01 lands file parts. */
-    CF_CHECK(parse(&b.r, &params) == CF_INVALID);
-    CF_CHECK(params == NULL);
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(str_is(pget(params, "note"), "n"));
+    CF_CHECK(absent(params, "skip"));
+    const cf_param *message = pget(params, "message");
+    CF_REQUIRE(kind_is(message, CF_PARAM_OBJECT));
+    const cf_param *attachment = pfield(message, "attachment");
+    CF_REQUIRE(kind_is(attachment, CF_PARAM_UPLOAD));
+
+    cf_upload upload;
+    CF_REQUIRE(cf_param_upload(attachment, &upload) == CF_OK);
+    CF_CHECK(upload.filename.len == 7 &&
+             memcmp(upload.filename.ptr, "cat.png", 7) == 0);
+    CF_CHECK(upload.has_content_type && upload.content_type.len == 9 &&
+             memcmp(upload.content_type.ptr, "image/png", 9) == 0);
+    CF_CHECK(upload_bytes_are(&upload, binary, sizeof binary));
+    CF_CHECK(upload.fd >= 0);
+
+    /* Uploads are not strings, numbers or bools. */
+    cf_span s;
+    CF_CHECK(cf_param_string(attachment, &s) == CF_INVALID);
+    CF_CHECK(cf_param_to_s(attachment, &s) == CF_NOT_FOUND);
+    cf_optional_i64 v;
+    CF_CHECK(cf_param_i64(attachment, &v) == CF_INVALID);
+    bool present = true, value = true;
+    CF_CHECK(cf_param_bool(attachment, &present, &value) == CF_INVALID);
+    CF_CHECK(cf_param_upload(NULL, &upload) == CF_NOT_FOUND);
+    CF_CHECK(cf_param_upload(pget(params, "note"), &upload) == CF_INVALID);
+
+    int fd = upload.fd;
     cf_params_destroy(params);
+    CF_CHECK(fcntl(fd, F_GETFD) == -1); /* the params closed its spool */
     free(m.p);
 
-    /* more than 16 file parts trips the fixed file bound first */
-    mb_start(&m, "B");
-    for (int i = 0; i < 17; i++) {
-        if (i > 0) mb_next(&m);
-        mb_part_raw(&m, "Content-Disposition: form-data; name=\"x\"; filename=\"a.bin\"", "x");
+    /* 16 file parts fit, 17 are rejected before spooling. */
+    for (size_t count = 16; count <= 17; count++) {
+        mb_start(&m, "B");
+        for (size_t i = 0; i < count; i++) {
+            if (i > 0) mb_next(&m);
+            mb_file(&m, "f", "a.bin", NULL, "x");
+        }
+        mb_finish(&m);
+        reqb_init(&b, CF_POST, CF_POST);
+        reqb_ct(&b, "multipart/form-data; boundary=B");
+        reqb_body_span(&b, B(m.p, m.len));
+        params = NULL;
+        cf_err err = parse(&b.r, &params);
+        if (count == 16) {
+            CF_CHECK(err == CF_OK);
+        } else {
+            CF_CHECK(err == CF_LIMIT);
+            CF_CHECK(params == NULL);
+        }
+        cf_params_destroy(params);
+        free(m.p);
     }
+}
+
+CF_TEST(multipart_upload_filename_normalization) {
+    struct reqb b;
+    cf_params *params = NULL;
+
+    /* Windows path with an escaped space: unescape then basename. */
+    struct mbuf m;
+    mb_start(&m, "B");
+    mb_part_raw(&m, "Content-Disposition: form-data; name=\"file\"; "
+                    "filename=\"C:\\\\Users\\\\me\\\\cat%20pic.png\"", "x");
     mb_finish(&m);
     reqb_init(&b, CF_POST, CF_POST);
     reqb_ct(&b, "multipart/form-data; boundary=B");
     reqb_body_span(&b, B(m.p, m.len));
-    params = NULL;
-    CF_CHECK(parse(&b.r, &params) == CF_LIMIT);
-    CF_CHECK(params == NULL);
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    const cf_param *file = pget(params, "file");
+    cf_upload upload;
+    CF_REQUIRE(cf_param_upload(file, &upload) == CF_OK);
+    CF_CHECK(upload.filename.len == 11 &&
+             memcmp(upload.filename.ptr, "cat pic.png", 11) == 0);
+    CF_CHECK(!upload.has_content_type);
     cf_params_destroy(params);
     free(m.p);
 
+    /* filename* (RFC 5987) wins over filename. */
+    mb_start(&m, "B");
+    mb_part_raw(&m, "Content-Disposition: form-data; name=\"file\"; "
+                    "filename=\"a.txt\"; filename*=UTF-8''b%2Ec.txt", "y");
+    mb_finish(&m);
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "multipart/form-data; boundary=B");
+    reqb_body_span(&b, B(m.p, m.len));
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    file = pget(params, "file");
+    CF_REQUIRE(cf_param_upload(file, &upload) == CF_OK);
+    CF_CHECK(upload.filename.len == 7 &&
+             memcmp(upload.filename.ptr, "b.c.txt", 7) == 0);
+    cf_params_destroy(params);
+    free(m.p);
+
+    /* A filename that normalizes to empty is dropped, not stored. */
+    mb_start(&m, "B");
+    mb_part_raw(&m, "Content-Disposition: form-data; name=\"file\"; "
+                    "filename=\"%2F\"", "z");
+    mb_finish(&m);
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "multipart/form-data; boundary=B");
+    reqb_body_span(&b, B(m.p, m.len));
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(absent(params, "file"));
+    cf_params_destroy(params);
+    free(m.p);
+
+    /* A part under an unexpected name still parses; the action's permit
+     * list ignores it (nothing is stored under message[attachment]). */
+    mb_start(&m, "B");
+    mb_file(&m, "wrong", "x.txt", "text/plain", "q");
+    mb_finish(&m);
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "multipart/form-data; boundary=B");
+    reqb_body_span(&b, B(m.p, m.len));
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    CF_CHECK(kind_is(pget(params, "wrong"), CF_PARAM_UPLOAD));
+    CF_CHECK(absent(params, "message"));
+    cf_params_destroy(params);
+    free(m.p);
+
+    /* An invalid UTF-8 sequence in the filename is replaced with U+FFFD
+     * (String::from_utf8_lossy), the invalid 2-byte prefix as one
+     * replacement, and the remaining bytes still parse. */
+    mb_start(&m, "B");
+    mb_add(&m, "Content-Disposition: form-data; name=\"file\"; filename=\"");
+    mb_addb(&m, "\xE2\x82", 2);
+    mb_add(&m, "A\"\r\n\r\nx\r\n");
+    mb_finish(&m);
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "multipart/form-data; boundary=B");
+    reqb_body_span(&b, B(m.p, m.len));
+    CF_REQUIRE(parse(&b.r, &params) == CF_OK);
+    file = pget(params, "file");
+    CF_REQUIRE(cf_param_upload(file, &upload) == CF_OK);
+    CF_CHECK(upload.filename.len == 4 &&
+             memcmp(upload.filename.ptr, "\xEF\xBF\xBD" "A", 4) == 0);
+    cf_params_destroy(params);
+    free(m.p);
+}
+
+CF_TEST(multipart_upload_deep_copy_keeps_spool) {
+    /* cf_params_merge deep-copies an upload through its own dup'd FD, so the
+     * source params can be destroyed while the target still reads the bytes
+     * (the query-over-body merge path never carries uploads in practice, but
+     * the copy contract must hold). */
+    struct mbuf m;
+    mb_start(&m, "B");
+    mb_file(&m, "file", "x.bin", NULL, "payload");
+    mb_finish(&m);
+    struct reqb b;
+    reqb_init(&b, CF_POST, CF_POST);
+    reqb_ct(&b, "multipart/form-data; boundary=B");
+    reqb_body_span(&b, B(m.p, m.len));
+    cf_params *source = NULL;
+    CF_REQUIRE(parse(&b.r, &source) == CF_OK);
+    free(m.p);
+
+    struct reqb empty;
+    reqb_init(&empty, CF_GET, CF_GET);
+    cf_params *target = NULL;
+    CF_REQUIRE(parse(&empty.r, &target) == CF_OK);
+    CF_REQUIRE(cf_params_merge(target, source) == CF_OK);
+    cf_params_destroy(source);
+
+    const cf_param *file = pget(target, "file");
+    cf_upload upload;
+    CF_REQUIRE(cf_param_upload(file, &upload) == CF_OK);
+    CF_CHECK(upload_text_is(&upload, "payload"));
+    cf_params_destroy(target);
+}
+
+CF_TEST(multipart_field_bound) {
+    struct mbuf m;
+    struct reqb b;
+    cf_params *params = NULL;
     /* 100 fields fit, 101 are rejected before storage grows */
     for (size_t count = 100; count <= 101; count++) {
         mb_start(&m, "B");

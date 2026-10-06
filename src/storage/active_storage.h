@@ -426,6 +426,75 @@ cf_err cf_active_attach_classify(cf_span secret_key_base,
  * future action cannot attach a blob to an unexpected record. */
 bool cf_active_attach_allowed(cf_span record_type, cf_span name);
 
+/* ---- upload staging (storage.rs `Staged` / unfurl) ------------------------- */
+
+/* `DiskService` name the app configures (Campfire's single "local" service). */
+#define CF_ACTIVE_SERVICE_NAME "local"
+
+struct cf_storage_upload; /* S01 staging handle, owned below */
+
+/* A new blob whose file is already published in the disk service but whose
+ * row is not saved yet: `Staged` from storage.rs plus the `NewBlob` fields
+ * `Blob.build_after_unfurling(identify: true)` computes. Dispose rolls the
+ * file back unless committed (the staged-blob drop rule); a failed DB write
+ * therefore leaves no final file. All cf_str fields are owned. */
+typedef struct {
+    cf_str key;                   /* reference storage key */
+    cf_str filename;              /* raw normalized upload filename */
+    cf_optional_str content_type; /* marcel identification, always present */
+    cf_str metadata;              /* `{"identified":true}` */
+    cf_str service_name;          /* owned copy of CF_ACTIVE_SERVICE_NAME */
+    int64_t byte_size;
+    cf_str checksum;              /* base64(MD5), present */
+    struct cf_storage_upload *upload; /* owned; final file until commit */
+} cf_active_staged;
+
+/* Keep the published file (the blob row committed). CF_INVALID when the
+ * staged value is NULL or was already disposed; CF_OK is idempotent. */
+cf_err cf_active_staged_commit(cf_active_staged *staged);
+/* Roll back (delete the final file) unless committed, then free. NULL-safe. */
+void cf_active_staged_dispose(cf_active_staged *staged);
+
+/* `Storage::stage_file(source, filename, declared_type)` with `identify:
+ * true`: stream `src_fd` (offset 0..EOF, read-only, caller-owned) through
+ * S01's staging into `storage` under a fresh key, identify the content type
+ * with Marcel over the leading bytes and the sanitized filename, compute the
+ * incremental base64(MD5) and publish at the key. `storage` must outlive the
+ * staged value (S01 keeps it borrowed). Maps the S01 cap to CF_LIMIT
+ * (nothing kept) and staged-file failures to their S01 codes; NULL/negative
+ * arguments are CF_INVALID. */
+cf_err cf_active_stage_upload(cf_storage *storage, int src_fd,
+                              cf_span filename, cf_span declared_type,
+                              bool has_declared_type, cf_active_staged *out);
+
+/* `Storage::analyzed_metadata` for an analyzer the port can run without S03:
+ * content types outside image/video/audio (Analyzer::Null) merge
+ * `"analyzed": true` into the stored metadata object preserving key order
+ * (`metadata.merge(extracted.merge(analyzed: true))` with an empty
+ * extracted). A content type whose analyzer is Image/Video/Audio returns
+ * CF_INTERNAL without producing output: those need S03's pinned tools and
+ * are never approximated. `metadata_json` must be a JSON object (the stored
+ * column), otherwise CF_INTERNAL like the reference's JSON raise. */
+cf_err cf_active_analyze_metadata(cf_span content_type,
+                                  cf_span metadata_json, cf_builder *out);
+
+/* `Blob#default_variant_format`: web images keep their format, everything
+ * else becomes PNG (marcel tables; `format()` agreement or first registered
+ * extension, then "png"). Appends to out. */
+cf_err cf_active_default_variant_format(cf_span content_type,
+                                        cf_span filename_raw, cf_builder *out);
+
+/* `url_for(blob.representation(variation))` path (paths.rs::
+ * representation_redirect_path): /rails/active_storage/representations/
+ * redirect/<signed_blob_id>/<signed_variation_key>/<escaped sanitized
+ * filename>. The variation entries are signed byte-exactly as given (symbol
+ * vs string matters). */
+cf_err cf_active_representation_redirect_path(cf_span secret_key_base,
+                                              int64_t blob_id,
+                                              cf_span filename_raw,
+                                              const cf_active_ventries *variation,
+                                              cf_builder *out);
+
 /* ---- variant races and purge (STORE-03) ----------------------------------- */
 
 /* `create_or_find_by!` coordination: try_insert attempts the unique

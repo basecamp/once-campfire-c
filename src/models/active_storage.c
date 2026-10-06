@@ -34,9 +34,11 @@
 enum {
     CF_AS_STMT_BLOB_FIND = 0,
     CF_AS_STMT_BLOB_CREATE,
+    CF_AS_STMT_BLOB_UPDATE_METADATA,
     CF_AS_STMT_ATTACHMENT_FIND_FOR,
     CF_AS_STMT_ATTACHMENT_CREATE,
     CF_AS_STMT_ATTACHMENT_DELETE,
+    CF_AS_STMT_ATTACHMENT_RECORDS,
     CF_AS_STMT_COUNT
 };
 
@@ -46,6 +48,9 @@ static const cf_stmt_def cf_as_stmt_defs[CF_AS_STMT_COUNT] = {
     {"INSERT INTO \"active_storage_blobs\" (\"byte_size\", \"checksum\", "
      "\"content_type\", \"created_at\", \"filename\", \"key\", \"metadata\", "
      "\"service_name\") VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING \"id\""},
+    /* storage/src/blob.rs Blob::update_metadata (`update!(metadata:)`). */
+    {"UPDATE \"active_storage_blobs\" SET \"metadata\" = ? WHERE "
+     "\"active_storage_blobs\".\"id\" = ?"},
     {"SELECT * FROM \"active_storage_attachments\" WHERE "
      "\"active_storage_attachments\".\"record_id\" = ? AND "
      "\"active_storage_attachments\".\"record_type\" = ? AND "
@@ -55,6 +60,9 @@ static const cf_stmt_def cf_as_stmt_defs[CF_AS_STMT_COUNT] = {
      "VALUES (?, ?, ?, ?, ?) RETURNING \"id\""},
     {"DELETE FROM \"active_storage_attachments\" WHERE "
      "\"active_storage_attachments\".\"id\" = ?"},
+    /* storage/src/blob.rs blob::attachment_records. */
+    {"SELECT \"record_type\", \"record_id\" FROM \"active_storage_attachments\" "
+     "WHERE \"blob_id\" = ? ORDER BY \"id\""},
 };
 
 static const cf_stmt_set cf_as_stmts = {cf_as_stmt_defs, CF_AS_STMT_COUNT};
@@ -329,6 +337,76 @@ cf_err cf_blob_create(cf_tx *tx, const cf_blob *blob, cf_blob *out) {
     }
     *out = created;
     return CF_OK;
+}
+
+/* --- Blob::update_metadata -------------------------------------------------- */
+
+cf_err cf_blob_update_metadata(cf_tx *tx, int64_t blob_id, cf_str metadata) {
+    if (tx == NULL || metadata.ptr == NULL) {
+        return cf_db_failf(CF_INVALID, "invalid blob update_metadata argument");
+    }
+    cf_db *db = cf_tx_db(tx);
+    if (db == NULL) return cf_db_failf(CF_INTERNAL, "no transaction database");
+
+    sqlite3_stmt *stmt = NULL;
+    cf_err rc =
+        cf_db_stmt(db, &cf_as_stmts, CF_AS_STMT_BLOB_UPDATE_METADATA, &stmt);
+    if (rc == CF_OK) rc = cf_stmt_bind_text(stmt, 1, cf_str_span(metadata));
+    if (rc == CF_OK) rc = cf_stmt_bind_i64(stmt, 2, blob_id);
+    if (rc == CF_OK) {
+        int step = sqlite3_step(stmt);
+        if (step != SQLITE_DONE) {
+            rc = cf_as_step_error(db, step, "blob metadata update failed");
+        }
+    }
+    cf_db_stmt_done(stmt);
+    return rc;
+}
+
+/* --- blob::attachment_records ----------------------------------------------- */
+
+cf_err cf_attachment_records_for_blob(cf_db *db, int64_t blob_id,
+                                      cf_attachment_vector *out) {
+    if (db == NULL || out == NULL) {
+        return cf_db_failf(CF_INVALID, "invalid attachment_records argument");
+    }
+    memset(out, 0, sizeof *out);
+    sqlite3_stmt *stmt = NULL;
+    cf_err rc =
+        cf_db_stmt(db, &cf_as_stmts, CF_AS_STMT_ATTACHMENT_RECORDS, &stmt);
+    if (rc == CF_OK) rc = cf_stmt_bind_i64(stmt, 1, blob_id);
+    while (rc == CF_OK) {
+        int step = sqlite3_step(stmt);
+        if (step == SQLITE_DONE) break;
+        if (step != SQLITE_ROW) {
+            rc = cf_as_step_error(db, step, "attachment records scan failed");
+            break;
+        }
+        if (out->len == out->cap) {
+            size_t ncap = out->cap ? out->cap * 2 : 4;
+            cf_attachment *items =
+                realloc(out->items, ncap * sizeof *items);
+            if (items == NULL) {
+                rc = cf_db_failf(CF_NOMEM, "out of memory");
+                break;
+            }
+            out->items = items;
+            out->cap = ncap;
+        }
+        cf_attachment *row = &out->items[out->len];
+        memset(row, 0, sizeof *row);
+        rc = cf_as_copy_text(&row->record_type,
+                             cf_stmt_column_text(stmt, 0));
+        if (rc == CF_OK) {
+            row->record_id = cf_stmt_column_i64(stmt, 1);
+            out->len++;
+        }
+    }
+    cf_db_stmt_done(stmt);
+    if (rc != CF_OK) {
+        cf_attachment_vector_dispose(out);
+    }
+    return rc;
 }
 
 /* --- Attachment::find_for --------------------------------------------------- */

@@ -18,6 +18,7 @@
 #include "models/room.h"
 #include "models/user.h"
 #include "richtext.h"
+#include "storage/active_storage.h"
 #include "views.h"
 
 #include <sqlite3.h>
@@ -386,21 +387,25 @@ CF_TEST(presenter_message_with_a_missing_creator_is_unrenderable) {
     cf_db_scratch_close(&scratch);
 }
 
-/* The attachment view needs S02's signed blob/representation paths, which do
- * not exist yet: the presenter refuses (CF_INVALID) instead of inventing a
- * path.  This case documents the boundary, not a skip. */
-CF_TEST(presenter_message_attachment_is_refused_until_s02) {
+/* The S02 attachment arm: the presenter builds the signed blob/representation
+ * paths (never inventing them) and the preview arm follows the content type.
+ * The expected paths are computed with the same S02 signing helpers the
+ * presenter calls, so this pins the wiring (sanitized filename, disposition
+ * query, variation order) rather than re-deriving the signature here. */
+CF_TEST(presenter_message_attachment_view) {
     cf_db_scratch scratch;
     CF_REQUIRE(cf_db_scratch_open(&scratch));
     seed(scratch.db);
     cf_richtext_configure((cf_span){(const unsigned char *)HEX64, 64});
     fixture f;
     fixture_init(&f, scratch.db);
+    cf_span secret = {(const unsigned char *)HEX64, 64};
+    /* `weird name.png` exercises the sanitizer (" " stays, "%" would map). */
     exec_sql(scratch.db,
              "INSERT INTO active_storage_blobs (id, byte_size, checksum, "
              "content_type, created_at, filename, key, metadata, service_name) "
-             "VALUES (1, 10, NULL, 'image/jpeg', '2026-09-26 "
-             "13:00:20', 'moon.jpg', 'key1', NULL, 'local')");
+             "VALUES (1, 10, NULL, 'image/png', '2026-09-26 "
+             "13:00:20', 'weird name.png', 'key1', NULL, 'local')");
     exec_sql(scratch.db,
              "INSERT INTO active_storage_attachments (id, blob_id, "
              "created_at, name, record_id, record_type) VALUES "
@@ -409,9 +414,75 @@ CF_TEST(presenter_message_attachment_is_refused_until_s02) {
     cf_message row = {0};
     CF_REQUIRE(cf_message_find(scratch.db, 100, &row) == CF_OK);
     cf_view_message view = {0};
-    CF_CHECK(cf_presenter_message(&f.ctx, &row, &view) == CF_INVALID);
-    cf_view_message_dispose(&view); /* empty, and idempotent */
+    CF_REQUIRE(cf_presenter_message(&f.ctx, &row, &view) == CF_OK);
+    CF_REQUIRE(view.content_kind == CF_VIEW_CONTENT_ATTACHMENT);
+    const cf_view_attachment *att = &view.attachment;
+    CF_CHECK(att->filename.len == 14 &&
+             memcmp(att->filename.ptr, "weird name.png", 14) == 0);
+    CF_CHECK(att->preview == CF_VIEW_PREVIEW_IMAGE);
+    CF_CHECK(!att->has_width && !att->has_height);
+
+    char expected[1024];
+    cf_builder path = {0};
+    CF_REQUIRE(cf_active_blob_redirect_path(
+                   secret, 1, (cf_span){(const unsigned char *)att->filename.ptr, att->filename.len},
+                   (cf_span){NULL, 0}, false, &path) == CF_OK);
+    snprintf(expected, sizeof expected, "%.*s", (int)path.len, path.ptr);
+    CF_CHECK(att->blob_path.len == path.len &&
+             memcmp(att->blob_path.ptr, path.ptr, path.len) == 0);
+    cf_builder_dispose(&path);
+    CF_REQUIRE(cf_active_blob_redirect_path(
+                   secret, 1, (cf_span){(const unsigned char *)att->filename.ptr, att->filename.len},
+                   (cf_span){(const unsigned char *)"attachment", 10}, true,
+                   &path) == CF_OK);
+    CF_CHECK(att->download_path.len == path.len &&
+             memcmp(att->download_path.ptr, path.ptr, path.len) == 0);
+    cf_builder_dispose(&path);
+    /* The thumb variation: resize_to_limit 1200x800 defaulted with `format` =
+     * png (web image, extension matches), format first. */
+    cf_active_ventries variation = {0};
+    cf_active_vval *resize = NULL;
+    cf_active_vval *dims = NULL;
+    CF_REQUIRE(cf_active_varr(&dims) == CF_OK);
+    cf_active_vval *w = NULL, *h = NULL;
+    CF_REQUIRE(cf_active_vint(1200, &w) == CF_OK);
+    CF_REQUIRE(cf_active_vint(800, &h) == CF_OK);
+    CF_REQUIRE(cf_active_varr_push(dims, w) == CF_OK);
+    CF_REQUIRE(cf_active_varr_push(dims, h) == CF_OK);
+    CF_REQUIRE(cf_active_vstr((cf_span){(const unsigned char *)"png", 3},
+                              &resize) == CF_OK);
+    CF_REQUIRE(cf_active_ventries_push(
+                   &variation, (cf_span){(const unsigned char *)"format", 6},
+                   resize) == CF_OK);
+    CF_REQUIRE(cf_active_ventries_push(
+                   &variation,
+                   (cf_span){(const unsigned char *)"resize_to_limit", 15},
+                   dims) == CF_OK);
+    CF_REQUIRE(cf_active_representation_redirect_path(
+                   secret, 1,
+                   (cf_span){(const unsigned char *)"weird name.png", 14},
+                   &variation, &path) == CF_OK);
+    CF_CHECK(att->preview_url.len == path.len &&
+             memcmp(att->preview_url.ptr, path.ptr, path.len) == 0);
+    cf_builder_dispose(&path);
+    cf_active_ventries_dispose(&variation);
+    cf_view_message_dispose(&view);
     cf_message_dispose(&row);
+
+    /* A plain-text blob renders the File arm (no preview URL). */
+    exec_sql(scratch.db,
+             "UPDATE active_storage_blobs SET content_type = 'text/plain', "
+             "filename = 'notes.txt' WHERE id = 1");
+    CF_REQUIRE(cf_message_find(scratch.db, 100, &row) == CF_OK);
+    CF_REQUIRE(cf_presenter_message(&f.ctx, &row, &view) == CF_OK);
+    CF_REQUIRE(view.content_kind == CF_VIEW_CONTENT_ATTACHMENT);
+    CF_CHECK(view.attachment.preview == CF_VIEW_PREVIEW_FILE);
+    CF_CHECK(view.attachment.preview_url.len == 0);
+    CF_CHECK(view.attachment.filename.len == 9 &&
+             memcmp(view.attachment.filename.ptr, "notes.txt", 9) == 0);
+    cf_view_message_dispose(&view);
+    cf_message_dispose(&row);
+
     fixture_dispose(&f);
     cf_db_scratch_close(&scratch);
 }

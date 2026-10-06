@@ -66,14 +66,35 @@ struct cf_param {
         } number;                                         /* CF_PARAM_NUMBER */
         struct { cf_param **items; size_t len, cap; } array;
         struct { struct cf_param_entry *entries; size_t len, cap; } object;
+        struct {
+            /* CF_PARAM_UPLOAD: `ActionDispatch::Http::UploadedFile` as the
+             * port keeps it — Rack-normalized original filename and the
+             * part's declared Content-Type, both copied into the params
+             * arena, plus the decoded byte size and a read-only FD on the
+             * part's spool file (owned by the params; see cf.h). */
+            cf_span filename;
+            cf_span content_type; /* empty when has_content_type is false */
+            bool has_content_type;
+            int64_t size;
+            int fd;
+        } upload;
     } u;
 };
 
 struct cf_params_block;
 
+/* One owned spool FD of the params (closed by cf_params_destroy). Upload
+ * nodes borrow their FD from this list so a deep copy (cf_params_merge) can
+ * dup it and stay independently disposable. */
+struct cf_params_spool {
+    struct cf_params_spool *next;
+    int fd;
+};
+
 struct cf_params {
     cf_param root; /* always CF_PARAM_OBJECT */
     struct cf_params_block *blocks;
+    struct cf_params_spool *spools;
     size_t node_count; /* stored value nodes; the root is not counted */
 };
 

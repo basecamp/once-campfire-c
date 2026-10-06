@@ -42,16 +42,30 @@
  * cf_action_messages_edit, cf_action_messages_show, cf_action_messages_update,
  * cf_action_messages_destroy.
  *
+ * Attachment assignment (05-storage S02; H02's cf_param_upload):
+ *   absent -> unchanged; nil/"" -> detach (`replace_attachment(nil)`); a
+ *   multipart upload -> staged through S01, its blob row created in the same
+ *   writer transaction as the message/attachment and the file kept only when
+ *   the write commits; a *verified* signed blob id -> the existing blob is
+ *   attached (the S02 card's signed-reference arm; the pinned Rust port
+ *   treats a plain string as Invalid, so the classifier's SIGNED state is the
+ *   documented superset, existence checked here). `process_attachment` on
+ *   create analyzes the blob in place (Null analyzer: metadata
+ *   `{"identified":true,"analyzed":true}` plus the attachment-record touch,
+ *   re-reading the message) and for image/video/audio content fails loudly
+ *   with CF_INTERNAL at the S03 boundary after the commit (the reference
+ *   runs the pinned tools there; the port never approximates a transform).
+ *   On update the analysis is asynchronous in the reference (AnalyzeJob);
+ *   this port runs the tool-free Null analyzer synchronously and leaves
+ *   media blobs to S03's job.
+ *
  * Reported dependencies (docs/devel/evidence/A-messages.md):
  *  1. `c.app().broadcasts` is app.h's cf_app_cable accessor (landed by the
  *     app repair).
  *  2. `canonical_body` (ActionText::Content.new(body, canonicalize: true)
  *     .to_html) is R02's cf_richtext_canonical_body.
- *  3. The attachment `Create` arm (a real upload) needs S02's staged blob and
- *     process_attachment jobs; multipart never builds an upload param node
- *     today, and the arm fails loudly (CF_INTERNAL, the reference's 500 for
- *     an unbuildable attachment) instead of being faked.  The `Invalid` arm
- *     is the reference's own "Could not find or build blob" 500.
+ *  3. The `Invalid` arm is the reference's own "Could not find or build blob"
+ *     500.
  */
 #include "cf.h"
 
@@ -60,11 +74,14 @@
 #include "cable/channels.h"
 #include "config.h"
 #include "context.h"
+#include "models/active_storage.h"
 #include "models/membership.h"
 #include "models/message.h"
 #include "models/room.h"
 #include "models/user.h"
 #include "richtext.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
 #include "views.h"
 #include "views/internal.h"
 
@@ -73,6 +90,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "yyjson.h"
 
 /* ------------------------------------------------------------------ spans */
 
@@ -801,6 +820,7 @@ typedef enum {
     MSG_ATTACHMENT_UNCHANGED = 0,
     MSG_ATTACHMENT_DELETE,
     MSG_ATTACHMENT_CREATE,
+    MSG_ATTACHMENT_SIGNED,
     MSG_ATTACHMENT_INVALID
 } msg_attachment;
 
@@ -810,6 +830,8 @@ typedef struct {
     bool has_client_message_id;
     cf_str client_message_id; /* owned when present */
     msg_attachment attachment;
+    const cf_param *attachment_param; /* borrowed; upload for CREATE */
+    int64_t attachment_blob_id;       /* SIGNED only */
 } msg_params;
 
 static void msg_params_dispose(msg_params *params) {
@@ -818,27 +840,64 @@ static void msg_params_dispose(msg_params *params) {
     memset(params, 0, sizeof *params);
 }
 
-/* `attachments::Assignment::from_params` for the permitted `attachment`:
- * absent (or dropped as an array/object) is Unchanged, nil/"" is Delete, an
- * uploaded file is Create, anything else raises. */
-static msg_attachment msg_attachment_assignment(const cf_param *permitted) {
+/* `secret_key_base` for the Active Storage verifier. */
+static cf_span msg_secret(cf_ctx *ctx) {
+    const cf_config *config = cf_app_config(ctx->app);
+    if (config == NULL || config->secret_key_base == NULL) {
+        return (cf_span){NULL, 0};
+    }
+    return (cf_span){(const unsigned char *)config->secret_key_base,
+                     config->secret_key_base_len};
+}
+
+/* `attachments::Assignment::from_params` for the permitted `attachment`
+ * (controllers/presenters/attachments.rs): absent (or dropped as an
+ * array/object) is Unchanged, nil/"" is Delete, an uploaded file is Create,
+ * a non-empty string is the S02 signed-blob-reference arm (classified by
+ * cf_active_attach_classify: verified signed ids report SIGNED with the blob
+ * id; anything else raises), everything else raises. */
+static cf_err msg_attachment_assignment(cf_ctx *ctx,
+                                        const cf_param *permitted,
+                                        msg_params *out) {
     const cf_param *value = msg_permitted(permitted, "attachment");
-    if (value == NULL) return MSG_ATTACHMENT_UNCHANGED;
+    out->attachment_param = value;
+    out->attachment = MSG_ATTACHMENT_UNCHANGED;
+    if (value == NULL) return CF_OK;
     switch (cf_param_type(value)) {
     case CF_PARAM_NULL:
-        return MSG_ATTACHMENT_DELETE;
+        out->attachment = MSG_ATTACHMENT_DELETE;
+        return CF_OK;
     case CF_PARAM_STRING: {
         cf_span text;
-        if (cf_param_string(value, &text) != CF_OK) {
-            return MSG_ATTACHMENT_INVALID;
+        cf_err rc = cf_param_string(value, &text);
+        if (rc != CF_OK) {
+            out->attachment = MSG_ATTACHMENT_INVALID;
+            return CF_OK;
         }
-        return text.len == 0 ? MSG_ATTACHMENT_DELETE
-                             : MSG_ATTACHMENT_INVALID;
+        if (text.len == 0) {
+            out->attachment = MSG_ATTACHMENT_DELETE;
+            return CF_OK;
+        }
+        cf_active_attach_kind kind = CF_ACTIVE_ATTACH_INVALID;
+        int64_t blob_id = 0;
+        rc = cf_active_attach_classify(
+            msg_secret(ctx), CF_ACTIVE_SHAPE_STRING, text,
+            cf_now_us(ctx->app), &kind, &blob_id);
+        if (rc != CF_OK) return rc;
+        if (kind == CF_ACTIVE_ATTACH_SIGNED) {
+            out->attachment = MSG_ATTACHMENT_SIGNED;
+            out->attachment_blob_id = blob_id;
+        } else {
+            out->attachment = MSG_ATTACHMENT_INVALID;
+        }
+        return CF_OK;
     }
     case CF_PARAM_UPLOAD:
-        return MSG_ATTACHMENT_CREATE;
+        out->attachment = MSG_ATTACHMENT_CREATE;
+        return CF_OK;
     default:
-        return MSG_ATTACHMENT_INVALID;
+        out->attachment = MSG_ATTACHMENT_INVALID;
+        return CF_OK;
     }
 }
 
@@ -872,8 +931,7 @@ static cf_err msg_message_params(cf_ctx *ctx, msg_params *out) {
         }
         out->has_client_message_id = true;
     }
-    out->attachment = msg_attachment_assignment(permitted);
-    return CF_OK;
+    return msg_attachment_assignment(ctx, permitted, out);
 }
 
 /* `canonical_body`: assigning a String to a rich text attribute stores
@@ -1007,14 +1065,142 @@ static cf_err msg_revalidate(cf_tx *tx, int64_t room_id, int64_t actor_id,
     return CF_OK;
 }
 
+/* ------------------------------------------- attachment staging (S02) */
+/* The staging/analyze helpers below are non-static so
+ * src/actions/messages/by_bots.c reuses the reference's shared
+ * create_message/update_message attachment path (Rust: by_bots.rs imports
+ * them from messages.rs). */
+
+/* Open the configured disk service (the S02 actions' per-request pattern). */
+cf_err msg_storage_open(cf_ctx *ctx, cf_storage **out) {
+    *out = NULL;
+    const cf_config *config = cf_app_config(ctx->app);
+    if (config == NULL || config->storage_path == NULL) return CF_INTERNAL;
+    return cf_storage_open(config->storage_path, out);
+}
+
+/* Stage one uploaded file through S01: the staged value owns the published
+ * file until commit/rollback, and *storage_out (closed by the caller after
+ * the staged value is disposed) keeps the S01 handle alive. */
+cf_err msg_stage_attachment(cf_ctx *ctx, const cf_param *param,
+                                   cf_storage **storage_out,
+                                   cf_active_staged *staged) {
+    *storage_out = NULL;
+    cf_upload upload;
+    cf_err rc = cf_param_upload(param, &upload);
+    if (rc != CF_OK) return rc == CF_NOT_FOUND ? CF_INTERNAL : rc;
+    cf_storage *storage = NULL;
+    rc = msg_storage_open(ctx, &storage);
+    if (rc != CF_OK) return rc;
+    rc = cf_active_stage_upload(storage, upload.fd, upload.filename,
+                                upload.content_type, upload.has_content_type,
+                                staged);
+    if (rc != CF_OK) {
+        cf_storage_close(storage);
+        return rc;
+    }
+    *storage_out = storage;
+    return CF_OK;
+}
+
+/* The staged blob's row (Blob.build_after_unfurling + `staged.insert`). */
+cf_err msg_blob_from_staged(cf_tx *tx,
+                                   const cf_active_staged *staged,
+                                   cf_blob *out) {
+    cf_blob input;
+    memset(&input, 0, sizeof input);
+    input.key = staged->key;
+    input.filename = staged->filename;
+    input.content_type = staged->content_type;
+    input.metadata = (cf_optional_str){true, staged->metadata};
+    input.service_name = staged->service_name;
+    input.byte_size = staged->byte_size;
+    input.checksum = (cf_optional_str){true, staged->checksum};
+    return cf_blob_create(tx, &input, out);
+}
+
+/* A verified signed blob reference must name an existing blob
+ * (`Blob.find_signed!`; a missing record is the model's 404). */
+cf_err msg_signed_attachment(cf_ctx *ctx, int64_t blob_id,
+                                    cf_blob *out) {
+    return cf_blob_find(ctx->reader, blob_id, out);
+}
+
+/* `analyze_attachment` + `touch_attachment_records` for the tool-free Null
+ * analyzer: the metadata update and the per-Message touch run in one writer
+ * transaction, exactly like the reference's reader/writer pair. Image, video
+ * and audio content types return CF_INTERNAL (S03's pinned tools; never an
+ * approximated analysis). */
+struct msg_analyze_write {
+    int64_t blob_id;
+    cf_str metadata; /* borrowed */
+};
+
+static cf_err msg_analyze_write_cb(cf_tx *tx, void *arg) {
+    struct msg_analyze_write *write = arg;
+    cf_err rc = cf_blob_update_metadata(tx, write->blob_id, write->metadata);
+    if (rc != CF_OK) return rc;
+    cf_db *db = cf_tx_db(tx);
+    cf_attachment_vector records = {0};
+    rc = cf_attachment_records_for_blob(db, write->blob_id, &records);
+    for (size_t i = 0; rc == CF_OK && i < records.len; i++) {
+        cf_str record_type = records.items[i].record_type;
+        if (record_type.len != 7 ||
+            memcmp(record_type.ptr, "Message", 7) != 0) {
+            continue;
+        }
+        cf_message message = {0};
+        rc = cf_message_find(db, records.items[i].record_id, &message);
+        if (rc == CF_OK) rc = cf_message_touch(tx, &message);
+        cf_message_dispose(&message);
+    }
+    cf_attachment_vector_dispose(&records);
+    return rc;
+}
+
+static cf_str msg_str_span_of(cf_optional_str value) {
+    if (!value.present) return (cf_str){(char *)"", 0};
+    return value.value;
+}
+
+cf_err msg_analyze_blob(cf_ctx *ctx, const cf_blob *blob) {
+    cf_span content_type = {NULL, 0};
+    if (blob->content_type.present) {
+        content_type = (cf_span){
+            (const unsigned char *)blob->content_type.value.ptr,
+            blob->content_type.value.len};
+    }
+    /* A NULL/absent metadata column reads as the empty object (the model's
+     * `unwrap_or_else(Json::object)`), so `{}` is the merge base. */
+    cf_str metadata = msg_str_span_of(blob->metadata);
+    cf_builder analyzed = {0};
+    cf_err rc = cf_active_analyze_metadata(
+        content_type,
+        metadata.len != 0 ? (cf_span){(const unsigned char *)metadata.ptr,
+                                      metadata.len}
+                          : (cf_span){(const unsigned char *)"{}", 2},
+        &analyzed);
+    if (rc != CF_OK) return rc;
+    struct msg_analyze_write write;
+    memset(&write, 0, sizeof write);
+    write.blob_id = blob->id;
+    write.metadata = (cf_str){(char *)analyzed.ptr, analyzed.len};
+    rc = cf_write(ctx->app, msg_analyze_write_cb, &write);
+    cf_builder_dispose(&analyzed);
+    return rc;
+}
+
 /* `@room.messages.create_with_attachment!(attributes)` inside one writer
  * transaction (the rich-text body and the FTS/room effects are the model's,
- * spec 02 D02/D-C09). */
+ * spec 02 D02/D-C09). The staged upload's blob row is inserted in the same
+ * transaction, so a failed write leaves neither rows nor a final file. */
 struct msg_create_write {
     int64_t room_id;
     int64_t creator_id;
     cf_new_message attributes;
     cf_message message;
+    cf_blob blob; /* owned when staged != NULL */
+    const cf_active_staged *staged; /* borrowed; NULL when no upload */
 };
 
 /* Non-static so the action test can exercise the D02 in-transaction
@@ -1025,37 +1211,62 @@ cf_err msg_create_write_cb(cf_tx *tx, void *arg) {
     cf_err rc = msg_revalidate(tx, write->room_id, write->creator_id, false,
                                0, false, NULL);
     if (rc != CF_OK) return rc;
+    if (write->staged != NULL) {
+        rc = msg_blob_from_staged(tx, write->staged, &write->blob);
+        if (rc != CF_OK) return rc;
+        write->attributes.attachment_blob_id =
+            (cf_optional_i64){true, write->blob.id};
+    }
     return cf_message_create(tx, &write->attributes, &write->message);
 }
 
-/* The `Create` upload arm is S02's (stage + process_attachment jobs);
- * multipart never reaches it today, and it fails loudly instead of faking an
- * attachment. */
+/* `create_with_attachment!` + `process_attachment`: the upload or verified
+ * blob is attached, then analyzed (tool-free analyzer) and the stored
+ * message re-read, because analysis touches it. */
 static cf_err msg_create_message(cf_ctx *ctx, const cf_user *user,
                                  const cf_room *room, msg_params *params,
                                  cf_message *out) {
     if (params->attachment == MSG_ATTACHMENT_INVALID) {
         return msg_invalid_attachment();
     }
+
+    cf_storage *storage = NULL;
+    cf_active_staged staged;
+    memset(&staged, 0, sizeof staged);
+    bool has_staged = false;
+    cf_blob signed_blob;
+    memset(&signed_blob, 0, sizeof signed_blob);
+    bool has_signed = false;
+    cf_str body = {0};
+    struct msg_create_write write;
+    memset(&write, 0, sizeof write);
+    cf_err rc = CF_OK;
+
     if (params->attachment == MSG_ATTACHMENT_CREATE) {
-        return CF_INTERNAL; /* S02: stage/process_attachment unavailable */
+        rc = msg_stage_attachment(ctx, params->attachment_param, &storage,
+                                  &staged);
+        if (rc != CF_OK) return rc;
+        has_staged = true;
+    } else if (params->attachment == MSG_ATTACHMENT_SIGNED) {
+        rc = msg_signed_attachment(ctx, params->attachment_blob_id,
+                                   &signed_blob);
+        if (rc != CF_OK) return rc;
+        has_signed = true;
     }
 
-    cf_str body = {0};
     bool has_body = false;
     if (params->has_body) {
-        cf_err rc = msg_canonical_body(
+        rc = msg_canonical_body(
             ctx, (cf_span){(const unsigned char *)params->body.ptr,
                            params->body.len},
             &body);
-        if (rc != CF_OK) return rc;
+        if (rc != CF_OK) goto done;
         has_body = true;
     }
 
-    struct msg_create_write write;
-    memset(&write, 0, sizeof write);
     write.room_id = room->id;
     write.creator_id = user->id;
+    write.staged = has_staged ? &staged : NULL;
     write.attributes.room_id = room->id;
     write.attributes.creator_id = user->id;
     if (params->has_client_message_id) {
@@ -1066,13 +1277,39 @@ static cf_err msg_create_message(cf_ctx *ctx, const cf_user *user,
         write.attributes.body.present = true;
         write.attributes.body.value = body;
     }
-    cf_err rc = cf_write(ctx->app, msg_create_write_cb, &write);
+    if (has_signed) {
+        write.attributes.attachment_blob_id =
+            (cf_optional_i64){true, signed_blob.id};
+    }
+    rc = cf_write(ctx->app, msg_create_write_cb, &write);
+    if (rc == CF_OK && has_staged) {
+        /* `keep_after_commit`: the file survives the committed write. */
+        rc = cf_active_staged_commit(&staged);
+        if (rc != CF_OK) rc = CF_INTERNAL;
+    }
+    if (rc == CF_OK && (has_staged || has_signed)) {
+        const cf_blob *attached = has_staged ? &write.blob : &signed_blob;
+        /* process_attachment's synchronous analyze arm; media analyzers are
+         * the S03 boundary (the reference runs the pinned tools here). */
+        rc = msg_analyze_blob(ctx, attached);
+    }
     if (rc == CF_OK) {
-        *out = write.message;
+        if (has_staged || has_signed) {
+            /* `Message::find(conn, id)` after analysis touched the row. */
+            rc = cf_message_find(ctx->reader, write.message.id, out);
+            cf_message_dispose(&write.message);
+        } else {
+            *out = write.message;
+        }
     } else {
         cf_message_dispose(&write.message);
     }
+done:
     msg_str_dispose(&body);
+    cf_blob_dispose(&write.blob);
+    cf_blob_dispose(&signed_blob);
+    if (has_staged) cf_active_staged_dispose(&staged);
+    if (storage != NULL) cf_storage_close(storage);
     return rc;
 }
 
@@ -1084,7 +1321,9 @@ struct msg_update_write {
     bool has_body;
     cf_str body; /* borrowed */
     bool attachment_given;
-    cf_optional_i64 blob_id;
+    cf_optional_i64 blob_id; /* SIGNED id; staged ids filled in the cb */
+    const cf_active_staged *staged; /* borrowed; NULL when no upload */
+    cf_blob blob;                   /* owned when staged != NULL */
     cf_message message; /* in/out; its owned fields alias the caller's row */
 };
 
@@ -1095,6 +1334,11 @@ static cf_err msg_update_write_cb(cf_tx *tx, void *arg) {
                                write->message_id, true, &fresh);
     cf_message_dispose(&fresh);
     if (rc != CF_OK) return rc;
+    if (write->staged != NULL) {
+        rc = msg_blob_from_staged(tx, write->staged, &write->blob);
+        if (rc != CF_OK) return rc;
+        write->blob_id = (cf_optional_i64){true, write->blob.id};
+    }
     /* The write mutates the caller's row instance (the reference updates the
      * loaded record); the fresh read is only the revalidation. */
     if (write->has_body) {
@@ -1108,41 +1352,103 @@ static cf_err msg_update_write_cb(cf_tx *tx, void *arg) {
     return rc;
 }
 
+/* `Blob#is_analyzed`: `metadata[:analyzed]` present and neither null nor
+ * false (the reference's `metadata.get("analyzed")` guard). */
+bool msg_blob_is_analyzed(const cf_blob *blob) {
+    if (!blob->metadata.present) return false;
+    yyjson_doc *doc = yyjson_read(blob->metadata.value.ptr,
+                                  blob->metadata.value.len, 0);
+    if (doc == NULL) return false;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value = root != NULL && yyjson_is_obj(root)
+                            ? yyjson_obj_get(root, "analyzed")
+                            : NULL;
+    bool analyzed = value != NULL && !yyjson_is_null(value) &&
+                    !(yyjson_is_bool(value) && !yyjson_get_bool(value));
+    yyjson_doc_free(doc);
+    return analyzed;
+}
+
 static cf_err msg_update_message(cf_ctx *ctx, const cf_message *message,
                                  int64_t actor_id, msg_params *params,
                                  cf_message *out) {
     if (params->attachment == MSG_ATTACHMENT_INVALID) {
         return msg_invalid_attachment();
     }
+
+    cf_storage *storage = NULL;
+    cf_active_staged staged;
+    memset(&staged, 0, sizeof staged);
+    bool has_staged = false;
+    cf_blob signed_blob;
+    memset(&signed_blob, 0, sizeof signed_blob);
+    bool has_signed = false;
+    cf_str body = {0};
+    struct msg_update_write write;
+    memset(&write, 0, sizeof write);
+    cf_err rc = CF_OK;
+
     if (params->attachment == MSG_ATTACHMENT_CREATE) {
-        return CF_INTERNAL; /* S02: stage/process_attachment unavailable */
+        rc = msg_stage_attachment(ctx, params->attachment_param, &storage,
+                                  &staged);
+        if (rc != CF_OK) return rc;
+        has_staged = true;
+    } else if (params->attachment == MSG_ATTACHMENT_SIGNED) {
+        rc = msg_signed_attachment(ctx, params->attachment_blob_id,
+                                   &signed_blob);
+        if (rc != CF_OK) return rc;
+        has_signed = true;
     }
 
-    cf_str body = {0};
     bool has_body = false;
     if (params->has_body) {
-        cf_err rc = msg_canonical_body(
+        rc = msg_canonical_body(
             ctx, (cf_span){(const unsigned char *)params->body.ptr,
                            params->body.len},
             &body);
-        if (rc != CF_OK) return rc;
+        if (rc != CF_OK) goto done;
         has_body = true;
     }
 
-    struct msg_update_write write;
-    memset(&write, 0, sizeof write);
     write.room_id = message->room_id;
     write.actor_id = actor_id;
     write.message_id = message->id;
     write.has_body = has_body;
     write.body = body;
-    write.attachment_given = params->attachment == MSG_ATTACHMENT_DELETE;
+    write.staged = has_staged ? &staged : NULL;
+    write.attachment_given = params->attachment == MSG_ATTACHMENT_DELETE ||
+                             has_staged || has_signed;
+    if (has_signed) {
+        write.blob_id = (cf_optional_i64){true, signed_blob.id};
+    }
     write.message = *message; /* borrows the caller's owned fields */
-    cf_err rc = cf_write(ctx->app, msg_update_write_cb, &write);
+    rc = cf_write(ctx->app, msg_update_write_cb, &write);
+    if (rc == CF_OK && has_staged) {
+        rc = cf_active_staged_commit(&staged);
+        if (rc != CF_OK) rc = CF_INTERNAL;
+    }
+    if (rc == CF_OK && (has_staged || has_signed)) {
+        /* The reference queues ActiveStorage::AnalyzeJob for a fresh blob;
+         * with no async media path in this phase the tool-free Null analyzer
+         * runs here, and media blobs stay for S03 (the response does not
+         * depend on the job). Already-analyzed blobs are skipped. */
+        const cf_blob *attached = has_staged ? &write.blob : &signed_blob;
+        if (!msg_blob_is_analyzed(attached)) {
+            rc = msg_analyze_blob(ctx, attached);
+            if (rc == CF_INTERNAL) rc = CF_OK; /* S03's deferred job */
+        }
+    }
+    if (rc == CF_OK) {
+        /* `c.app().read(|conn| Message::find(conn, id))`. */
+        rc = cf_message_find(ctx->reader, message->id, out);
+    }
+done:
     msg_str_dispose(&body);
-    if (rc != CF_OK) return rc;
-    /* `c.app().read(|conn| Message::find(conn, id))`. */
-    return cf_message_find(ctx->reader, message->id, out);
+    cf_blob_dispose(&write.blob);
+    cf_blob_dispose(&signed_blob);
+    if (has_staged) cf_active_staged_dispose(&staged);
+    if (storage != NULL) cf_storage_close(storage);
+    return rc;
 }
 
 /* `@message.destroy` inside the writer. */

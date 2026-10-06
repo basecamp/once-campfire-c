@@ -56,12 +56,14 @@
 #include "../cable/cable_testutil.h"
 #include "../views/support/facts.h"
 
+#include <dirent.h>
 #include <inttypes.h>
 #include <sqlite3.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 cf_err cf_action_messages_by_bots_index(cf_ctx *ctx);
@@ -107,16 +109,25 @@ static cf_err env_capture(void *ctx, const cf_event *event) {
     return CF_OK;
 }
 
+static const char *g_storage_override;
+
 static bool env_open(byb_env *env) {
     memset(env, 0, sizeof *env);
     if (!cf_db_scratch_open(&env->scratch)) return false;
-    cf_config_entry entries[4] = {
+    cf_config_entry entries[5] = {
         {"PUBLIC_ORIGIN", ORIGIN},
         {"SECRET_KEY_BASE", HEX64},
         {"VAPID_PUBLIC_KEY", VAPID_PUBLIC_KEY},
         {"DATABASE_PATH", env->scratch.path},
+        {"STORAGE_PATH", "storage/files"},
     };
-    if (cf_config_parse(entries, 4, NULL, &env->config) != CF_OK) return false;
+    size_t entry_count = 4;
+    if (g_storage_override != NULL) {
+        entries[4].name = "STORAGE_PATH";
+        entries[4].value = g_storage_override;
+        entry_count = 5;
+    }
+    if (cf_config_parse(entries, entry_count, NULL, &env->config) != CF_OK) return false;
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
@@ -677,6 +688,91 @@ CF_TEST(messages_by_bots_create_attachment_only_stores_no_body) {
                         "record_type='Message' AND record_id NOT IN (1000)") ==
              0);
     env_close(&env);
+}
+
+/* Recursive scratch-tree removal (S01 dirs/files are 0700/0600). */
+static void remove_tree(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d != NULL) {
+            struct dirent *entry;
+            while ((entry = readdir(d)) != NULL) {
+                if (strcmp(entry->d_name, ".") == 0 ||
+                    strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+                char child[4096];
+                snprintf(child, sizeof child, "%s/%s", path, entry->d_name);
+                remove_tree(child);
+            }
+            closedir(d);
+        }
+        (void)rmdir(path);
+    } else {
+        (void)unlink(path);
+    }
+}
+
+/* The bot API's multipart attachment arm shares messages.c's staging:
+ * POST attachment=<file> stores the blob + attachment (the reference's
+ * create_with_attachment! path) and answers 201. */
+CF_TEST(messages_by_bots_create_with_attachment_stages) {
+    char root[64];
+    snprintf(root, sizeof root, "/tmp/cf-byb-attach-XXXXXX");
+    CF_REQUIRE(mkdtemp(root) != NULL);
+    g_storage_override = root;
+    byb_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+
+    static const char payload[] = "bot payload";
+    char body[1024];
+    size_t len = 0;
+    len += (size_t)snprintf(body + len, sizeof body - len,
+                            "--B\r\nContent-Disposition: form-data; "
+                            "name=\"attachment\"; filename=\"bot.txt\"\r\n"
+                            "Content-Type: text/plain\r\n\r\n");
+    memcpy(body + len, payload, sizeof payload - 1);
+    len += sizeof payload - 1;
+    len += (size_t)snprintf(body + len, sizeof body - len,
+                            "\r\n--B--\r\n");
+
+    cf_request req;
+    cf_response resp;
+    cf_test_req_init(&req);
+    req.method = CF_POST;
+    req.original_method = CF_POST;
+    req.path = SP("/rooms/100/" BOT_KEY "/messages");
+    req.target = req.path;
+    req.body = (cf_span){(const unsigned char *)body, len};
+    CF_REQUIRE(cf_test_req_header(&req, SP("Content-Type"),
+                                  SP("multipart/form-data; boundary=B")) ==
+               CF_OK);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Accept"), SP("application/json")) ==
+               CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 201);
+    cf_response_dispose(&resp);
+
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_blobs") == 1);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_attachments "
+                        "WHERE name='attachment' AND record_type='Message'") ==
+             1);
+    char text[256];
+    CF_CHECK(cf_db_test_text(cf_db_handle(env.scratch.db),
+                             "SELECT content_type FROM active_storage_blobs",
+                             text, sizeof text) != NULL &&
+             strcmp(text, "text/plain") == 0);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT byte_size FROM active_storage_blobs") == 11);
+
+    env_close(&env);
+    remove_tree(root);
+    g_storage_override = NULL;
 }
 
 CF_TEST(messages_by_bots_create_blank_body_is_unprocessable) {    byb_env env;

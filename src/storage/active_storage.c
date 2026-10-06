@@ -12,10 +12,14 @@
 #include "storage/active_storage.h"
 
 #include "auth.h"
+#include "storage/marcel.h"
 #include "storage/storage.h"
 
+#include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <openssl/evp.h>
 #include <yyjson.h>
@@ -2503,6 +2507,274 @@ bool cf_active_attach_allowed(cf_span record_type, cf_span name) {
             return true;
     }
     return false;
+}
+
+/* ---- upload staging (storage.rs Staged) ----------------------------------- */
+
+/* Owned NUL-terminated copy of a span (empty spans stay NULL/0 like cf_str). */
+static cf_err staged_str_copy(cf_span span, cf_str *out) {
+    memset(out, 0, sizeof *out);
+    if (span.len == 0) return CF_OK;
+    if (span.ptr == NULL) return CF_INVALID;
+    char *copy = malloc(span.len + 1);
+    if (copy == NULL) return CF_NOMEM;
+    memcpy(copy, span.ptr, span.len);
+    copy[span.len] = '\0';
+    out->ptr = copy;
+    out->len = span.len;
+    return CF_OK;
+}
+
+cf_err cf_active_staged_commit(cf_active_staged *staged) {
+    if (staged == NULL || staged->upload == NULL) return CF_INVALID;
+    return cf_storage_upload_commit(staged->upload);
+}
+
+void cf_active_staged_dispose(cf_active_staged *staged) {
+    if (staged == NULL) return;
+    cf_storage_upload_dispose(staged->upload); /* rolls back unless committed */
+    cf_str_dispose(&staged->key);
+    cf_str_dispose(&staged->filename);
+    cf_optional_str_dispose(&staged->content_type);
+    cf_str_dispose(&staged->metadata);
+    cf_str_dispose(&staged->service_name);
+    cf_str_dispose(&staged->checksum);
+    memset(staged, 0, sizeof *staged);
+}
+
+cf_err cf_active_stage_upload(cf_storage *storage, int src_fd,
+                              cf_span filename, cf_span declared_type,
+                              bool has_declared_type, cf_active_staged *out) {
+    if (storage == NULL || out == NULL || src_fd < 0) return CF_INVALID;
+    memset(out, 0, sizeof *out);
+    if (filename.len != 0 && filename.ptr == NULL) return CF_INVALID;
+    if (has_declared_type && declared_type.len != 0 &&
+        declared_type.ptr == NULL) {
+        return CF_INVALID;
+    }
+
+    cf_builder key = {0};
+    cf_storage_upload *upload = NULL;
+    cf_err rc = cf_storage_key_generate(&key);
+    if (rc == CF_OK) rc = cf_storage_upload_begin(storage, &upload);
+
+    /* Stream the spool file through S01 staging, keeping the leading bytes
+     * Marcel identification may look at (unfurl_file reads exactly
+     * `magic_prefix_len`). */
+    size_t prefix = cf_marcel_magic_prefix_len();
+    unsigned char *head = malloc(prefix > 0 ? prefix : 1);
+    if (head == NULL && rc == CF_OK) rc = CF_NOMEM;
+    size_t head_len = 0;
+    uint64_t total = 0;
+    unsigned char buffer[1 << 16];
+    while (rc == CF_OK) {
+        ssize_t got = pread(src_fd, buffer, sizeof buffer, (off_t)total);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            rc = CF_IO;
+            break;
+        }
+        if (got == 0) break;
+        if (head_len < prefix) {
+            size_t take = (size_t)got;
+            if (take > prefix - head_len) take = prefix - head_len;
+            memcpy(head + head_len, buffer, take);
+            head_len += take;
+        }
+        rc = cf_storage_upload_write(
+            upload, (cf_span){buffer, (size_t)got});
+        total += (uint64_t)got;
+    }
+
+    cf_builder sanitized = {0};
+    cf_builder identified = {0};
+    cf_builder checksum = {0};
+    if (rc == CF_OK) {
+        rc = cf_active_filename_sanitize(filename, &sanitized);
+    }
+    if (rc == CF_OK) {
+        rc = cf_marcel_identify((cf_span){head, head_len},
+                                (cf_span){sanitized.ptr, sanitized.len},
+                                declared_type, has_declared_type, &identified);
+    }
+    if (rc == CF_OK) rc = cf_storage_upload_checksum(upload, &checksum);
+    if (rc == CF_OK) {
+        rc = cf_storage_upload_move(upload, (cf_span){key.ptr, key.len});
+    }
+    free(head);
+    if (rc != CF_OK) {
+        cf_builder_dispose(&sanitized);
+        cf_builder_dispose(&identified);
+        cf_builder_dispose(&checksum);
+        cf_builder_dispose(&key);
+        cf_storage_upload_dispose(upload);
+        return rc;
+    }
+
+    out->upload = upload;
+    out->byte_size = (int64_t)total;
+    rc = staged_str_copy((cf_span){key.ptr, key.len}, &out->key);
+    if (rc == CF_OK) rc = staged_str_copy(filename, &out->filename);
+    if (rc == CF_OK) {
+        /* marcel::identify always produces a type (at minimum
+         * application/octet-stream), so the column is never NULL. */
+        out->content_type.present = true;
+        rc = staged_str_copy((cf_span){identified.ptr, identified.len},
+                             &out->content_type.value);
+    }
+    if (rc == CF_OK) {
+        rc = staged_str_copy(span_cstr("{\"identified\":true}"),
+                             &out->metadata);
+    }
+    if (rc == CF_OK) {
+        rc = staged_str_copy(span_cstr(CF_ACTIVE_SERVICE_NAME),
+                             &out->service_name);
+    }
+    if (rc == CF_OK) {
+        rc = staged_str_copy((cf_span){checksum.ptr, checksum.len},
+                             &out->checksum);
+    }
+    cf_builder_dispose(&sanitized);
+    cf_builder_dispose(&identified);
+    cf_builder_dispose(&checksum);
+    cf_builder_dispose(&key);
+    if (rc != CF_OK) {
+        cf_active_staged_dispose(out);
+        return rc;
+    }
+    return CF_OK;
+}
+
+static bool content_type_starts(cf_span content_type, const char *prefix) {
+    size_t len = strlen(prefix);
+    return content_type.len >= len &&
+           memcmp(content_type.ptr, prefix, len) == 0;
+}
+
+cf_err cf_active_analyze_metadata(cf_span content_type,
+                                  cf_span metadata_json, cf_builder *out) {
+    if (out == NULL) return CF_INVALID;
+    if ((content_type.len != 0 && content_type.ptr == NULL) ||
+        (metadata_json.len != 0 && metadata_json.ptr == NULL)) {
+        return CF_INVALID;
+    }
+    /* Analyzer::for_content_type: image/video/audio need S03's pinned tools
+     * (vips/ffprobe). Fail loudly before touching anything. */
+    if (content_type_starts(content_type, "image") ||
+        content_type_starts(content_type, "video") ||
+        content_type_starts(content_type, "audio")) {
+        return CF_INTERNAL;
+    }
+    /* Analyzer::Null -> extracted {}; `analyzed(metadata, {})` merges
+     * `"analyzed": true` into the stored object, replacing an existing key
+     * in place and appending otherwise (Json::merge = Hash#merge). */
+    if (metadata_json.len == 0) return CF_INTERNAL;
+    yyjson_doc *doc = yyjson_read((const char *)metadata_json.ptr,
+                                  metadata_json.len, 0);
+    if (doc == NULL) return CF_INTERNAL;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (root == NULL || !yyjson_is_obj(root)) {
+        yyjson_doc_free(doc);
+        return CF_INTERNAL;
+    }
+    yyjson_mut_doc *mdoc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *mroot =
+        mdoc != NULL ? yyjson_val_mut_copy(mdoc, root) : NULL;
+    if (mdoc == NULL || mroot == NULL) {
+        if (mdoc != NULL) yyjson_mut_doc_free(mdoc);
+        yyjson_doc_free(doc);
+        return CF_NOMEM;
+    }
+    yyjson_mut_doc_set_root(mdoc, mroot);
+    yyjson_mut_val *key = yyjson_mut_strcpy(mdoc, "analyzed");
+    yyjson_mut_val *value = yyjson_mut_bool(mdoc, true);
+    if (key == NULL || value == NULL || !yyjson_mut_obj_put(mroot, key, value)) {
+        yyjson_mut_doc_free(mdoc);
+        yyjson_doc_free(doc);
+        return CF_NOMEM;
+    }
+    size_t len = 0;
+    char *text = yyjson_mut_write(mdoc, 0, &len);
+    yyjson_mut_doc_free(mdoc);
+    yyjson_doc_free(doc);
+    if (text == NULL) return CF_NOMEM;
+    cf_err rc =
+        cf_builder_append(out, (cf_span){(const unsigned char *)text, len});
+    free(text);
+    return rc;
+}
+
+cf_err cf_active_default_variant_format(cf_span content_type,
+                                        cf_span filename_raw,
+                                        cf_builder *out) {
+    if (out == NULL) return CF_INVALID;
+    if (!cf_active_content_type_web_image(content_type)) {
+        return append_cstr(out, "png");
+    }
+    /* `format()`: the filename's extension when Marcel agrees it names the
+     * content type, otherwise the first registered extension. */
+    cf_span ext = cf_marcel_extname(filename_raw);
+    if (ext.len > 1) {
+        cf_builder named = {0};
+        bool found = false;
+        cf_err rc =
+            cf_marcel_for_extension((cf_span){ext.ptr + 1, ext.len - 1},
+                                    &found, &named);
+        if (rc != CF_OK) {
+            cf_builder_dispose(&named);
+            return rc;
+        }
+        if (found && named.len == content_type.len &&
+            memcmp(named.ptr, content_type.ptr, named.len) == 0) {
+            rc = cf_builder_append(out, (cf_span){ext.ptr + 1, ext.len - 1});
+            cf_builder_dispose(&named);
+            return rc;
+        }
+        cf_builder_dispose(&named);
+    }
+    const char *first = cf_marcel_first_extension(content_type);
+    if (first != NULL) return append_cstr(out, first);
+    return append_cstr(out, "png");
+}
+
+cf_err cf_active_representation_redirect_path(cf_span secret_key_base,
+                                              int64_t blob_id,
+                                              cf_span filename_raw,
+                                              const cf_active_ventries *variation,
+                                              cf_builder *out) {
+    if (out == NULL || variation == NULL) return CF_INVALID;
+    cf_str signed_id = {0};
+    cf_err rc = cf_active_blob_sign(secret_key_base, blob_id, false, 0,
+                                    &signed_id);
+    cf_str variation_key = {0};
+    if (rc == CF_OK) {
+        rc = cf_active_variation_sign(secret_key_base, variation,
+                                      &variation_key);
+    }
+    cf_builder sanitized = {0};
+    if (rc == CF_OK) rc = cf_active_filename_sanitize(filename_raw, &sanitized);
+    if (rc == CF_OK) {
+        rc = append_cstr(out, "/rails/active_storage/representations/redirect/");
+    }
+    if (rc == CF_OK) {
+        rc = cf_active_escape_segment(
+            (cf_span){(unsigned char *)signed_id.ptr, signed_id.len}, out);
+    }
+    if (rc == CF_OK) rc = append_cstr(out, "/");
+    if (rc == CF_OK) {
+        rc = cf_active_escape_segment(
+            (cf_span){(unsigned char *)variation_key.ptr, variation_key.len},
+            out);
+    }
+    if (rc == CF_OK) rc = append_cstr(out, "/");
+    if (rc == CF_OK) {
+        rc = cf_active_escape_path((cf_span){sanitized.ptr, sanitized.len},
+                                   out);
+    }
+    cf_builder_dispose(&sanitized);
+    cf_str_dispose(&signed_id);
+    cf_str_dispose(&variation_key);
+    return rc;
 }
 
 /* ---- variant races and purge (STORE-03) ----------------------------------- */

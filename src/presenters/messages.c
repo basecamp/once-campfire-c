@@ -19,9 +19,15 @@
 #include "models/sound.h"
 #include "models/user.h"
 #include "richtext.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
+#include "views/internal.h" /* cf_str_span */
 
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "yyjson.h"
 
 /* Unicode 16.0 Extended_Pictographic / Emoji_Presentation ranges, transcribed
  * from the pinned regex-syntax 0.8.11 tables the reference's `\p{...}`
@@ -253,8 +259,212 @@ static cf_err map_boosts(cf_ctx *ctx, int64_t message_id,
     return CF_OK;
 }
 
-/* The message's content arm: attachment (S02-blocked), sound, presentation
- * HTML or the unrenderable path. */
+/* ------------------------------------------------ attachment view (S02) */
+
+static cf_span presenter_secret(cf_ctx *ctx) {
+    const cf_config *config = cf_app_config(ctx->app);
+    if (config == NULL || config->secret_key_base == NULL) {
+        return (cf_span){NULL, 0};
+    }
+    return (cf_span){(const unsigned char *)config->secret_key_base,
+                     config->secret_key_base_len};
+}
+
+/* `Blob#is_previewable`: video + `ffmpeg_exists` (VideoPreviewer.accept?).
+ * The port's fixed executable /usr/bin/ffmpeg stands in for the PATH probe;
+ * the preview arm renders the reference markup either way (serving it is
+ * S03's transform route). */
+static bool presenter_ffmpeg_exists(void) {
+    const char *path = cf_proc_executable_path(CF_PROC_FFMPEG);
+    return path != NULL && access(path, X_OK) == 0;
+}
+
+/* One integer array entry [width, height]. */
+static cf_err presenter_dimension_pair(cf_active_ventries *entries,
+                                       const char *key, bool format_webp) {
+    cf_active_vval *width = NULL;
+    cf_active_vval *height = NULL;
+    cf_active_vval *array = NULL;
+    cf_err rc = cf_active_vint(1200, &width);
+    if (rc == CF_OK) rc = cf_active_vint(800, &height);
+    if (rc == CF_OK) rc = cf_active_varr(&array);
+    if (rc == CF_OK) rc = cf_active_varr_push(array, width);
+    if (rc == CF_OK) {
+        width = NULL; /* stolen */
+        rc = cf_active_varr_push(array, height);
+    }
+    if (rc == CF_OK) {
+        height = NULL;
+    }
+    if (rc == CF_OK && format_webp) {
+        cf_active_vval *format = NULL;
+        rc = cf_active_vsym((cf_span){(const unsigned char *)"webp", 4},
+                            &format);
+        if (rc == CF_OK) {
+            rc = cf_active_ventries_push(entries,
+                                         (cf_span){(const unsigned char *)
+                                                       "format",
+                                                   6},
+                                         format);
+            if (rc != CF_OK) cf_active_vval_dispose(format);
+        }
+    }
+    if (rc == CF_OK) {
+        rc = cf_active_ventries_push(
+            entries, (cf_span){(const unsigned char *)key, strlen(key)},
+            array);
+        if (rc != CF_OK) cf_active_vval_dispose(array);
+    } else {
+        cf_active_vval_dispose(array);
+        cf_active_vval_dispose(width);
+        cf_active_vval_dispose(height);
+    }
+    return rc;
+}
+
+/* `attachment.preview`: File for plain content, or the thumb/poster variation
+ * (`resize_to_limit 1200x800`, video posters forcing webp). Building the
+ * signed path needs no media work; the processing route is S03's. */
+static cf_err map_attachment_preview(cf_blob *blob, cf_span content_type,
+                                     cf_span secret,
+                                     cf_view_attachment *out) {
+    bool is_video = content_type.len >= 5 &&
+                    memcmp(content_type.ptr, "video", 5) == 0;
+    bool is_variable = cf_active_content_type_variable(content_type);
+    bool is_previewable = is_video && presenter_ffmpeg_exists();
+    if (!is_previewable && !is_variable) {
+        out->preview = CF_VIEW_PREVIEW_FILE;
+        return CF_OK;
+    }
+    out->preview = is_video ? CF_VIEW_PREVIEW_VIDEO : CF_VIEW_PREVIEW_IMAGE;
+    cf_active_ventries variation = {0};
+    cf_err rc = CF_OK;
+    if (is_video) {
+        rc = presenter_dimension_pair(&variation, "resize_to_limit", true);
+    } else {
+        /* variation_for: resize_to_limit defaulted with the blob's variant
+         * format (defaults first, so `format` leads the digest). */
+        cf_builder format = {0};
+        rc = cf_active_default_variant_format(
+            content_type, cf_str_span(blob->filename), &format);
+        cf_active_vval *format_value = NULL;
+        if (rc == CF_OK) {
+            rc = cf_active_vstr((cf_span){format.ptr, format.len},
+                                &format_value);
+        }
+        if (rc == CF_OK) {
+            rc = cf_active_ventries_push(
+                &variation,
+                (cf_span){(const unsigned char *)"format", 6}, format_value);
+            if (rc != CF_OK) cf_active_vval_dispose(format_value);
+        }
+        if (rc == CF_OK) {
+            rc = presenter_dimension_pair(&variation, "resize_to_limit",
+                                          false);
+        }
+        cf_builder_dispose(&format);
+    }
+    cf_builder path = {0};
+    if (rc == CF_OK) {
+        rc = cf_active_representation_redirect_path(
+            secret, blob->id, cf_str_span(blob->filename), &variation, &path);
+    }
+    cf_active_ventries_dispose(&variation);
+    if (rc == CF_OK) {
+        rc = copy_span((cf_span){path.ptr, path.len}, &out->preview_url);
+    }
+    cf_builder_dispose(&path);
+    return rc;
+}
+
+/* `attachment.metadata[:width]/[:height]`: an Integer for images, a Float for
+ * videos. */
+static void map_attachment_dimension(const cf_blob *blob, const char *name,
+                                     bool *has, cf_view_number *out) {
+    *has = false;
+    memset(out, 0, sizeof *out);
+    if (!blob->metadata.present) return;
+    yyjson_doc *doc = yyjson_read(blob->metadata.value.ptr,
+                                  blob->metadata.value.len, 0);
+    if (doc == NULL) return;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *value = root != NULL && yyjson_is_obj(root)
+                            ? yyjson_obj_get(root, name)
+                            : NULL;
+    if (value != NULL && yyjson_is_sint(value)) {
+        out->is_float = false;
+        out->integer = yyjson_get_sint(value);
+        *has = true;
+    } else if (value != NULL && yyjson_is_uint(value) &&
+               yyjson_get_uint(value) <= (uint64_t)INT64_MAX) {
+        out->is_float = false;
+        out->integer = (int64_t)yyjson_get_uint(value);
+        *has = true;
+    } else if (value != NULL && yyjson_is_real(value)) {
+        out->is_float = true;
+        out->real = yyjson_get_real(value);
+        *has = true;
+    }
+    yyjson_doc_free(doc);
+}
+
+/* `Presenter::attachment` -> `messages::AttachmentView`. */
+static cf_err map_attachment(cf_ctx *ctx, const cf_blob *blob,
+                             cf_view_attachment *out) {
+    cf_span secret = presenter_secret(ctx);
+    if (secret.ptr == NULL) return CF_INTERNAL;
+    cf_builder sanitized = {0};
+    cf_err rc = cf_active_filename_sanitize(cf_str_span(blob->filename),
+                                            &sanitized);
+    if (rc != CF_OK) {
+        cf_builder_dispose(&sanitized);
+        return rc;
+    }
+    cf_span filename = {sanitized.ptr, sanitized.len};
+    rc = copy_span(filename, &out->filename);
+    cf_builder blob_path = {0};
+    if (rc == CF_OK) {
+        rc = cf_active_blob_redirect_path(secret, blob->id, filename,
+                                          (cf_span){NULL, 0}, false,
+                                          &blob_path);
+    }
+    if (rc == CF_OK) {
+        rc = copy_span((cf_span){blob_path.ptr, blob_path.len},
+                       &out->blob_path);
+    }
+    cf_builder download_path = {0};
+    if (rc == CF_OK) {
+        rc = cf_active_blob_redirect_path(
+            secret, blob->id, filename,
+            (cf_span){(const unsigned char *)"attachment", 10}, true,
+            &download_path);
+    }
+    if (rc == CF_OK) {
+        rc = copy_span((cf_span){download_path.ptr, download_path.len},
+                       &out->download_path);
+    }
+    cf_span content_type = {NULL, 0};
+    if (blob->content_type.present) {
+        content_type = (cf_span){
+            (const unsigned char *)blob->content_type.value.ptr,
+            blob->content_type.value.len};
+    }
+    if (rc == CF_OK) {
+        rc = map_attachment_preview((cf_blob *)blob, content_type, secret, out);
+    }
+    if (rc == CF_OK) {
+        map_attachment_dimension(blob, "width", &out->has_width, &out->width);
+        map_attachment_dimension(blob, "height", &out->has_height,
+                                 &out->height);
+    }
+    cf_builder_dispose(&blob_path);
+    cf_builder_dispose(&download_path);
+    cf_builder_dispose(&sanitized);
+    return rc;
+}
+
+/* The message's content arm: attachment, sound, presentation HTML or the
+ * unrenderable path. */
 static cf_err map_content(cf_ctx *ctx, const cf_message *row,
                           cf_view_message *out, cf_span plain) {
     cf_str body = {0};
@@ -263,10 +473,7 @@ static cf_err map_content(cf_ctx *ctx, const cf_message *row,
     if (rc != CF_OK) return rc;
     if (!found) body = (cf_str){0};
 
-    /* `message.attachment`: the AttachmentView needs S02's signed blob and
-     * representation paths, which do not exist yet (05-storage S02 owns
-     * src/storage/active_storage.c and the Active Storage routes).  Refuse
-     * loudly instead of inventing a path. */
+    /* `message.attachment`: `Message::attachment` then the AttachmentView. */
     {
         cf_attachment attachment = {0};
         cf_blob blob = {0};
@@ -274,15 +481,19 @@ static cf_err map_content(cf_ctx *ctx, const cf_message *row,
         rc = cf_message_attachment(ctx->reader, row, &attached, &attachment,
                                    &blob);
         cf_attachment_dispose(&attachment);
-        cf_blob_dispose(&blob);
         if (rc != CF_OK) {
+            cf_blob_dispose(&blob);
             cf_str_dispose(&body);
             return rc;
         }
         if (attached) {
             cf_str_dispose(&body);
-            return CF_INVALID; /* S02 signed paths unavailable (reported). */
+            out->content_kind = CF_VIEW_CONTENT_ATTACHMENT;
+            rc = map_attachment(ctx, &blob, &out->attachment);
+            cf_blob_dispose(&blob);
+            return rc;
         }
+        cf_blob_dispose(&blob);
     }
 
     const cf_sound *sound = NULL;

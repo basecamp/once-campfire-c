@@ -104,6 +104,19 @@ const cf_param *cf_param_at(const cf_param *, size_t index);
 const cf_param *cf_param_field(const cf_param *, cf_span name); /* exact object key */
 cf_err cf_param_i64(const cf_param *, cf_optional_i64 *out);
 cf_err cf_param_bool(const cf_param *, bool *present, bool *out);
+/* H02 multipart upload accessor: one file part as
+ * `ActionDispatch::Http::UploadedFile`. Borrowed from the params: the spans
+ * live in the params arena and `fd` is closed by cf_params_destroy; the
+ * caller must not close it. `fd` is read-only and positioned at 0.
+ * CF_NOT_FOUND for a NULL param, CF_INVALID for a non-upload kind. */
+typedef struct {
+    cf_span filename;     /* Rack-normalized original filename */
+    cf_span content_type; /* declared part Content-Type (empty when absent) */
+    bool has_content_type;
+    int64_t size;         /* decoded byte length */
+    int fd;               /* spool file descriptor (params-owned) */
+} cf_upload;
+cf_err cf_param_upload(const cf_param *, cf_upload *out);
 cf_err cf_params_parse(const cf_request *, cf_params **out);
 void cf_params_destroy(cf_params *);
 cf_err cf_route_match_request(const cf_request *, cf_route_match *out);

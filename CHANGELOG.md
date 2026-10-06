@@ -5,6 +5,44 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-05 — V02 attachments: H02 upload accessor + S02 message attachment path
+
+- H02 multipart file parts are real uploads: each non-blank-filename part is
+  spooled to a unique 0600 `RackMultipart*` temp file (unlinked; the params
+  own the FD) and exposed through the proposed `cf_upload` /
+  `cf_param_upload` accessor, added identically to `contracts/api.h` and
+  `src/cf.h`, with Rack's filename normalization (filename*, %, basename),
+  declared Content-Type reads, blank-filename drops and the unchanged
+  100-field/16-file bounds. Contract change proposed for integrator
+  ratification (no shape was recorded when S01 landed); see
+  `docs/devel/evidence/V02-attachments.md`.
+- S02's missing unfurl half lands: the marcel 1.1.0 tables are generated
+  from the pinned `tables.rs` (`tests/fixtures/tools/marcel_tables.py` →
+  `src/storage/marcel_tables.h`, `src/storage/marcel.{c,h}`) and
+  `cf_active_stage_upload` streams an upload through S01 staging
+  (16 MiB cap), identifies the content type, computes base64(MD5), generates
+  the key and publishes exclusively; staged files roll back unless the DB
+  write commits. `cf_active_analyze_metadata` covers the null analyzer and
+  stops loudly (CF_INTERNAL) for image/video/audio (S03);
+  `cf_blob_update_metadata` and `cf_attachment_records_for_blob` translate
+  the pinned storage/blob.rs functions.
+- messages#create/#update (and the shared by_bots path) implement the S02
+  states: absent unchanged, nil/"" deletes (PurgeBlob event), multipart
+  upload stages + attaches in one transaction, verified signed blob ids
+  attach the existing blob; create runs the reference's synchronous
+  `process_attachment` (tool-free analysis + attachment-record touch +
+  re-read); update runs it only for unanalyzed blobs (the reference's
+  AnalyzeJob has no async path yet). The presenter builds the real
+  AttachmentView (signed blob/download paths, thumb/poster variations,
+  metadata dimensions) and the file/preview arms render the reference
+  markup. `tests/actions/**`, `tests/http/**`, `tests/storage/**`,
+  `tests/views/**` extended; full dev 1585/1585 and sanitize 1585/1585, one
+  falsification red/green. Browser case untouched; its `.message__attachment`
+  assertion matches preview arms only and needs retargeting for the `.txt`
+  sample (evidence §"Browser upload row expectation"). Media transforms,
+  async analysis and the reference's 413-vs-400 oversize status remain
+  S03/documented gaps.
+
 ## 2026-10-05 — Phase 4 wiring: merge phase 3, bind all landed packets
 
 - Merged `master` (phase 3 K01/B01.initial + pulled-forward searches,
