@@ -858,6 +858,47 @@ cf_err cf_front_h2_submit_response(cf_front_h2_session *session,
                                     int32_t stream_id, unsigned status,
                                     const unsigned char *body,
                                     size_t body_len) {
+    return cf_front_h2_submit_response_headers(session, stream_id, status,
+                                               NULL, NULL, NULL, NULL, 0,
+                                               body, body_len);
+}
+
+/* HTTP/1-only headers never cross into h2 (P01: omit HTTP/1-only
+ * connection headers). content-length is emitted authoritatively from
+ * body_len below, so an app-set value is skipped, never duplicated. */
+static bool h2_skip_response_header(const unsigned char *name, size_t len) {
+    static const char *const skip[] = {
+        "connection", "keep-alive", "transfer-encoding", "upgrade",
+        "content-length",
+    };
+    for (size_t i = 0; i < sizeof skip / sizeof skip[0]; i++) {
+        const char *want = skip[i];
+        size_t n = 0;
+        while (want[n] != '\0') n++;
+        if (n != len) continue;
+        bool match = true;
+        for (size_t k = 0; k < n; k++) {
+            unsigned char c = name[k];
+            if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+            if (c != (unsigned char)want[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+/* Queue a response with the app's headers: status + body as the wrapper
+ * above, plus one nghttp2 name/value pair per kept header (nghttp2 copies
+ * and lower-cases every pair, so borrowed spans are safe). Duplicate
+ * names (Set-Cookie) are submitted as repeated pairs. */
+cf_err cf_front_h2_submit_response_headers(
+    cf_front_h2_session *session, int32_t stream_id, unsigned status,
+    const unsigned char **names, const size_t *name_lens,
+    const unsigned char **values, const size_t *value_lens, size_t count,
+    const unsigned char *body, size_t body_len) {
     if (session == NULL || session->ng == NULL) return CF_INVALID;
     struct h2_stream *st = find_stream(session, stream_id);
     if (st == NULL || !st->open || st->refused || st->cancelled ||
@@ -880,7 +921,29 @@ cf_err cf_front_h2_submit_response(cf_front_h2_session *session,
     }
     char status_text[4];
     snprintf(status_text, sizeof status_text, "%03u", status);
-    nghttp2_nv nva[2];
+    char length_text[24];
+    snprintf(length_text, sizeof length_text, "%zu", body_len);
+    /* App headers ride after the two fixed pairs; skipped classes never
+     * reach the wire. Cap the header count so one pathological response
+     * cannot unboundedly grow the NV array. */
+    if (count > 128) {
+        free(copy);
+        return CF_LIMIT;
+    }
+    size_t kept = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (names == NULL || name_lens == NULL || values == NULL ||
+            value_lens == NULL || names[i] == NULL || values[i] == NULL) {
+            free(copy);
+            return CF_INVALID;
+        }
+        if (!h2_skip_response_header(names[i], name_lens[i])) kept++;
+    }
+    nghttp2_nv *nva = malloc((2 + kept) * sizeof *nva);
+    if (nva == NULL) {
+        free(copy);
+        return CF_NOMEM;
+    }
     nva[0].name = (uint8_t *)":status";
     nva[0].namelen = 7;
     nva[0].value = (uint8_t *)status_text;
@@ -888,11 +951,19 @@ cf_err cf_front_h2_submit_response(cf_front_h2_session *session,
     nva[0].flags = NGHTTP2_NV_FLAG_NONE;
     nva[1].name = (uint8_t *)"content-length";
     nva[1].namelen = 14;
-    char length_text[24];
-    snprintf(length_text, sizeof length_text, "%zu", body_len);
     nva[1].value = (uint8_t *)length_text;
     nva[1].valuelen = strlen(length_text);
     nva[1].flags = NGHTTP2_NV_FLAG_NONE;
+    size_t at = 2;
+    for (size_t i = 0; i < count; i++) {
+        if (h2_skip_response_header(names[i], name_lens[i])) continue;
+        nva[at].name = (uint8_t *)names[i];
+        nva[at].namelen = name_lens[i];
+        nva[at].value = (uint8_t *)values[i];
+        nva[at].valuelen = value_lens[i];
+        nva[at].flags = NGHTTP2_NV_FLAG_NONE;
+        at++;
+    }
     nghttp2_data_provider prd;
     nghttp2_data_provider *prdp = NULL;
     if (body_len != 0) {
@@ -905,7 +976,8 @@ cf_err cf_front_h2_submit_response(cf_front_h2_session *session,
         prd.read_callback = response_read;
         prdp = &prd;
     }
-    int rc = nghttp2_submit_response(session->ng, stream_id, nva, 2, prdp);
+    int rc = nghttp2_submit_response(session->ng, stream_id, nva, at, prdp);
+    free(nva);
     free(copy);
     if (rc != 0) {
         free(st->resp_body);

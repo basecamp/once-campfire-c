@@ -27,6 +27,8 @@ typedef struct {
     size_t received;
     unsigned char head[1024];
     size_t head_len;
+    char hdrs[2048]; /* "name: value\n" per response header, lowercase */
+    size_t hdrs_len;
     bool end_stream;
     bool rst;
     uint32_t rst_code;
@@ -65,6 +67,11 @@ static int cli_on_header(nghttp2_session *session, const nghttp2_frame *frame,
     if (namelen == 7 && memcmp(name, ":status", 7) == 0 && valuelen == 3) {
         s->status = (int)((value[0] - '0') * 100 + (value[1] - '0') * 10 +
                           (value[2] - '0'));
+    } else if (namelen > 0 && name[0] != ':') {
+        size_t room = s->hdrs_len < sizeof s->hdrs ? sizeof s->hdrs - s->hdrs_len : 0;
+        int n = snprintf(s->hdrs + s->hdrs_len, room, "%.*s: %.*s\n", (int)namelen,
+                         name, (int)valuelen, value);
+        if (n > 0 && (size_t)n < room) s->hdrs_len += (size_t)n;
     }
     return 0;
 }
@@ -731,6 +738,48 @@ CF_TEST(body_budget_cancels_stream) {
     CF_CHECK(cf_front_h2_stream_cancelled(r.srv, id));
     CF_CHECK(cf_front_h2_resets_total(r.srv) >= 1);
     free(bulk);
+    rig_destroy(&r);
+}
+
+CF_TEST(response_headers_reach_the_wire_lowercased) {
+    rig r;
+    CF_REQUIRE(rig_create(&r, false));
+    int32_t id = cli_get(&r, "/", "example.com");
+    CF_REQUIRE(id > 0);
+    CF_REQUIRE(pump(&r, 1000));
+    CF_REQUIRE(cf_front_h2_admitted_total(r.srv) == 1);
+    static const unsigned char N0[] = "Content-Type";
+    static const unsigned char V0[] = "text/html; charset=utf-8";
+    static const unsigned char N1[] = "Set-Cookie";
+    static const unsigned char V1[] = "a=1";
+    static const unsigned char V2[] = "b=2";
+    static const unsigned char N3[] = "Connection";
+    static const unsigned char V3[] = "keep-alive";
+    static const unsigned char N4[] = "Content-Length";
+    static const unsigned char V4[] = "9999";
+    static const unsigned char body[] = "hi";
+    const unsigned char *names[] = {N0, N1, N1, N3, N4};
+    size_t nlens[] = {12, 10, 10, 10, 14};
+    const unsigned char *vals[] = {V0, V1, V2, V3, V4};
+    size_t vlens[] = {24, 3, 3, 10, 4};
+    CF_REQUIRE(cf_front_h2_submit_response_headers(
+                   r.srv, id, 200, names, nlens, vals, vlens, 5, body,
+                   sizeof body - 1) == CF_OK);
+    CF_REQUIRE(pump(&r, 1000));
+    cli_stream *st = cli_find(&r.state, id, false);
+    CF_REQUIRE(st != NULL);
+    CF_CHECK(st->status == 200);
+    CF_CHECK(st->received == sizeof body - 1);
+    /* Lowercased on the wire; duplicates kept; HTTP/1-only classes and
+     * the app content-length skipped (authoritative length emitted). */
+    CF_CHECK(strstr(st->hdrs, "content-type: text/html; charset=utf-8\n") !=
+             NULL);
+    CF_CHECK(strstr(st->hdrs, "set-cookie: a=1\n") != NULL);
+    CF_CHECK(strstr(st->hdrs, "set-cookie: b=2\n") != NULL);
+    CF_CHECK(strstr(st->hdrs, "content-length: 2\n") != NULL);
+    CF_CHECK(strstr(st->hdrs, "connection") == NULL);
+    CF_CHECK(strstr(st->hdrs, "9999") == NULL);
+    CF_CHECK(st->end_stream);
     rig_destroy(&r);
 }
 

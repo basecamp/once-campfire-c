@@ -902,8 +902,49 @@ static void h2_complete_task(struct cf_http_loop *loop,
     unsigned status = task->response.status;
     cf_err s2;
     if (ok) {
-        s2 = cf_front_h2_submit_response(conn->h2, sid, status, body,
-                                        body_len);
+        /* Forward the app's headers (Content-Type, Set-Cookie, ETag, ...)
+         * into h2; the submitter skips HTTP/1-only classes and emits an
+         * authoritative content-length from the framed body. */
+        size_t hcount = cf_response_header_count(&task->response);
+        const unsigned char **hnames = NULL;
+        const unsigned char **hvalues = NULL;
+        size_t *hnamelens = NULL;
+        size_t *hvaluelens = NULL;
+        cf_err hrc = CF_OK;
+        if (hcount != 0) {
+            hnames = malloc(hcount * sizeof *hnames);
+            hvalues = malloc(hcount * sizeof *hvalues);
+            hnamelens = malloc(hcount * sizeof *hnamelens);
+            hvaluelens = malloc(hcount * sizeof *hvaluelens);
+            if (hnames == NULL || hvalues == NULL || hnamelens == NULL ||
+                hvaluelens == NULL) {
+                hrc = CF_NOMEM;
+            } else {
+                for (size_t i = 0; i < hcount && hrc == CF_OK; i++) {
+                    cf_span hn = {NULL, 0}, hv = {NULL, 0};
+                    if (!cf_response_header_at(&task->response, i, &hn,
+                                              &hv)) {
+                        hrc = CF_INTERNAL;
+                        break;
+                    }
+                    hnames[i] = hn.ptr;
+                    hnamelens[i] = hn.len;
+                    hvalues[i] = hv.ptr;
+                    hvaluelens[i] = hv.len;
+                }
+            }
+        }
+        if (hrc == CF_OK) {
+            s2 = cf_front_h2_submit_response_headers(
+                conn->h2, sid, status, hnames, hnamelens, hvalues,
+                hvaluelens, hcount, body, body_len);
+        } else {
+            s2 = hrc;
+        }
+        free((void *)hnames);
+        free((void *)hvalues);
+        free(hnamelens);
+        free(hvaluelens);
     } else {
         s2 = cf_front_h2_submit_response(conn->h2, sid, 500, NULL, 0);
     }

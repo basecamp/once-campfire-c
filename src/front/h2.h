@@ -168,6 +168,20 @@ cf_err cf_front_h2_submit_response(cf_front_h2_session *session,
                                     int32_t stream_id, unsigned status,
                                     const unsigned char *body, size_t body_len);
 
+/* Queue a response with the app response headers attached. Same status
+ * and body contract as the wrapper above, plus one nghttp2 name/value
+ * pair per kept header (nghttp2 copies and lower-cases every pair, so
+ * borrowed spans are safe). Duplicate names such as Set-Cookie are
+ * submitted as repeated pairs. HTTP/1-only classes (connection,
+ * keep-alive, transfer-encoding, upgrade) and content-length are
+ * skipped: content-length is always emitted authoritatively from the
+ * framed body length. */
+cf_err cf_front_h2_submit_response_headers(
+    cf_front_h2_session *session, int32_t stream_id, unsigned status,
+    const unsigned char **names, const size_t *name_lens,
+    const unsigned char **values, const size_t *value_lens, size_t count,
+    const unsigned char *body, size_t body_len);
+
 /* Cancel a stream (RST_STREAM CANCEL). Drops queued-but-unframed output;
  * committed bytes already left through mem_send. Idempotent. */
 cf_err cf_front_h2_rst_stream(cf_front_h2_session *session, int32_t stream_id,

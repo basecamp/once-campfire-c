@@ -139,6 +139,25 @@ cf_err cf_response_header(cf_response *resp, cf_span name, cf_span value) {
     return CF_OK;
 }
 
+size_t cf_response_header_count(const cf_response *resp) {
+    if (resp == NULL || resp->headers == NULL) return 0;
+    return resp->headers->count;
+}
+
+bool cf_response_header_at(const cf_response *resp, size_t index,
+                           cf_span *name, cf_span *value) {
+    if (resp == NULL || resp->headers == NULL || name == NULL ||
+        value == NULL) {
+        return false;
+    }
+    if (index >= resp->headers->count) return false;
+    name->ptr = resp->headers->items[index].name;
+    name->len = resp->headers->items[index].name_len;
+    value->ptr = resp->headers->items[index].value;
+    value->len = resp->headers->items[index].value_len;
+    return name->ptr != NULL && value->ptr != NULL;
+}
+
 cf_err cf_response_body(cf_response *resp, cf_buf *body) {
     if (resp == NULL || body == NULL) return CF_INVALID;
     cf_buf_release(resp->body);
