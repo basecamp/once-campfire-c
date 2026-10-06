@@ -955,9 +955,9 @@ CF_TEST(rewrites_tweets_through_fxtwitter) {
 
 CF_TEST(verifies_tls_against_the_test_ca) {
     /* Pinned fixtures: SAN covers www.example.com (CN fcm.googleapis.com). */
-    const char *ca = "tmp/rust-ref/crates/campfire/src/integrations/testdata/tls/ca.pem";
-    const char *cert = "tmp/rust-ref/crates/campfire/src/integrations/testdata/tls/server.pem";
-    const char *key = "tmp/rust-ref/crates/campfire/src/integrations/testdata/tls/server.key";
+    const char *ca = "tests/fixtures/crates/campfire/src/integrations/testdata/tls/ca.pem";
+    const char *cert = "tests/fixtures/crates/campfire/src/integrations/testdata/tls/server.pem";
+    const char *key = "tests/fixtures/crates/campfire/src/integrations/testdata/tls/server.key";
     FILE *f = fopen(ca, "r");
     CF_REQUIRE(f != NULL); /* LOUD: run from the worktree root */
     if (f) fclose(f);

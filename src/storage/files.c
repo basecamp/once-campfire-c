@@ -43,6 +43,7 @@ struct cf_storage_upload {
     int fd;        /* staging file; -1 once moved or rolled back */
     EVP_MD_CTX *md5;
     uint64_t size;
+    uint64_t byte_limit;
     char tmp_name[40];
     int final_dir; /* owned key-folder FD once moved */
     char key[CF_STORAGE_KEY_LENGTH + 1];
@@ -321,11 +322,16 @@ static cf_err storage_open_temp(cf_storage *s, char *name, size_t name_cap,
 }
 
 cf_err cf_storage_upload_begin(cf_storage *s, cf_storage_upload **out) {
-    if (s == NULL || out == NULL) return CF_INVALID;
+    return cf_storage_upload_begin_bounded(s,CF_STORAGE_UPLOAD_MAX_BYTES,out);
+}
+
+cf_err cf_storage_upload_begin_bounded(cf_storage *s, uint64_t byte_limit, cf_storage_upload **out) {
+    if (s == NULL || out == NULL || byte_limit==0 || byte_limit>CF_STORAGE_IMPORT_MAX_BYTES) return CF_INVALID;
     *out = NULL;
     cf_storage_upload *u = calloc(1, sizeof *u);
     if (u == NULL) return CF_NOMEM;
     u->s = s;
+    u->byte_limit=byte_limit;
     u->fd = -1;
     u->final_dir = -1;
     cf_err rc = storage_open_temp(s, u->tmp_name, sizeof u->tmp_name, &u->fd);
@@ -350,7 +356,7 @@ cf_err cf_storage_upload_write(cf_storage_upload *u, cf_span bytes) {
     if (u == NULL || u->fd < 0 || u->moved || u->md5 == NULL) return CF_INVALID;
     if (bytes.len != 0 && bytes.ptr == NULL) return CF_INVALID;
     /* The cap is checked while receiving, before anything is written. */
-    if ((uint64_t)bytes.len > CF_STORAGE_UPLOAD_MAX_BYTES - u->size) {
+    if ((uint64_t)bytes.len > u->byte_limit - u->size) {
         return CF_LIMIT;
     }
     size_t off = 0;

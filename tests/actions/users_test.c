@@ -50,6 +50,7 @@
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "avatar_test.h"
 
 #include <sqlite3.h>
 #include <stdint.h>
@@ -693,6 +694,49 @@ CF_TEST(users_show_unauthenticated_redirects_to_sign_in) {
                            "Location: " ORIGIN "/session/new\r\n"));
     cf_response_dispose(&resp);
     env_close(&env);
+}
+
+CF_TEST(users_multipart_avatar_is_committed_when_joining) {
+    users_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db);
+    char root[] = "/tmp/cf-avatar-join-XXXXXX";
+    avatar_test_root(env.config, root);
+    const char *body = "--avatar\r\nContent-Disposition: form-data; name=\"user[name]\"\r\n\r\nJo\r\n--avatar\r\nContent-Disposition: form-data; name=\"user[email_address]\"\r\n\r\njo@example.com\r\n--avatar\r\n" AVATAR_PART;
+    cf_request req; cf_response resp;
+    post_join(&req, JOIN_CODE, body, NULL);
+    req.headers[0].value = SP("multipart/form-data; boundary=avatar");
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    avatar_test_persisted(env.scratch.db, root);
+    CF_CHECK(count_rows(env.scratch.db,"SELECT count(*) FROM users") == 1);
+    CF_CHECK(head_contains(&resp,&req,"Set-Cookie: session_token="));
+    cf_response_dispose(&resp);
+    env_close(&env);
+    avatar_test_remove_tree(root);
+}
+
+CF_TEST(users_duplicate_join_rolls_back_staged_avatar) {
+    users_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db);
+    seed_user(env.scratch.db, 1, "Taken", "jo@example.com", NULL, 0, 0);
+    char root[] = "/tmp/cf-avatar-join-XXXXXX";
+    avatar_test_root(env.config, root);
+    const char *body = "--avatar\r\nContent-Disposition: form-data; name=\"user[name]\"\r\n\r\nJo\r\n--avatar\r\nContent-Disposition: form-data; name=\"user[email_address]\"\r\n\r\njo@example.com\r\n--avatar\r\n" AVATAR_PART;
+    cf_request req; cf_response resp;
+    post_join(&req, JOIN_CODE, body, NULL);
+    req.headers[0].value = SP("multipart/form-data; boundary=avatar");
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    CF_CHECK(avatar_test_file_count(root) == 0);
+    CF_CHECK(count_rows(env.scratch.db,"SELECT count(*) FROM active_storage_blobs") == 0);
+    CF_CHECK(count_rows(env.scratch.db,"SELECT count(*) FROM active_storage_attachments") == 0);
+    CF_CHECK(count_rows(env.scratch.db,"SELECT count(*) FROM users") == 1);
+    CF_CHECK(head_contains(&resp,&req,"Location: " ORIGIN "/session/new?email_address=jo%40example.com"));
+    cf_response_dispose(&resp);
+    env_close(&env);
+    avatar_test_remove_tree(root);
 }
 
 CF_TEST_MAIN()

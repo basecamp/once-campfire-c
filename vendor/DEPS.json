@@ -616,54 +616,106 @@
     {
       "name": "libvips",
       "purpose": "media image transforms via external vips subprocess (S03; D-C05)",
-      "repo": "not recorded in probes (dependencies.json media.source: tmp/rust-ref/Dockerfile and README.md)",
-      "pinned_commit": "not recorded (dependencies.json pins version 8.16.1; no commit and no archive hash recorded)",
-      "source_identity": null,
-      "source_path_in_repo": "not vendored (subprocess dependency; no vendor/src tree)",
-      "license": "not recorded (no probe data)",
-      "license_file": null,
-      "fetch_script": "none (no vendor/scripts script exists; not fetched or probed)",
+      "repo": "https://deb.debian.org/debian/",
+      "pinned_commit": "8.16.1-1+deb13u1",
+      "source_identity": {
+        "kind": "Debian source package DSC SHA-256",
+        "sha256": "60205e00d061b9d8072938e04899f2ca2fdac0513068e561d33f7c87fae1ae2e",
+        "file": "vendor/media/provenance/vips.dsc"
+      },
+      "source_path_in_repo": "vendor/media/Dockerfile (checksum-pinned Debian source fetch and isolated build)",
+      "license": "LGPL-2.1-or-later; see complete upstream/packaging notices",
+      "license_file": "vendor/media/provenance/vips.copyright",
+      "fetch_script": "vendor/media/build.sh",
       "clang": {
-        "status": "BLOCKED",
-        "build_command": "not recorded (no probe)",
-        "artifacts": [],
-        "probe_command": "not recorded (no probe)",
-        "evidence": "missing probe record: vendor/probes/ contains no libvips JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+        "status": "READY",
+        "build_command": "vendor/media/build.sh /tmp/campfire-pinned-media-final",
+        "artifacts": [
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/vips/bin/vips",
+            "sha256": "89e6fc0cc9eefb12bb24b9eb1d5781079e85b1f1733d1976e6fa2b2a6fc1a814",
+            "size": 32713
+          },
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/usr/local/bin/cf-vips",
+            "sha256": "7a21afd4fad8a21cc1234bf9e60033a84d8e3c737e5e77a2674cf6cb4519ccf0",
+            "size": 34841
+          }
+        ],
+        "probe_command": "python3 tests/fixtures/tools/verify_media_vectors.py /tmp/campfire-pinned-media-final/rootfs",
+        "evidence": "vendor/probes/media-pinned.json:11 byte-identical committed image/video output vectors; pinned DSCs/license/version/buildflags recorded."
       },
       "filc": {
-        "status": "BLOCKED",
-        "build_command": "not recorded (no probe)",
-        "artifacts": [],
-        "probe_command": "not recorded (no probe)",
-        "evidence": "missing probe record: vendor/probes/ contains no libvips JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+        "status": "READY",
+        "build_command": "vendor/media/build.sh /tmp/campfire-pinned-media-final",
+        "artifacts": [
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/vips/bin/vips",
+            "sha256": "89e6fc0cc9eefb12bb24b9eb1d5781079e85b1f1733d1976e6fa2b2a6fc1a814",
+            "size": 32713
+          },
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/usr/local/bin/cf-vips",
+            "sha256": "7a21afd4fad8a21cc1234bf9e60033a84d8e3c737e5e77a2674cf6cb4519ccf0",
+            "size": 34841
+          }
+        ],
+        "probe_command": "CF_MEDIA_LIVE=1 make test MODE=filc (fixed CF_PROC_*_PATH flags selecting the pinned export; see vendor/media/README.md)",
+        "evidence": "2026-10-06 isolated fixed review: Fil-C 0.685 strict media caller full suite 1670/1670 pass, process boundary15/15; vendor/probes/media-pinned.json independently verifies11 encoded vectors. External tools are GCC-built subprocesses, not Fil-C-linked libraries."
       },
-      "notes": "MISSING PROBE DATA -> BLOCKED under the lock rule that a cell without probe data cannot be READY or silently UNTESTED, and the contradiction is listed here. dependencies.json media.status = 'match reference build options; subprocess adapter parity unverified' and fixes libvips 8.16.1. No F00 worker fetched or probed it (F00-verify discrepancy 8: F00 media is not fetched or probed yet; no READY claim is made for it anywhere). Per D-C05 these are subprocess dependencies (vips/ffmpeg/ffprobe), not libraries linked into the application; S03's 'F00 media' prerequisite remains open until dedicated probe/provenance evidence exists. Values above are deliberately left unrecorded rather than invented; source_identity and license_file are null for the same reason (F00-verify D8)."
+      "notes": "Pinned external subprocess build verified against all11 committed reference output vectors. vendor/media/build.sh leaves system executables unchanged and exports native fixed ELF paths with Debian shared libraries. Reference codec/build options match. No linkedlibvips/FFmpeg ABI enters app; compiler cells refer to caller validation. Debian runtime package inventory is recorded, not snapshot-pinned; complete provenance notices are retained. Fil-C strict caller full gate passed 2026-10-06 (1670/1670 registered); no media library is linked into the Fil-C application."
     },
     {
       "name": "ffmpeg",
       "purpose": "media video metadata/poster via external ffmpeg/ffprobe subprocess (S03; D-C05)",
-      "repo": "not recorded in probes (dependencies.json media.source: tmp/rust-ref/Dockerfile and README.md)",
-      "pinned_commit": "not recorded (dependencies.json pins version 7.1.5; no commit and no archive hash recorded)",
-      "source_identity": null,
-      "source_path_in_repo": "not vendored (subprocess dependency; no vendor/src tree)",
-      "license": "not recorded (no probe data)",
-      "license_file": null,
-      "fetch_script": "none (no vendor/scripts script exists; not fetched or probed)",
+      "repo": "https://deb.debian.org/debian/",
+      "pinned_commit": "7:7.1.5-0+deb13u1",
+      "source_identity": {
+        "kind": "Debian source package DSC SHA-256",
+        "sha256": "9ed2ed34cbe7f056eeebbe9045c5e2d15e41b5b053fe7c8ba6979a0b6fb081ce",
+        "file": "vendor/media/provenance/ffmpeg.dsc"
+      },
+      "source_path_in_repo": "vendor/media/Dockerfile (checksum-pinned Debian source fetch and isolated build)",
+      "license": "LGPL-2.1-or-later; see complete upstream/packaging notices",
+      "license_file": "vendor/media/provenance/ffmpeg.LICENSE.md",
+      "fetch_script": "vendor/media/build.sh",
       "clang": {
-        "status": "BLOCKED",
-        "build_command": "not recorded (no probe)",
-        "artifacts": [],
-        "probe_command": "not recorded (no probe)",
-        "evidence": "missing probe record: vendor/probes/ contains no ffmpeg JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+        "status": "READY",
+        "build_command": "vendor/media/build.sh /tmp/campfire-pinned-media-final",
+        "artifacts": [
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/ffmpeg/bin/ffmpeg",
+            "sha256": "fff3cf281021dc903d42e9884d19e2d1d898ca1e258f2e1734a3d219c1b1c29e",
+            "size": 391241
+          },
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/ffmpeg/bin/ffprobe",
+            "sha256": "8b922081c94d0ee1741f7ea549108b5ad548591e97ab600486596c3aa2fd34bf",
+            "size": 219881
+          }
+        ],
+        "probe_command": "python3 tests/fixtures/tools/verify_media_vectors.py /tmp/campfire-pinned-media-final/rootfs",
+        "evidence": "vendor/probes/media-pinned.json:11 byte-identical committed image/video output vectors; pinned DSCs/license/version/buildflags recorded."
       },
       "filc": {
-        "status": "BLOCKED",
-        "build_command": "not recorded (no probe)",
-        "artifacts": [],
-        "probe_command": "not recorded (no probe)",
-        "evidence": "missing probe record: vendor/probes/ contains no ffmpeg JSON; docs/devel/evidence/F00-verify.md discrepancy 8 (F00 media not fetched or probed; no READY claim made anywhere); selection: docs/devel/implementation/contracts/dependencies.json media"
+        "status": "READY",
+        "build_command": "vendor/media/build.sh /tmp/campfire-pinned-media-final",
+        "artifacts": [
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/ffmpeg/bin/ffmpeg",
+            "sha256": "fff3cf281021dc903d42e9884d19e2d1d898ca1e258f2e1734a3d219c1b1c29e",
+            "size": 391241
+          },
+          {
+            "path": "/tmp/campfire-pinned-media-final/rootfs/opt/ffmpeg/bin/ffprobe",
+            "sha256": "8b922081c94d0ee1741f7ea549108b5ad548591e97ab600486596c3aa2fd34bf",
+            "size": 219881
+          }
+        ],
+        "probe_command": "CF_MEDIA_LIVE=1 make test MODE=filc (fixed CF_PROC_*_PATH flags selecting the pinned export; see vendor/media/README.md)",
+        "evidence": "2026-10-06 isolated fixed review: Fil-C 0.685 strict media caller full suite 1670/1670 pass, process boundary15/15; vendor/probes/media-pinned.json independently verifies11 encoded vectors. External tools are GCC-built subprocesses, not Fil-C-linked libraries."
       },
-      "notes": "MISSING PROBE DATA -> BLOCKED under the lock rule that a cell without probe data cannot be READY or silently UNTESTED, and the contradiction is listed here. dependencies.json media.status = 'match reference build options; subprocess adapter parity unverified' and fixes ffmpeg 7.1.5. No F00 worker fetched or probed it (F00-verify discrepancy 8: F00 media is not fetched or probed yet; no READY claim is made for it anywhere). Per D-C05 these are subprocess dependencies (vips/ffmpeg/ffprobe), not libraries linked into the application; S03's 'F00 media' prerequisite remains open until dedicated probe/provenance evidence exists. Values above are deliberately left unrecorded rather than invented; source_identity and license_file are null for the same reason (F00-verify D8)."
+      "notes": "Pinned external subprocess build verified against all11 committed reference output vectors. vendor/media/build.sh leaves system executables unchanged and exports native fixed ELF paths with Debian shared libraries. Reference codec/build options match. No linkedlibvips/FFmpeg ABI enters app; compiler cells refer to caller validation. Debian runtime package inventory is recorded, not snapshot-pinned; complete provenance notices are retained. Fil-C strict caller full gate passed 2026-10-06 (1670/1670 registered); no media library is linked into the Fil-C application."
     }
   ]
 }

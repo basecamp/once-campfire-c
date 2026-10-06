@@ -384,6 +384,52 @@ static const char *profile_next(bool direct, const char *involvement) {
     return "mentions";
 }
 
+cf_err cf_view_involvement_button(const cf_view_ctx *ctx, int64_t room_id,
+                                   bool direct, cf_span param_key,
+                                   cf_span involvement, cf_builder *out) {
+    char state[32] = {0};
+    if (involvement.len >= sizeof state) return CF_INVALID;
+    if (involvement.len != 0) memcpy(state, involvement.ptr, involvement.len);
+    cf_builder label = {0}, url = {0}, content = {0};
+    cf_err rc = CF_OK;
+    char id[32];
+    snprintf(id, sizeof id, "%lld", (long long)room_id);
+    CF_VIEW_TRY(cf_view_str(&label, "involvement_label_"));
+    CF_VIEW_TRY(cf_view_raw(&label, param_key));
+    CF_VIEW_TRY(cf_view_str(&label, "_"));
+    CF_VIEW_TRY(cf_view_str(&label, id));
+    CF_VIEW_TRY(cf_view_str(&url, "/rooms/"));
+    CF_VIEW_TRY(cf_view_str(&url, id));
+    CF_VIEW_TRY(cf_view_str(&url, "/involvement?involvement="));
+    CF_VIEW_TRY(cf_view_str(&url, profile_next(direct, state)));
+    char icon[64];
+    snprintf(icon, sizeof icon, "notification-bell-%s.svg", state[0] != '\0' ? state : "loading");
+    CF_VIEW_TRY(profile_img_hidden(ctx, icon, 20, &content));
+    cf_view_attrs sr;
+    cf_view_attrs_init(&sr);
+    CF_VIEW_TRY(cf_view_attr_cstr(&sr, "class", "for-screen-reader"));
+    CF_VIEW_TRY(cf_view_attr(&sr, "id", cf_view_span_of(&label)));
+    CF_VIEW_TRY(cf_view_content_text(&content, "span", &sr,
+                                    cf_span_of_lit(profile_humanize(state))));
+    cf_view_attrs options;
+    cf_view_attrs_init(&options);
+    CF_VIEW_TRY(cf_view_attr_cstr(&options, "role", "checkbox"));
+    CF_VIEW_TRY(cf_view_attr_cstr(&options, "aria-checked", "true"));
+    CF_VIEW_TRY(cf_view_attr(&options, "aria-labelledby", cf_view_span_of(&label)));
+    CF_VIEW_TRY(cf_view_attr_cstr(&options, "tabindex", "0"));
+    char cls[64]; snprintf(cls, sizeof cls, "btn %s", state);
+    CF_VIEW_TRY(cf_view_attr_cstr(&options, "class", cls));
+    rc = cf_view_button_to(out, cf_view_span_of(&url), &options,
+                          cf_span_of_lit("put"), (cf_span){NULL,0},
+                          cf_view_span_of(&content));
+fail:
+    cf_builder_dispose(&label);
+    cf_builder_dispose(&url);
+    cf_builder_dispose(&content);
+    return rc;
+}
+
+
 /* users/profiles/_membership.html. */
 cf_err cf_view_users_profile_membership(
     const cf_view_ctx *ctx, const cf_view_profile_membership *membership,

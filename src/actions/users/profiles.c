@@ -35,18 +35,12 @@
  * 422.  Database errors propagate to the generic 500 mapping
  * (app.rs db_error: other -> Internal).
  *
- * Avatar states: Unchanged writes only the user row; Delete destroys the
- * (User, avatar) attachment when one exists (DELETE row, touch
- * users.updated_at, emit CF_EVENT_PURGE_BLOB, J02's kind) and is a no-op
- * otherwise; Create (a real upload) and Invalid (any non-empty string: the
- * source's Assignment has no signed-blob arm — S02's
- * cf_active_attach_classify SIGNED state serves other controllers and is
- * deliberately not consulted here) both fail loudly with CF_INTERNAL, the
- * reference's "Could not find or build blob" 500, instead of faking an
- * attachment (first_runs.c precedent).  Multipart never builds an upload
- * param node today, so Create is unreachable through dispatch.
- * analyze_later is a no-op in every reachable state (pending is None
- * unless a blob was attached) and needs no job.
+ * Avatar states: Unchanged updates only the user; Delete destroys its
+ * attachment and emits a purge event. Create stages bytes off the writer,
+ * then replaces the attachment and creates its blob in the same transaction
+ * as the user update. Commit keeps the file; rollback removes it. Analysis
+ * is admitted to the bounded media queue after commit. Invalid values fail
+ * before the write.
  *
  * Render (A02/V02): the show gate is gone; show renders
  * cf_view_users_profile_show(_frame) from the V02 presenter
@@ -65,6 +59,7 @@
  *   cf_action_users_profiles_show, cf_action_users_profiles_update.
  */
 #include "cf.h"
+#include "actions/avatar_upload.h"
 
 #include "app.h"
 #include "auth.h"
@@ -400,16 +395,28 @@ typedef struct {
     cf_user user; /* in/out: the reference updates the loaded record */
     cf_user_changes changes;
     profiles_avatar avatar;
+    const cf_active_staged *staged;
+    int64_t blob_id;
 } profiles_write_arg;
 
 /* `user.update(tx, changes)` then `attachments::assign` (Delete destroys
  * the attachment, touches the user and purges the blob after commit).
- * The source performs no in-transaction re-read here. */
+ * Re-read the user in the writer before applying any changes. */
 static cf_err profiles_write_cb(cf_tx *tx, void *arg) {
     profiles_write_arg *write = arg;
     cf_db *db = cf_tx_db(tx);
     if (db == NULL) return CF_INTERNAL;
-    cf_err rc = cf_user_update(tx, &write->user, &write->changes);
+    /* Authentication may have changed while this callback waited. */
+    bool active_found = false;
+    cf_user fresh = {0};
+    cf_err rc = cf_user_find_by_id(db, write->user.id, &active_found, &fresh);
+    if (rc != CF_OK || !active_found || !cf_user_is_active(&fresh)) {
+        cf_user_dispose(&fresh);
+        return rc != CF_OK ? rc : CF_FORBIDDEN;
+    }
+    cf_user_dispose(&write->user);
+    write->user = fresh;
+    rc = cf_user_update(tx, &write->user, &write->changes);
     if (rc != CF_OK) return rc;
 
     switch (write->avatar) {
@@ -438,8 +445,9 @@ static cf_err profiles_write_cb(cf_tx *tx, void *arg) {
         return rc;
     }
     case PROFILES_AVATAR_CREATE:
+        return cf_avatar_attach(tx, &write->user, write->staged, &write->blob_id);
     case PROFILES_AVATAR_INVALID:
-        /* Staged-blob attach (S02) / "Could not find or build blob". */
+        /* "Could not find or build blob". */
         return CF_INTERNAL;
     }
     return CF_INTERNAL;
@@ -559,9 +567,11 @@ cf_err cf_action_users_profiles_update(cf_ctx *ctx) {
             cf_param_type(raw_avatar) != CF_PARAM_NULL;
     }
 
-    if (rc == CF_OK &&
-        (fields.avatar == PROFILES_AVATAR_CREATE ||
-         fields.avatar == PROFILES_AVATAR_INVALID)) {
+    cf_storage *storage = NULL;
+    cf_active_staged staged = {0};
+    if (rc == CF_OK && fields.avatar == PROFILES_AVATAR_CREATE)
+        rc = cf_avatar_stage(ctx, profiles_permitted(permitted, "avatar"), &storage, &staged);
+    if (rc == CF_OK && fields.avatar == PROFILES_AVATAR_INVALID) {
         /* Fail before the write, like the staged/invalid arms inside it. */
         rc = CF_INTERNAL;
     }
@@ -577,10 +587,15 @@ cf_err cf_action_users_profiles_update(cf_ctx *ctx) {
             .user = user,
             .changes = changes,
             .avatar = fields.avatar,
+            .staged = fields.avatar == PROFILES_AVATAR_CREATE ? &staged : NULL,
         };
         /* The write mutates the caller's row (reference semantics); the
          * action's `user` is that row. */
         rc = cf_write(ctx->app, profiles_write_cb, &arg);
+        if (rc == CF_OK && arg.staged != NULL) {
+            rc = cf_active_staged_commit(&staged);
+            if (rc == CF_OK) cf_avatar_analyze_later(ctx, arg.blob_id);
+        }
         user = arg.user;
         memset(&arg.user, 0, sizeof arg.user);
     }
@@ -589,6 +604,8 @@ cf_err cf_action_users_profiles_update(cf_ctx *ctx) {
                                "everywhere."
                              : "\342\234\223"; /* "✓" */
     if (rc == CF_OK) rc = profiles_redirect_profile(ctx, notice);
+    cf_active_staged_dispose(&staged);
+    cf_storage_close(storage);
     profiles_fields_dispose(&fields);
     cf_user_dispose(&user);
     return rc;

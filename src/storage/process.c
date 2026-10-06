@@ -13,7 +13,8 @@
  *
  * vips 8.16.1 / ffmpeg 7.1.5 are the pinned versions (vendor/DEPS.json); the
  * helper does not inspect versions (S03 owns media parity), and all three
- * entries remain F00-BLOCKED because the media probe/provenance is missing. */
+ * entries use fixed build paths. vendor/media/build.sh prepares source-pinned
+ * tools independently of system binaries; S03 verifies media parity. */
 
 #include "storage/storage.h"
 
@@ -32,11 +33,8 @@
 
 extern char **environ;
 
-/* The only three executables this process may spawn. Absolute, fixed at
+/* The executable allowlist. Absolute paths, fixed at
  * compile time: no getenv, no PATH search, no caller-supplied path. */
-#define CF_PROC_VIPS_PATH "/usr/bin/vips"
-#define CF_PROC_FFMPEG_PATH "/usr/bin/ffmpeg"
-#define CF_PROC_FFPROBE_PATH "/usr/bin/ffprobe"
 #define CF_PROC_VIPS_NAME "vips"
 #define CF_PROC_FFMPEG_NAME "ffmpeg"
 #define CF_PROC_FFPROBE_NAME "ffprobe"
@@ -44,6 +42,7 @@ extern char **environ;
 const char *cf_proc_executable_path(cf_proc_exe exe) {
     switch (exe) {
     case CF_PROC_VIPS: return CF_PROC_VIPS_PATH;
+    case CF_PROC_VIPS_ADAPTER: return CF_PROC_VIPS_ADAPTER_PATH;
     case CF_PROC_FFMPEG: return CF_PROC_FFMPEG_PATH;
     case CF_PROC_FFPROBE: return CF_PROC_FFPROBE_PATH;
     }
@@ -53,6 +52,7 @@ const char *cf_proc_executable_path(cf_proc_exe exe) {
 const char *cf_proc_executable_name(cf_proc_exe exe) {
     switch (exe) {
     case CF_PROC_VIPS: return CF_PROC_VIPS_NAME;
+    case CF_PROC_VIPS_ADAPTER: return "cf-vips";
     case CF_PROC_FFMPEG: return CF_PROC_FFMPEG_NAME;
     case CF_PROC_FFPROBE: return CF_PROC_FFPROBE_NAME;
     }
@@ -324,12 +324,14 @@ cf_err cf_proc_run(const cf_proc_opts *o, cf_proc_result *out) {
     }
     /* Writers are gone (or SIGKILLed): only buffered bytes remain. */
     if (out_r >= 0 && !out_eof && drain_rc == CF_OK) {
-        bool hit = false, eof = false;
-        (void)proc_drain(out_r, &outb, o->stdout_limit, false, &hit, &eof);
+        rc = proc_drain(out_r, &outb, o->stdout_limit, false,
+                        &out->output_limit, &out_eof);
+        if (rc != CF_OK && rc != CF_LIMIT) drain_rc = rc;
     }
     if (err_r >= 0 && !err_eof && drain_rc == CF_OK) {
-        bool hit = false, eof = false;
-        (void)proc_drain(err_r, &errb, CF_PROC_STDERR_RETAIN, true, &hit, &eof);
+        rc = proc_drain(err_r, &errb, CF_PROC_STDERR_RETAIN, true,
+                        &out->err_truncated, &err_eof);
+        if (rc != CF_OK) drain_rc = rc;
     }
     proc_close(&out_r);
     proc_close(&err_r);

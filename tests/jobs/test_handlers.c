@@ -4,27 +4,11 @@
  * Exercises src/jobs/handlers.c through real committed state: a scratch
  * database with a started app, writer and jobs queue, the five default
  * handlers registered, and the writer post-commit consumer wired. No case
- * silently skips: a setup failure is a CF_REQUIRE failure. No network: the
- * I01/I02/S02 integration arms are absent (weak imports), so delivery tests
- * assert the recorded no-op counters.
- *
- *   - per-kind happy path with the missing-integration arm (push selects
- *     recipients through the model reads, webhook re-reads bot + message,
- *     purge re-reads the blob, media records the S03 stub);
- *   - deleted/revoked targets are recorded no-ops (CF_OK, counted
- *     completed, nothing resurrected);
- *   - queue-full CF_BUSY stays a drop (commit stays CF_OK, counted on both
- *     sides, no commit rewrite);
- *   - RemoveBannedContent destroys at most 100 messages per job and
- *     requeues the remainder (205 seeded messages converge to zero).
- *
- * Targeted build (the Makefile does not list src/jobs/handlers.c yet):
- *   cc -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra \
- *      -Werror -pthread -O1 -g -Isrc -Itests <dep includes> \
- *      -c tests/jobs/test_handlers.c -o test_handlers.o
- * then link test_handlers.o with the application library objects and the
- * recorded dependency archives (the same rule the Makefile uses for the
- * other tests/jobs binaries).
+ * silently skips: a setup failure is a CF_REQUIRE failure. Webhook cases
+ * exercise actual loopback HTTP requests, persisted text/attachment replies,
+ * in-flight revocation, imported-file policy and transport failures. Other
+ * cases cover real push encryption/delivery outcomes, off-writer analysis,
+ * atomic purge, bounded ban batches and queue/commit accounting.
  */
 #include "cf_test.h"
 
@@ -39,6 +23,19 @@
 
 #include <sqlite3.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <strings.h>
+#include <pthread.h>
+#include <time.h>
+#include "storage/storage.h"
+#include "storage/active_storage.h"
+#include "actions/avatar_test.h"
 
 static const char CF_TEST_HEX64[] =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -54,17 +51,20 @@ typedef struct {
 } handlers_fixture;
 
 static cf_config *make_config(const char *db_path) {
-    cf_config_entry entries[6] = {
+    cf_config_entry entries[9] = {
         {"PUBLIC_ORIGIN", "http://127.0.0.1:3999"},
         {"SECRET_KEY_BASE", CF_TEST_HEX64},
         {"DATABASE_PATH", db_path},
         {"CF_WRITER_QUEUE", "8"},
         {"CF_JOB_QUEUE", "128"},
         {"CF_JOB_WORKERS", "2"},
+        {"VAPID_PUBLIC_KEY", "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8cTriz_qYBVicY02_VxTQ="},
+        {"VAPID_PRIVATE_KEY", "qfXLHghuG1rSHZUVo9SscNRI-0EIHRbIrfeGCqbAwak="},
+        {"VAPID_SUBJECT", "mailto:test@example.com"},
     };
     cf_config *config = NULL;
     cf_config_error err;
-    if (cf_config_parse(entries, 6, &err, &config) != CF_OK) return NULL;
+    if (cf_config_parse(entries, 9, &err, &config) != CF_OK) return NULL;
     return config;
 }
 
@@ -231,20 +231,86 @@ CF_TEST(handlers_push_message_missing_message_is_noop) {
     fixture_close(&f);
 }
 
-CF_TEST(handlers_push_message_missing_integration_noop) {
+CF_TEST(handlers_push_message_empty_recipients_is_noop) {
     handlers_fixture f;
     CF_REQUIRE(fixture_open(&f));
     CF_REQUIRE(seed_user_room(&f));
     CF_REQUIRE(seed_message(&f, 1, 1, 1, 1));
 
-    /* Happy path up to delivery: the model reads run on real rows, then
-     * the absent I02 symbol takes the recorded no-op arm. */
+    /* There is no subscriber other than the sender: empty selection needs
+     * no network call and is an explicit no-recipient no-op. */
     cf_job job = push_job(1, 1);
     CF_CHECK(cf_jobs_handle_push_message(&f.hctx, &job) == CF_OK);
     CF_CHECK(ctx_load(&f.hctx.push_noop_gone) == 0);
-    CF_CHECK(ctx_load(&f.hctx.push_noop_no_integration) == 1);
+    CF_CHECK(ctx_load(&f.hctx.push_noop_no_recipients) == 1);
     CF_CHECK(ctx_load(&f.hctx.push_attempted) == 0);
     CF_CHECK(table_count(&f, "messages", NULL) == 1); /* untouched */
+    fixture_close(&f);
+}
+
+static cf_optional_str handlers_push_resolve(void *arg, cf_str host) {
+    (void)arg;(void)host;
+    char *ip = strdup("8.8.8.8");
+    return (cf_optional_str){ip != NULL,{ip,ip != NULL ? strlen(ip) : 0}};
+}
+
+typedef struct {unsigned calls,status;cf_push_transport_error error;} push_probe;
+static cf_err handlers_push_exchange(void *arg,const cf_push_request *req,
+    unsigned *status,char *reason,size_t cap,cf_push_transport_error *error) {
+    push_probe *probe = arg;
+    probe->calls++;
+    CF_CHECK(req->body_len > 100 && req->body_len <= CF_PUSH_MAX_RECORD_BYTES);
+    CF_CHECK(strcmp(req->host,"fcm.googleapis.com") == 0);
+    CF_CHECK(strcmp(req->resolved_ip,"8.8.8.8") == 0);
+    *status=probe->status;*error=probe->error;
+    if (cap) reason[0]='\0';
+    return CF_OK;
+}
+
+static bool seed_push_recipient(handlers_fixture *f) {
+    return seed_sql(f,
+        "INSERT INTO users(id,name,created_at,updated_at) VALUES(2,'Recipient','2026-01-01 00:00:00','2026-01-01 00:00:00');"
+        "INSERT INTO memberships(room_id,user_id,involvement,created_at,updated_at) VALUES(1,2,'everything','2026-01-01 00:00:00','2026-01-01 00:00:00');"
+        "INSERT INTO push_subscriptions(id,user_id,endpoint,p256dh_key,auth_key,created_at,updated_at) VALUES(1,2,'https://fcm.googleapis.com/fcm/send/test',"
+        "'BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4',"
+        "'BTBZMqHH6r4Tts7J_aSIgg','2026-01-01 00:00:00','2026-01-01 00:00:00');");
+}
+
+CF_TEST(handlers_push_message_delivers_and_invalidates_gone_subscription) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    CF_REQUIRE(seed_push_recipient(&f));
+    push_probe probe={.status=201};
+    f.hctx.push_resolve=handlers_push_resolve;
+    f.hctx.push_exchange=handlers_push_exchange;
+    f.hctx.push_exchange_ctx=&probe;
+    cf_job job=push_job(1,1);
+    CF_CHECK(cf_jobs_handle_push_message(&f.hctx,&job)==CF_OK);
+    CF_CHECK(probe.calls==1);
+    CF_CHECK(table_count(&f,"push_subscriptions",NULL)==1);
+    probe.status=410;
+    CF_CHECK(cf_jobs_handle_push_message(&f.hctx,&job)==CF_OK);
+    CF_CHECK(probe.calls==2);
+    CF_CHECK(table_count(&f,"push_subscriptions",NULL)==0);
+    fixture_close(&f);
+}
+
+CF_TEST(handlers_push_message_tls_failure_preserves_subscription) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    CF_REQUIRE(seed_push_recipient(&f));
+    push_probe probe={.error=CF_PUSH_TRANSPORT_TLS};
+    f.hctx.push_resolve=handlers_push_resolve;
+    f.hctx.push_exchange=handlers_push_exchange;
+    f.hctx.push_exchange_ctx=&probe;
+    cf_job job=push_job(1,1);
+    CF_CHECK(cf_jobs_handle_push_message(&f.hctx,&job)!=CF_OK);
+    CF_CHECK(probe.calls==1);
+    CF_CHECK(table_count(&f,"push_subscriptions",NULL)==1);
     fixture_close(&f);
 }
 
@@ -278,27 +344,175 @@ CF_TEST(handlers_deliver_webhook_missing_bot_is_noop) {
     fixture_close(&f);
 }
 
-CF_TEST(handlers_deliver_webhook_missing_integration_noop) {
-    handlers_fixture f;
-    CF_REQUIRE(fixture_open(&f));
-    CF_REQUIRE(seed_user_room(&f));
-    CF_REQUIRE(seed_sql(
-        &f,
-        "INSERT INTO users (id,name,created_at,updated_at,role,status) "
-        "VALUES (5,'Bot','2026-01-01 00:00:00','2026-01-01 00:00:00',2,0);"
-        "INSERT INTO webhooks (user_id,url,created_at,updated_at) VALUES "
-        "(5,'https://bot.example/hook','2026-01-01 "
-        "00:00:00','2026-01-01 00:00:00');"));
-    CF_REQUIRE(seed_message(&f, 1, 1, 1, 1));
-
-    /* Active bot + message + webhook URL re-read, then the absent I01
-     * symbol takes the recorded no-op arm. */
-    cf_job job = webhook_job(5, 1);
-    CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx, &job) == CF_OK);
-    CF_CHECK(ctx_load(&f.hctx.webhook_noop_gone) == 0);
-    CF_CHECK(ctx_load(&f.hctx.webhook_noop_no_integration) == 1);
-    CF_CHECK(ctx_load(&f.hctx.webhook_attempted) == 0);
+/* The real webhook transport receives the canonical job payload. */
+typedef struct { int fd; unsigned port; pthread_t thread; char request[16384]; size_t len, body_len; const char *mime, *body, *db_path, *mutation; bool mutated; } webhook_server;
+static void *webhook_server_run(void *arg) {
+    webhook_server *s=arg;
+    struct pollfd p={s->fd,POLLIN,0};
+    if (poll(&p,1,1500)<=0) return NULL;
+    int client=accept(s->fd,NULL,NULL); if(client<0)return NULL;
+    struct timeval timeout={2,0};
+    setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof timeout);
+    size_t wanted=0;
+    while(s->len+1<sizeof s->request) {
+        ssize_t n=recv(client,s->request+s->len,sizeof s->request-s->len-1,0);
+        if(n<=0)break;
+        s->len+=(size_t)n;s->request[s->len]=0;
+        char *end=strstr(s->request,"\r\n\r\n");
+        if(end && !wanted) {
+            char *cl=strcasestr(s->request,"Content-Length:");
+            wanted=(size_t)(end-s->request)+4+(cl?strtoul(cl+15,NULL,10):0);
+        }
+        if(wanted && s->len>=wanted)break;
+    }
+    if(s->mutation) {
+        sqlite3 *db=NULL;
+        if(sqlite3_open(s->db_path,&db)==SQLITE_OK) {
+            s->mutated=sqlite3_exec(db,s->mutation,NULL,NULL,NULL)==SQLITE_OK;
+        }
+        sqlite3_close(db);
+    }
+    const char *body=s->body?s->body:"Hello from bot!";
+    const char *mime=s->mime?s->mime:"text/plain";
+    size_t body_len=s->body_len?s->body_len:strlen(body);
+    char response[512];int n=snprintf(response,sizeof response,
+        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",mime,body_len);
+    (void)send(client,response,(size_t)n,MSG_NOSIGNAL);
+    size_t sent=0;
+    while(sent<body_len){ssize_t count=send(client,body+sent,body_len-sent,MSG_NOSIGNAL);if(count<=0)break;sent+=(size_t)count;}
+    close(client);return NULL;
+}
+static bool webhook_server_start(webhook_server *s) {
+    s->fd=socket(AF_INET,SOCK_STREAM,0);if(s->fd<0)return false;
+    struct sockaddr_in addr={0};addr.sin_family=AF_INET;addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    socklen_t size=sizeof addr;
+    if(bind(s->fd,(struct sockaddr*)&addr,sizeof addr)||listen(s->fd,1)||getsockname(s->fd,(struct sockaddr*)&addr,&size)) {close(s->fd);return false;}
+    s->port=ntohs(addr.sin_port);
+    if(pthread_create(&s->thread,NULL,webhook_server_run,s)!=0){close(s->fd);return false;}
+    return true;
+}
+CF_TEST(handlers_deliver_webhook_real_http_persists_reply) {
+    handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    webhook_server server={0};CF_REQUIRE(webhook_server_start(&server));
+    char sql[1024];snprintf(sql,sizeof sql,
+        "INSERT INTO users(id,name,bot_token,created_at,updated_at,role,status) VALUES(5,'Bot','bot-secret','2026-01-01 00:00:00','2026-01-01 00:00:00',2,0);"
+        "INSERT INTO memberships(room_id,user_id,involvement,created_at,updated_at) VALUES(1,5,'everything','2026-01-01 00:00:00','2026-01-01 00:00:00');"
+        "INSERT INTO webhooks(user_id,url,created_at,updated_at) VALUES(5,'http://127.0.0.1:%u/hook','2026-01-01 00:00:00','2026-01-01 00:00:00');",server.port);
+    CF_CHECK(seed_sql(&f,sql));
+    cf_job job=webhook_job(5,1);
+    CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_OK);
+    pthread_join(server.thread,NULL);close(server.fd);
+    CF_CHECK(strstr(server.request,"POST /hook HTTP/1.1")!=NULL);
+    CF_CHECK(strstr(server.request,"\"user\":{\"id\":1,\"name\":\"Seed\"}")!=NULL);
+    CF_CHECK(strstr(server.request,"/rooms/1/5-bot-secret/messages")!=NULL);
+    CF_CHECK(strstr(server.request,"/rooms/1@1")!=NULL);
+    CF_CHECK(table_count(&f,"messages","creator_id=5")==1);
+    CF_CHECK(table_count(&f,"action_text_rich_texts","body LIKE '%Hello from bot!%'")==1);
+    CF_CHECK(ctx_load(&f.hctx.webhook_attempted)==1);
     fixture_close(&f);
+}
+
+static bool webhook_seed(handlers_fixture *f,unsigned port) {
+    char sql[1024];snprintf(sql,sizeof sql,
+        "INSERT INTO users(id,name,bot_token,created_at,updated_at,role,status) VALUES(5,'Bot','bot-secret','2026-01-01 00:00:00','2026-01-01 00:00:00',2,0);"
+        "INSERT INTO memberships(room_id,user_id,involvement,created_at,updated_at) VALUES(1,5,'everything','2026-01-01 00:00:00','2026-01-01 00:00:00');"
+        "INSERT INTO webhooks(user_id,url,created_at,updated_at) VALUES(5,'http://127.0.0.1:%u/hook','2026-01-01 00:00:00','2026-01-01 00:00:00');",port);
+    return seed_sql(f,sql);
+}
+CF_TEST(handlers_deliver_webhook_real_attachment_is_staged_and_analyzed) {
+    handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    char root[]="/tmp/cf-webhook-attachment-XXXXXX";
+    avatar_test_root((cf_config*)cf_app_config(f.app),root);
+    webhook_server server={.mime="application/pdf",.body="%PDF-1.7\nreply data"};
+    CF_REQUIRE(webhook_server_start(&server));CF_CHECK(webhook_seed(&f,server.port));
+    cf_job job=webhook_job(5,1);
+    CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_OK);
+    pthread_join(server.thread,NULL);close(server.fd);
+    CF_CHECK(table_count(&f,"messages","creator_id=5")==1);
+    CF_CHECK(table_count(&f,"active_storage_blobs","filename='attachment.pdf' AND metadata LIKE '%analyzed%'")==1);
+    CF_CHECK(table_count(&f,"active_storage_attachments","record_type='Message' AND name='attachment'")==1);
+    sqlite3_stmt *stmt=NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(f.scratch.db),"SELECT key FROM active_storage_blobs",-1,&stmt,NULL)==SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt)==SQLITE_ROW);
+    const char *key=(const char*)sqlite3_column_text(stmt,0);
+    cf_storage *storage=NULL;int fd=-1;uint64_t size=0;
+    CF_REQUIRE(cf_storage_open(root,&storage)==CF_OK);
+    CF_CHECK(cf_storage_open_read(storage,(cf_span){(const unsigned char*)key,strlen(key)},&fd,&size)==CF_OK);
+    char bytes[64]={0};ssize_t count=fd<0?-1:read(fd,bytes,sizeof bytes);
+    CF_CHECK(count==(ssize_t)strlen(server.body));CF_CHECK(size==strlen(server.body));
+    CF_CHECK(count>0&&memcmp(bytes,server.body,(size_t)count)==0);
+    if(fd>=0)close(fd);cf_storage_close(storage);sqlite3_finalize(stmt);
+    fixture_close(&f);avatar_test_remove_tree(root);
+}
+CF_TEST(handlers_deliver_webhook_text_keeps_bytes_after_nul) {
+    handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    webhook_server server={.body="before\0after",.body_len=12};
+    CF_REQUIRE(webhook_server_start(&server));CF_CHECK(webhook_seed(&f,server.port));
+    cf_job job=webhook_job(5,1);CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_OK);
+    pthread_join(server.thread,NULL);close(server.fd);
+    CF_CHECK(table_count(&f,"action_text_rich_texts","body LIKE '%after%'")==1);
+    fixture_close(&f);
+}
+CF_TEST(handlers_deliver_webhook_imports_above_browser_upload_cap) {
+    handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));
+    char root[]="/tmp/cf-webhook-large-XXXXXX";
+    avatar_test_root((cf_config*)cf_app_config(f.app),root);
+    size_t len=17*1024*1024;char *body=malloc(len);CF_REQUIRE(body!=NULL);
+    memset(body,'x',len);memcpy(body,"%PDF-1.7\n",9);
+    /* The user-upload entry still rejects identical bytes at16MiB. */
+    cf_storage *storage=NULL;CF_REQUIRE(cf_storage_open(root,&storage)==CF_OK);
+    FILE *spool=tmpfile();CF_REQUIRE(spool!=NULL);
+    CF_REQUIRE(fwrite(body,1,len,spool)==len);CF_REQUIRE(fflush(spool)==0);
+    cf_active_staged staged={0};
+    CF_CHECK(cf_active_stage_upload(storage,fileno(spool),(cf_span){(const unsigned char*)"attachment.pdf",14},
+        (cf_span){(const unsigned char*)"application/pdf",15},true,&staged)==CF_LIMIT);
+    cf_active_staged_dispose(&staged);fclose(spool);cf_storage_close(storage);
+    webhook_server server={.mime="application/pdf",.body=body,.body_len=len};
+    CF_REQUIRE(webhook_server_start(&server));CF_CHECK(webhook_seed(&f,server.port));
+    cf_job job=webhook_job(5,1);CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_OK);
+    pthread_join(server.thread,NULL);close(server.fd);free(body);
+    CF_CHECK(table_count(&f,"active_storage_blobs","byte_size=17825792 AND metadata LIKE '%analyzed%'")==1);
+    CF_CHECK(table_count(&f,"messages","creator_id=5")==1);
+    CF_CHECK(avatar_test_file_count(root)==1);
+    fixture_close(&f);avatar_test_remove_tree(root);
+}
+
+CF_TEST(handlers_deliver_webhook_rechecks_inflight_revocation_and_rolls_back_staging) {
+    const char *mutations[]={"UPDATE users SET status=1 WHERE id=5",
+        "DELETE FROM memberships WHERE user_id=5", "DELETE FROM messages WHERE id=1",
+        "UPDATE webhooks SET url='http://127.0.0.1/replacement' WHERE user_id=5",
+        "DELETE FROM webhooks WHERE user_id=5"};
+    for(size_t i=0;i<sizeof mutations/sizeof mutations[0];i++) {
+        handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+        CF_REQUIRE(seed_message(&f,1,1,1,1));
+        char root[]="/tmp/cf-webhook-revoked-XXXXXX";
+        avatar_test_root((cf_config*)cf_app_config(f.app),root);
+        webhook_server server={.mime="application/pdf",.body="%PDF-1.7\nreply data",
+            .db_path=f.scratch.path,.mutation=mutations[i]};
+        CF_REQUIRE(webhook_server_start(&server));CF_CHECK(webhook_seed(&f,server.port));
+        cf_job job=webhook_job(5,1);
+        CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_OK);
+        pthread_join(server.thread,NULL);close(server.fd);
+        CF_CHECK(server.mutated);CF_CHECK(server.len>0);
+        CF_CHECK(ctx_load(&f.hctx.webhook_attempted)==1);
+        CF_CHECK(ctx_load(&f.hctx.webhook_noop_gone)==1);
+        CF_CHECK(table_count(&f,"messages","creator_id=5")==0);
+        CF_CHECK(table_count(&f,"active_storage_blobs",NULL)==0);
+        CF_CHECK(avatar_test_file_count(root)==0);
+        fixture_close(&f);avatar_test_remove_tree(root);
+    }
+}
+CF_TEST(handlers_deliver_webhook_unreachable_transport_fails) {
+    handlers_fixture f;CF_REQUIRE(fixture_open(&f));CF_REQUIRE(seed_user_room(&f));
+    CF_REQUIRE(seed_message(&f,1,1,1,1));CF_REQUIRE(webhook_seed(&f,1));
+    cf_job job=webhook_job(5,1);
+    CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx,&job)==CF_IO);
+    CF_CHECK(ctx_load(&f.hctx.webhook_attempted)==1);
+    CF_CHECK(table_count(&f,"messages","creator_id=5")==0);fixture_close(&f);
 }
 
 CF_TEST(handlers_deliver_webhook_revoked_targets_are_noop) {
@@ -325,7 +539,6 @@ CF_TEST(handlers_deliver_webhook_revoked_targets_are_noop) {
     cf_job inactive = webhook_job(7, 1);
     CF_CHECK(cf_jobs_handle_deliver_webhook(&f.hctx, &inactive) == CF_OK);
     CF_CHECK(ctx_load(&f.hctx.webhook_noop_gone) == 2);
-    CF_CHECK(ctx_load(&f.hctx.webhook_noop_no_integration) == 0);
     fixture_close(&f);
 }
 
@@ -430,49 +643,288 @@ CF_TEST(handlers_purge_blob_missing_is_noop) {
     fixture_close(&f);
 }
 
-CF_TEST(handlers_purge_blob_present_defers_to_s02) {
+static void purge_storage(handlers_fixture *f, char *root) {
+    CF_REQUIRE(mkdtemp(root) != NULL);
+    cf_config *config = (cf_config *)cf_app_config(f->app);
+    free(config->storage_path);
+    config->storage_path = strdup(root);
+    CF_REQUIRE(config->storage_path != NULL);
+}
+static void purge_file(const char *root, const char *key) {
+    cf_storage *storage = NULL;
+    cf_storage_upload *upload = NULL;
+    CF_REQUIRE(cf_storage_open(root, &storage) == CF_OK);
+    CF_REQUIRE(cf_storage_upload_begin(storage, &upload) == CF_OK);
+    CF_REQUIRE(cf_storage_upload_write(
+                   upload, (cf_span){(unsigned char *)"bytes", 5}) == CF_OK);
+    CF_REQUIRE(cf_storage_upload_move(upload, (cf_span){(unsigned char *)key,
+                                                        strlen(key)}) == CF_OK);
+    CF_REQUIRE(cf_storage_upload_commit(upload) == CF_OK);
+    cf_storage_upload_dispose(upload);
+    cf_storage_close(storage);
+}
+static bool purge_file_exists(const char *root, const char *key) {
+    cf_storage *storage = NULL;
+    int fd = -1;
+    uint64_t size = 0;
+    CF_REQUIRE(cf_storage_open(root, &storage) == CF_OK);
+    cf_err rc = cf_storage_open_read(
+        storage, (cf_span){(unsigned char *)key, strlen(key)}, &fd, &size);
+    if (fd >= 0)
+        close(fd);
+    cf_storage_close(storage);
+    return rc == CF_OK;
+}
+static void purge_seed(handlers_fixture *f, int64_t id, const char *key) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO active_storage_blobs "
+             "(id,byte_size,created_at,filename,key,service_name,content_type) "
+             "VALUES (%lld,5,'2026-01-01 "
+             "00:00:00','file.png','%s','local','image/png')",
+             (long long)id, key);
+    CF_REQUIRE(seed_sql(f, sql));
+}
+CF_TEST(handlers_purge_blob_deletes_unreferenced_metadata_and_file) {
     handlers_fixture f;
     CF_REQUIRE(fixture_open(&f));
-    CF_REQUIRE(seed_sql(&f,
-                        "INSERT INTO active_storage_blobs (id,byte_size,"
-                        "created_at,filename,\"key\",service_name) VALUES "
-                        "(7,10,'2026-01-01 "
-                        "00:00:00','file.bin','abcdefghijklmnopqrstuvwxyz01',"
-                        "'disk');"));
-
-    /* The blob exists but S02 has not landed: recorded no-op, nothing on
-     * disk or in the row is touched. */
+    char root[] = "/tmp/cf-purge-XXXXXX";
+    purge_storage(&f, root);
+    const char *key = "abcdefghijklmnopqrstuvwxyz01";
+    purge_seed(&f, 7, key);
+    purge_file(root, key);
     cf_job job = purge_job(7);
     CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_OK);
-    CF_CHECK(ctx_load(&f.hctx.purge_deferred_no_s02) == 1);
-    CF_CHECK(ctx_load(&f.hctx.purge_deleted) == 0);
-    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 1);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 0);
+    CF_CHECK(!purge_file_exists(root, key));
+    CF_CHECK(ctx_load(&f.hctx.purge_deleted) == 1);
     fixture_close(&f);
+    avatar_test_remove_tree(root);
+}
+CF_TEST(handlers_purge_preserves_referenced_blob_and_file) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    char root[] = "/tmp/cf-purge-ref-XXXXXX";
+    purge_storage(&f, root);
+    const char *key = "abcdefghijklmnopqrstuvwxyz01";
+    purge_seed(&f, 7, key);
+    purge_file(root, key);
+    CF_REQUIRE(seed_sql(
+        &f, "INSERT INTO "
+            "active_storage_attachments(blob_id,created_at,name,record_id,"
+            "record_type) VALUES(7,'2026-01-01 00:00:00','avatar',1,'User')"));
+    cf_job job = purge_job(7);
+    CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_OK);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 1);
+    CF_CHECK(purge_file_exists(root, key));
+    CF_CHECK(ctx_load(&f.hctx.purge_noop_gone) == 1);
+    fixture_close(&f);
+    avatar_test_remove_tree(root);
+}
+CF_TEST(handlers_purge_removes_variants_and_preserves_shared_children) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    char root[] = "/tmp/cf-purge-variants-XXXXXX";
+    purge_storage(&f, root);
+    const char *keys[] = {"abcdefghijklmnopqrstuvwxyz01",
+                          "bcdefghijklmnopqrstuvwxyz012",
+                          "cdefghijklmnopqrstuvwxyz0123"};
+    for (int i = 0; i < 3; i++) {
+        purge_seed(&f, 7 + i, keys[i]);
+        purge_file(root, keys[i]);
+    }
+    CF_REQUIRE(seed_sql(
+        &f,
+        "INSERT INTO "
+        "active_storage_variant_records(id,blob_id,variation_digest) "
+        "VALUES(11,7,'digest');INSERT INTO "
+        "active_storage_attachments(blob_id,created_at,name,record_id,record_"
+        "type) VALUES(8,'2026-01-01 "
+        "00:00:00','image',11,'ActiveStorage::VariantRecord'),(9,'2026-01-01 "
+        "00:00:00','preview_image',7,'ActiveStorage::Blob'),(9,'2026-01-01 "
+        "00:00:00','avatar',1,'User')"));
+    cf_job job = purge_job(7);
+    CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_OK);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 1);
+    CF_CHECK(table_count(&f, "active_storage_variant_records", NULL) == 0);
+    CF_CHECK(table_count(&f, "active_storage_attachments", NULL) == 1);
+    CF_CHECK(!purge_file_exists(root, keys[0]));
+    CF_CHECK(!purge_file_exists(root, keys[1]));
+    CF_CHECK(purge_file_exists(root, keys[2]));
+    fixture_close(&f);
+    avatar_test_remove_tree(root);
+}
+
+CF_TEST(handlers_purge_rechecks_shared_descendants_after_later_parent_delete) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    char root[] = "/tmp/cf-purge-shared-XXXXXX";
+    purge_storage(&f, root);
+    const char *keys[] = {"abcdefghijklmnopqrstuvwxyz01",
+                          "bcdefghijklmnopqrstuvwxyz012",
+                          "cdefghijklmnopqrstuvwxyz0123",
+                          "defghijklmnopqrstuvwxyz01234",
+                          "efghijklmnopqrstuvwxyz012345"};
+    for (int i = 0; i < 5; i++) {
+        purge_seed(&f, 7+i, keys[i]);
+        purge_file(root, keys[i]);
+    }
+    /* Queue order is root,A,X,C,B. C is still referenced by B on its first
+     * visit and must be reconsidered when B's ownership edge is deleted. */
+    CF_REQUIRE(seed_sql(&f,
+        "INSERT INTO active_storage_attachments(blob_id,created_at,name,record_id,record_type) VALUES"
+        "(8,'2026-01-01 00:00:00','first',7,'ActiveStorage::Blob'),"
+        "(9,'2026-01-01 00:00:00','second',7,'ActiveStorage::Blob'),"
+        "(11,'2026-01-01 00:00:00','image',8,'ActiveStorage::Blob'),"
+        "(10,'2026-01-01 00:00:00','image',9,'ActiveStorage::Blob'),"
+        "(11,'2026-01-01 00:00:00','image',10,'ActiveStorage::Blob')"));
+    cf_job job = purge_job(7);
+    CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_OK);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 0);
+    CF_CHECK(table_count(&f, "active_storage_attachments", NULL) == 0);
+    for (size_t i = 0; i < 5; i++) CF_CHECK(!purge_file_exists(root, keys[i]));
+    fixture_close(&f);
+    avatar_test_remove_tree(root);
+}
+
+typedef struct {
+    cf_jobs_handler_ctx *handler;
+    cf_job job;
+    cf_err result;
+} purge_thread_arg;
+static void *purge_thread(void *opaque) {
+    purge_thread_arg *arg = opaque;
+    arg->result = cf_jobs_handle_purge_blob(arg->handler, &arg->job);
+    return NULL;
+}
+CF_TEST(handlers_purge_rechecks_a_reference_committed_before_the_write) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    char root[] = "/tmp/cf-purge-race-XXXXXX";
+    purge_storage(&f, root);
+    const char *key = "abcdefghijklmnopqrstuvwxyz01";
+    purge_seed(&f, 7, key);
+    purge_file(root, key);
+    sqlite3 *lock = NULL;
+    CF_REQUIRE(sqlite3_open(f.scratch.path, &lock) == SQLITE_OK);
+    CF_REQUIRE(
+        sqlite3_exec(
+            lock,
+            "BEGIN IMMEDIATE;INSERT INTO "
+            "active_storage_attachments(blob_id,created_at,name,record_id,"
+            "record_type) VALUES(7,'2026-01-01 00:00:00','avatar',1,'User')",
+            NULL, NULL, NULL) == SQLITE_OK);
+    cf_writer_stats before = {0}, now = {0};
+    CF_REQUIRE(cf_writer_stats_get(f.app, &before) == CF_OK);
+    purge_thread_arg arg = {.handler = &f.hctx, .job = purge_job(7)};
+    pthread_t thread;
+    CF_REQUIRE(pthread_create(&thread, NULL, purge_thread, &arg) == 0);
+    bool admitted = false;
+    for (size_t i = 0; i < 10000; i++) {
+        if (cf_writer_stats_get(f.app, &now) == CF_OK &&
+            now.admitted > before.admitted) {
+            admitted = true;
+            break;
+        }
+        struct timespec pause = {0, 500000};
+        nanosleep(&pause, NULL);
+    }
+    CF_REQUIRE(sqlite3_exec(lock, "COMMIT", NULL, NULL, NULL) == SQLITE_OK);
+    CF_REQUIRE(pthread_join(thread, NULL) == 0);
+    sqlite3_close(lock);
+    CF_CHECK(admitted);
+    CF_CHECK(arg.result == CF_OK);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 1);
+    CF_CHECK(table_count(&f, "active_storage_attachments", NULL) == 1);
+    CF_CHECK(purge_file_exists(root, key));
+    CF_CHECK(ctx_load(&f.hctx.purge_deleted) == 0);
+    fixture_close(&f);
+    avatar_test_remove_tree(root);
+}
+CF_TEST(handlers_purge_filesystem_failure_is_reported_after_metadata_commit) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    char root[] = "/tmp/cf-purge-error-XXXXXX";
+    purge_storage(&f, root);
+    const char *key = "abcdefghijklmnopqrstuvwxyz01";
+    purge_seed(&f, 7, key);
+    purge_file(root, key);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/ab/cd/%s", root, key);
+    CF_REQUIRE(unlink(path) == 0);
+    CF_REQUIRE(mkdir(path, 0700) == 0);
+    cf_job job = purge_job(7);
+    CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_IO);
+    CF_CHECK(table_count(&f, "active_storage_blobs", NULL) == 0);
+    CF_CHECK(ctx_load(&f.hctx.purge_deleted) == 0);
+    struct stat st;
+    CF_CHECK(lstat(path, &st) == 0 && S_ISDIR(st.st_mode));
+    sqlite3 *writer = NULL;
+    CF_REQUIRE(sqlite3_open(f.scratch.path, &writer) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_exec(writer, "PRAGMA foreign_keys=ON", NULL, NULL,
+                            NULL) == SQLITE_OK);
+    CF_CHECK(
+        sqlite3_exec(
+            writer,
+            "INSERT INTO "
+            "active_storage_attachments(blob_id,created_at,name,record_id,"
+            "record_type) VALUES(7,'2026-01-01 00:00:00','avatar',1,'User')",
+            NULL, NULL, NULL) == SQLITE_CONSTRAINT);
+    sqlite3_close(writer);
+    CF_CHECK(cf_jobs_handle_purge_blob(&f.hctx, &job) == CF_OK);
+    CF_CHECK(ctx_load(&f.hctx.purge_deleted) == 0);
+    CF_CHECK(ctx_load(&f.hctx.purge_noop_gone) == 1);
+    fixture_close(&f);
+    avatar_test_remove_tree(root);
 }
 
 /* --- Media ------------------------------------------------------------------ */
 
-CF_TEST(handlers_media_is_recorded_noop) {
+CF_TEST(handlers_media_analyze_commits_metadata_and_rejects_unknown_tasks) {
     handlers_fixture f;
     CF_REQUIRE(fixture_open(&f));
-
-    /* Direct call and queue-level delivery both record the S03 stub arm. */
-    cf_job job;
-    memset(&job, 0, sizeof job);
-    job.kind = CF_JOB_MEDIA;
-    job.blob_id = 7;
-    CF_CHECK(cf_jobs_handle_media(&f.hctx, &job) == CF_OK);
+    CF_REQUIRE(seed_sql(&f,
+        "INSERT INTO active_storage_blobs (id,byte_size,created_at,filename,key,"
+        "service_name,content_type,metadata) VALUES (7,1,'2026-01-01 00:00:00',"
+        "'file.txt','abcdefghijklmnopqrstuvwxyz01','local','text/plain',"
+        "'{\"identified\":true}');"));
+    cf_job job = {.kind = CF_JOB_MEDIA, .blob_id = 7, .task_type = "analyze"};
+    CF_CHECK(cf_app_enqueue_media(f.app,7,cf_span_lit("analyze"),cf_span_lit("")) == CF_OK);
+    CF_REQUIRE(cf_jobs_wait_for(f.jobs,CF_JOB_MEDIA,cf_job_stat_completed,1,5000));
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(f.scratch.db),
+        "SELECT metadata FROM active_storage_blobs WHERE id=7", -1, &stmt, NULL) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt) == SQLITE_ROW);
+    CF_CHECK(strcmp((const char *)sqlite3_column_text(stmt, 0),
+                    "{\"identified\":true,\"analyzed\":true}") == 0);
+    sqlite3_finalize(stmt);
+    job.task_type = "unknown";
+    CF_CHECK(cf_jobs_handle_media(&f.hctx, &job) == CF_INVALID);
+    job.task_type = "analyze";
+    job.blob_id = 99;
+    CF_CHECK(cf_jobs_handle_media(&f.hctx, &job) == CF_OK); /* deleted target */
     CF_CHECK(cf_jobs_handle_media(NULL, &job) == CF_INVALID);
-    CF_CHECK(cf_jobs_enqueue_media(f.jobs, 7, cf_span_lit("analyze"),
-                                   cf_span_lit("thumb")) == CF_OK);
-    CF_REQUIRE(cf_jobs_wait_for(f.jobs, CF_JOB_MEDIA, cf_job_stat_completed,
-                                1, 5000));
-    CF_CHECK(ctx_load(&f.hctx.media_noop) == 2);
+    fixture_close(&f);
+}
+
+CF_TEST(handlers_media_analysis_failure_is_failed_and_preserves_metadata) {
+    handlers_fixture f;
+    CF_REQUIRE(fixture_open(&f));
+    CF_REQUIRE(seed_sql(&f,
+        "INSERT INTO active_storage_blobs (id,byte_size,created_at,filename,key,"
+        "service_name,content_type,metadata) VALUES (7,1,'2026-01-01 00:00:00',"
+        "'file.txt','abcdefghijklmnopqrstuvwxyz01','local','text/plain','invalid-json');"));
+    CF_REQUIRE(cf_app_enqueue_media(f.app,7,cf_span_lit("analyze"),cf_span_lit("")) == CF_OK);
+    CF_REQUIRE(cf_jobs_wait_for(f.jobs,CF_JOB_MEDIA,cf_job_stat_failed,1,5000));
     cf_job_stats stats;
-    CF_REQUIRE(cf_jobs_stats_get(f.jobs, CF_JOB_MEDIA, &stats) == CF_OK);
-    CF_CHECK(stats.accepted == 1);
-    CF_CHECK(stats.completed == 1);
-    CF_CHECK(stats.failed == 0);
+    CF_REQUIRE(cf_jobs_stats_get(f.jobs,CF_JOB_MEDIA,&stats) == CF_OK);
+    CF_CHECK(stats.failed == 1 && stats.completed == 0);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(f.scratch.db),
+        "SELECT metadata FROM active_storage_blobs WHERE id=7",-1,&stmt,NULL)==SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt)==SQLITE_ROW);
+    CF_CHECK(strcmp((const char *)sqlite3_column_text(stmt,0),"invalid-json")==0);
+    sqlite3_finalize(stmt);
     fixture_close(&f);
 }
 

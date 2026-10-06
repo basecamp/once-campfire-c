@@ -467,6 +467,11 @@ cf_err cf_active_stage_upload(cf_storage *storage, int src_fd,
                               cf_span filename, cf_span declared_type,
                               bool has_declared_type, cf_active_staged *out);
 
+/* Imported integration reply with explicit cap; user upload entry keeps16MiB. */
+cf_err cf_active_stage_import(cf_storage *storage, int src_fd,
+    cf_span filename, cf_span declared_type, bool has_declared_type,
+    uint64_t byte_limit, cf_active_staged *out);
+
 /* `Storage::analyzed_metadata` for an analyzer the port can run without S03:
  * content types outside image/video/audio (Analyzer::Null) merge
  * `"analyzed": true` into the stored metadata object preserving key order
@@ -518,6 +523,14 @@ bool cf_active_purge_proceed(size_t attachment_refs);
  * Only validated storage keys ever reach the filesystem (never a URL or an
  * original filename). */
 cf_err cf_active_purge_files(cf_storage *storage, cf_span key, bool is_image);
+
+/* Process/reuse a representation on a request worker. Expensive file/media
+ * work precedes the writer; output blob owns its fields. ctx supplies app and
+ * reader, and no writer transaction may be held by the caller. */
+struct cf_blob;
+cf_err cf_active_processed_representation(cf_ctx *ctx, const struct cf_blob *blob,
+                                          const cf_active_ventries *variation,
+                                          struct cf_blob *out);
 
 /* ---- S03 boundary (fail loudly, never approximate) ------------------------ */
 

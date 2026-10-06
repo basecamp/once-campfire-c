@@ -9,6 +9,29 @@
 It uses the Python standard library only. `run.py` and this README belong to
 F02; `tests/integration/cases/**` belongs to V01 (and later case owners).
 
+## HTTPS and WSS acceptance
+
+Set `CF_E2E_TLS=1` to run the same browser cases against the real TLS listener
+and WSS Cable transport. The server uses the committed test certificate;
+readiness and socket probes verify its test CA. Its hostname is
+`www.example.com`, while the test listener uses loopback, so configure the
+isolated browser wrapper with `--ignore-https-errors`:
+
+```sh
+#!/bin/sh
+exec agent-browser --namespace campfire-tls-tests --ignore-https-errors "$@"
+```
+
+Make that wrapper executable, then run:
+
+```sh
+CF_E2E_TLS=1 AGENT_BROWSER=/absolute/path/to/wrapper python3 tests/integration/run.py --case E2E-01
+```
+
+The browser certificate exception applies only to this test wrapper. The
+server serves encrypted HTTPS/WSS, and Python probes retain CA verification
+while disabling the loopback hostname mismatch.
+
 ## Case modules
 
 A case is a Python module at `tests/integration/cases/<anything>.py` (files

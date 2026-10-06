@@ -22,6 +22,7 @@
  * input/output byte budgets across all of its sockets.
  */
 #include "cable.h"
+#include "front/tls.h"
 
 #include "auth.h"
 #include "models/session.h"
@@ -701,6 +702,8 @@ static void reactor_wake_token(void *token) {
 
 struct cf_cable_socket {
     int fd;
+    cf_front_tls_conn *tls; /* borrowed from cable_conn */
+    bool read_want_write, write_want_read;
     bool deflate;
     int wake_fd; /* standalone only; reactors own one wake eventfd */
     struct cable_reactor *reactor; /* non-NULL: multiplexed transport */
@@ -1001,6 +1004,31 @@ static void node_finish_stats(struct cf_cable_socket *s,
     if (node->opcode == OP_CLOSE) s->stats.close_frames_sent++;
 }
 
+/* The reactor is the sole TLS owner after the HTTP handoff. Preserve WANT
+ * direction so epoll retries the same operation without spinning on writable
+ * sockets when SSL_write needs input. */
+static ssize_t socket_send(struct cf_cable_socket *s,
+                           const unsigned char *bytes, size_t len) {
+    if (s->tls == NULL) return send(s->fd, bytes, len, MSG_NOSIGNAL);
+    size_t n = 0;
+    cf_front_tls_step step = cf_front_tls_send(s->tls, bytes, len, &n);
+    s->write_want_read = step == CF_FRONT_TLS_WANT_READ;
+    if (step == CF_FRONT_TLS_DONE) return (ssize_t)n;
+    errno = step == CF_FRONT_TLS_FAIL ? EIO : EAGAIN;
+    return -1;
+}
+
+static ssize_t socket_recv(struct cf_cable_socket *s,
+                           unsigned char *bytes, size_t len) {
+    if (s->tls == NULL) return recv(s->fd, bytes, len, 0);
+    size_t n = 0;
+    cf_front_tls_step step = cf_front_tls_recv(s->tls, bytes, len, &n);
+    s->read_want_write = step == CF_FRONT_TLS_WANT_WRITE;
+    if (step == CF_FRONT_TLS_DONE) return (ssize_t)n;
+    errno = step == CF_FRONT_TLS_FAIL ? EIO : EAGAIN;
+    return -1;
+}
+
 /* Send as much of the queue as the socket accepts; called on the owner
  * thread. A positive send resets the stalled-write clock and releases the
  * aggregate output budget for the accepted bytes. */
@@ -1017,12 +1045,12 @@ static void socket_flush(struct cf_cable_socket *s) {
 
         ssize_t n;
         if (node->sent < node->header_len) {
-            n = send(s->fd, node->header + node->sent,
-                     node->header_len - node->sent, MSG_NOSIGNAL);
+            n = socket_send(s, node->header + node->sent,
+                            node->header_len - node->sent);
         } else {
             size_t done = node->sent - node->header_len;
             const unsigned char *p = cf_buf_span(node->payload).ptr + done;
-            n = send(s->fd, p, node->payload_len - done, MSG_NOSIGNAL);
+            n = socket_send(s, p, node->payload_len - done);
         }
 
         if (n > 0) {
@@ -1415,7 +1443,7 @@ static cf_err socket_write_all(struct cf_cable_socket *s,
                                uint64_t deadline_ms) {
     size_t off = 0;
     while (off < len) {
-        ssize_t n = send(s->fd, bytes + off, len - off, MSG_NOSIGNAL);
+        ssize_t n = socket_send(s, bytes + off, len - off);
         if (n > 0) {
             off += (size_t)n;
             continue;
@@ -1424,7 +1452,7 @@ static cf_err socket_write_all(struct cf_cable_socket *s,
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             uint64_t now = cf_monotonic_ms();
             if (now >= deadline_ms) return CF_IO;
-            struct pollfd pf = {s->fd, POLLOUT, 0};
+            struct pollfd pf = {s->fd, s->write_want_read ? POLLIN : POLLOUT, 0};
             int pr = poll(&pf, 1, (int)(deadline_ms - now));
             if (pr < 0 && errno != EINTR) return CF_IO;
             continue;
@@ -1444,7 +1472,7 @@ static bool socket_readable(struct cf_cable_socket *s) {
     while (budget != 0) {
         size_t want = sizeof buf;
         if (want > budget) want = budget;
-        ssize_t n = recv(s->fd, buf, want, 0);
+        ssize_t n = socket_recv(s, buf, want);
         if (n > 0) {
             if (!reactor_input_charge(s, (size_t)n)) {
                 s->stats.over_budget_closes++;
@@ -1501,6 +1529,7 @@ static cf_cable_socket *socket_create(const cf_cable_socket_config *config,
     cf_cable_socket *s = calloc(1, sizeof *s);
     if (s == NULL) return NULL;
     s->fd = config->fd;
+    s->tls = config->tls;
     s->deflate = config->deflate;
     s->reactor = reactor;
     s->reactor_mode = reactor != NULL;
@@ -1760,13 +1789,16 @@ static bool socket_pump(cf_cable_socket *s, short revents, bool wake,
         }
         if (timeout < 0) timeout = 0;
         wait->timeout_ms = timeout;
-        wait->want_write = pending > 0 || has_out;
+        wait->want_write = ((pending > 0 || has_out) &&
+                            !s->write_want_read) || s->read_want_write;
         /* While an async authentication or a paused command owns the next
          * input frames, the owner must not parse (or read ahead) new ones. */
-        wait->want_read = !s->auth_pending && !s->paused;
+        wait->want_read = (!s->auth_pending && !s->paused) ||
+                          s->write_want_read;
     }
 
-    if (revents == 0 && !wake) return false;
+    bool tls_pending = cf_front_tls_pending(s->tls);
+    if (revents == 0 && !wake && !tls_pending) return false;
 
     if (wake) {
         if (s->reactor == NULL) socket_drain_wake(s);
@@ -1784,7 +1816,9 @@ static bool socket_pump(cf_cable_socket *s, short revents, bool wake,
         }
         return true;
     }
-    if ((revents & POLLIN) && !s->auth_pending && !s->paused) {
+    if (((revents & POLLIN) || tls_pending ||
+         ((revents & POLLOUT) && s->read_want_write)) &&
+        !s->auth_pending && !s->paused) {
         if (socket_readable(s)) {
             if (reader_feed(s) == FEED_PAUSED) s->paused = true;
         }
@@ -1895,6 +1929,7 @@ struct cable_conn {
     cf_cable_socket *socket;          /* set on the reactor thread */
     uint32_t loop_index;              /* HTTP loop that handed it over */
     int fd;                           /* -1 once closed */
+    cf_front_tls_conn *tls; /* owned only after successful TAKEN continuation */
     cf_http_upgrade_lease *lease;     /* lifetime connection-slot reservation */
     bool enrolled;                    /* linked into reactor->conns */
     bool registered;                  /* fd registered in the reactor epoll */
@@ -2054,6 +2089,7 @@ static bool origin_allowed(const cf_cable_server *server,
 }
 
 static void conn_free(struct cable_conn *conn) {
+    cf_front_tls_conn_destroy(conn->tls);
     free(conn->handshake);
     free(conn->pending);
     free(conn->strings);
@@ -2080,10 +2116,12 @@ static void reactor_update_events(struct cable_reactor *reactor,
     bool has_out = false;
     socket_queue_state(conn->socket, &pending, &has_out, NULL, NULL);
     uint32_t events = 0;
-    if (!conn->socket->auth_pending && !conn->socket->paused) {
+    if ((!conn->socket->auth_pending && !conn->socket->paused) ||
+        conn->socket->write_want_read) {
         events |= EPOLLIN;
     }
-    if (pending > 0 || has_out) events |= EPOLLOUT;
+    if (((pending > 0 || has_out) && !conn->socket->write_want_read) ||
+        conn->socket->read_want_write) events |= EPOLLOUT;
     if (conn->registered) {
         if (events == conn->events) return;
         struct epoll_event e = {.events = events, .data.ptr = conn};
@@ -2125,6 +2163,8 @@ static void reactor_conn_finish(struct cable_reactor *reactor,
         socket_finish(s, &conn->stats);
         conn->socket = NULL;
     }
+    cf_front_tls_conn_destroy(conn->tls);
+    conn->tls = NULL;
     if (conn->fd >= 0) {
         if (conn->registered) {
             (void)epoll_ctl(reactor->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
@@ -2171,6 +2211,7 @@ static void reactor_enroll(struct cable_reactor *reactor,
     cf_cable_socket_config cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.fd = conn->fd;
+    cfg.tls = conn->tls;
     cfg.deflate = conn->deflate;
     cfg.subprotocol = conn->subprotocol;
     cfg.handshake = conn->handshake;
@@ -2370,6 +2411,7 @@ static cf_err cable_conn_start(void *user, cf_http_upgrade_lease *lease) {
     if (lease == CF_HTTP_UPGRADE_REJECTED) {
         /* The loop refused the upgrade and already closed the fd/freed the
          * slot; only this hook's own state remains. */
+        conn->tls = NULL;
         conn_free(conn);
         return CF_BUSY;
     }
@@ -2377,6 +2419,8 @@ static cf_err cable_conn_start(void *user, cf_http_upgrade_lease *lease) {
     pthread_mutex_lock(&server->mutex);
     if (server->stopping) {
         pthread_mutex_unlock(&server->mutex);
+        cf_front_tls_conn_destroy(conn->tls);
+        conn->tls = NULL;
         if (lease != NULL) {
             conn->fd = -1;
             cf_http_upgrade_release(lease);
@@ -2391,6 +2435,8 @@ static cf_err cable_conn_start(void *user, cf_http_upgrade_lease *lease) {
     struct cable_reactor *reactor = reactor_get(server, conn->loop_index);
     if (reactor == NULL) {
         pthread_mutex_unlock(&server->mutex);
+        cf_front_tls_conn_destroy(conn->tls);
+        conn->tls = NULL;
         if (lease != NULL) {
             conn->fd = -1;
             cf_http_upgrade_release(lease);
@@ -2780,6 +2826,7 @@ cf_http_upgrade_result cf_cable_server_upgrade(void *user,
     /* The connection is enrolled only after the loop reports the fd fully
      * detached (see cf_http_upgrade_request.taken), so the reactor can
      * register it without racing the HTTP epoll registration. */
+    conn->tls = request->tls;
     request->taken = cable_conn_start;
     request->taken_user = conn;
     return CF_HTTP_UPGRADE_TAKEN;

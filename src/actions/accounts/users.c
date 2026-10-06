@@ -22,28 +22,9 @@
  * emits the mandatory DISCONNECT_USER(reconnect=false); cf_write returns
  * CF_OK only after the control barrier applies it.
  *
- * SHIMs (marked inline; integrator requests below):
- *  - page number parsing reuses cf_views_integer_cast (absurd values clamp
- *    to 1_000_000_000 like the reference).
- *  - the index body is a minimal deterministic turbo-stream render carrying
- *    the reference fields (per-user id/role/status/name, next-page
- *    container); A02's UsersIndexTurboStream/_user/_next_page_container
- *    templates replace it. apply_headers is JSON-only in the reference and
- *    this action only serves turbo-stream, so no pagination headers apply.
- *
- * Integrator requests:
- *  1. Rebind src/routes.c rows 19 -> cf_action_accounts_users_index,
- *     24/25 -> cf_action_accounts_users_update,
- *     26 -> cf_action_accounts_users_destroy, e.g.:
- *       {19, CF_GET, "/account/users(.:format)", ...,
- *        cf_action_accounts_users_index},
- *       {24, CF_PATCH, "/account/users/:id(.:format)", ...,
- *        cf_action_accounts_users_update},
- *       {25, CF_PUT, "/account/users/:id(.:format)", ...,
- *        cf_action_accounts_users_update},
- *       {26, CF_DELETE, "/account/users/:id(.:format)", ...,
- *        cf_action_accounts_users_destroy},
- *  2. A02: accounts users index turbo-stream views (shim above).
+ * Index rows render the account users view with avatar, role and removal
+ * controls from a loaded layout context. Page-number parsing uses the shared
+ * integer caster; only turbo-stream is negotiated.
  *
  * c_symbols: cf_action_accounts_users_index,
  * cf_action_accounts_users_update, cf_action_accounts_users_destroy.
@@ -58,6 +39,7 @@
 #include "context.h"
 #include "models/user.h"
 #include "views.h"
+#include "presenters/accounts.h"
 #include "views/internal.h"
 
 #include <inttypes.h>
@@ -174,73 +156,6 @@ static int64_t accounts_users_page_number(cf_ctx *ctx) {
     return number;
 }
 
-static const char *accounts_users_role_name(cf_role role) {
-    switch (role) {
-    case CF_ROLE_ADMINISTRATOR:
-        return "administrator";
-    case CF_ROLE_BOT:
-        return "bot";
-    default:
-        return "member";
-    }
-}
-
-static const char *accounts_users_status_name(cf_status status) {
-    switch (status) {
-    case CF_STATUS_DEACTIVATED:
-        return "deactivated";
-    case CF_STATUS_BANNED:
-        return "banned";
-    default:
-        return "active";
-    }
-}
-
-/* SHIM: minimal UsersIndexTurboStream render (A02 owns the templates).
- * Carries the reference fields: one list item per user (id, role, status,
- * name) replacing next_page_container, plus the append stream with the next
- * page container when the page is not last. */
-static cf_err accounts_users_render_index(const cf_user *users, size_t count,
-                                          const char *next_page,
-                                          cf_builder *out) {
-    cf_err rc = cf_builder_append(
-        out, accounts_users_span("<turbo-stream action=\"replace\" "
-                                 "target=\"next_page_container\">"
-                                 "<template>"));
-    for (size_t i = 0; i < count && rc == CF_OK; i++) {
-        char open[128];
-        int n = snprintf(open, sizeof open,
-                         "<li data-user-id=\"%" PRId64 "\" data-role=\"%s\" "
-                         "data-status=\"%s\">",
-                         users[i].id, accounts_users_role_name(users[i].role),
-                         accounts_users_status_name(users[i].status));
-        if (n < 0 || (size_t)n >= sizeof open) return CF_INTERNAL;
-        rc = cf_builder_append(out, accounts_users_span(open));
-        if (rc == CF_OK) {
-            rc = cf_html_text(out, (cf_span){(const unsigned char *)users[i].name.ptr,
-                                             users[i].name.len});
-        }
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_users_span("</li>"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, accounts_users_span("</template></turbo-stream>"));
-    }
-    if (rc == CF_OK && next_page != NULL) {
-        rc = cf_builder_append(
-            out, accounts_users_span("<turbo-stream action=\"append\" "
-                                     "target=\"account_users\">"
-                                     "<template><turbo-frame "
-                                     "id=\"next_page_container\" src=\"/account/"
-                                     "users.turbo_stream?page="));
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_users_span(next_page));
-        if (rc == CF_OK) {
-            rc = cf_builder_append(out, accounts_users_span("\"></turbo-frame></template></turbo-stream>"));
-        }
-    }
-    if (out->len > CF_VIEWS_MAX_OUTPUT) return CF_LIMIT;
-    return rc;
-}
-
 cf_err cf_action_accounts_users_index(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
     cf_before policy = {CF_AUTH_REQUIRED, true, true};
@@ -278,12 +193,22 @@ cf_err cf_action_accounts_users_index(cf_ctx *ctx) {
         next_page = nextbuf;
     }
 
-    /* Layout::load runs in the reference for the render context; its
-     * per-user fields here (role/status/name) need no layout. */
-    cf_builder body = {0};
-    rc = accounts_users_render_index(users.items + start, end - start,
-                                     next_page, &body);
+    cf_view_accounts_users_model model = {0};
+    for (size_t i = start; i < end && rc == CF_OK; i++)
+        rc = cf_presenter_accounts_user(ctx, &users.items[i], &model.users);
     cf_user_vector_dispose(&users);
+    if (rc == CF_OK && next_page != NULL) {
+        model.has_next_page = true;
+        rc = cf_view_str_dup(accounts_users_span(next_page), &model.next_page);
+    }
+    cf_view_layout_model layout = {0};
+    if (rc == CF_OK) rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+    cf_builder body = {0};
+    if (rc == CF_OK) rc = cf_view_accounts_users_stream(&view_ctx, &model, &body);
+    cf_view_layout_model_dispose(&layout);
+    cf_view_accounts_users_model_dispose(&model);
     if (rc != CF_OK) {
         cf_builder_dispose(&body);
         return rc;

@@ -2545,6 +2545,12 @@ void cf_active_staged_dispose(cf_active_staged *staged) {
 cf_err cf_active_stage_upload(cf_storage *storage, int src_fd,
                               cf_span filename, cf_span declared_type,
                               bool has_declared_type, cf_active_staged *out) {
+    return cf_active_stage_import(storage,src_fd,filename,declared_type,
+        has_declared_type,CF_STORAGE_UPLOAD_MAX_BYTES,out);
+}
+cf_err cf_active_stage_import(cf_storage *storage, int src_fd,
+    cf_span filename, cf_span declared_type, bool has_declared_type,
+    uint64_t byte_limit, cf_active_staged *out) {
     if (storage == NULL || out == NULL || src_fd < 0) return CF_INVALID;
     memset(out, 0, sizeof *out);
     if (filename.len != 0 && filename.ptr == NULL) return CF_INVALID;
@@ -2556,7 +2562,7 @@ cf_err cf_active_stage_upload(cf_storage *storage, int src_fd,
     cf_builder key = {0};
     cf_storage_upload *upload = NULL;
     cf_err rc = cf_storage_key_generate(&key);
-    if (rc == CF_OK) rc = cf_storage_upload_begin(storage, &upload);
+    if (rc == CF_OK) rc = cf_storage_upload_begin_bounded(storage,byte_limit,&upload);
 
     /* Stream the spool file through S01 staging, keeping the leading bytes
      * Marcel identification may look at (unfurl_file reads exactly

@@ -234,3 +234,7 @@ bool cf_front_tls_is_h2(const cf_front_tls_conn *conn) {
 int cf_front_tls_fd(const cf_front_tls_conn *conn) {
     return conn != NULL ? conn->fd : -1;
 }
+
+bool cf_front_tls_pending(const cf_front_tls_conn *conn) {
+    return conn != NULL && SSL_pending(conn->ssl) > 0;
+}

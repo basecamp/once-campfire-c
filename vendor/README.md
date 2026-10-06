@@ -18,15 +18,19 @@ READY claims below were independently re-executed and confirmed per
 `docs/devel/evidence/F00-verify.md`.
 
 Status at a glance: all ten fetched dependencies built and probed under both
-compilers (READY/READY) with the disclosures in section 5; the two media
-subprocess pins have no probe record yet and are BLOCKED in the lock.
+compilers (READY/READY) with the disclosures in section 5. The two external
+media pins now have separate reproducible builds, encoded-byte vectors and
+strict clang/Fil-C caller evidence (READY/READY; section 4).
 
 ## 1. How `make deps` consumes these scripts
 
 The build contract is fixed by `docs/devel/implementation/01-foundation-http.md`
-(F00): "No automatic fetch during `make`; `make deps` is explicit." The Makefile
-itself is F03-owned and does not exist yet; this lock does not define new make
-targets. What it does fix for the consumer:
+(F00): "No automatic fetch during `make`; `make deps` is explicit." The Makefile exposes `make deps` for fetching/installing and `make deps-build`
+for compiling and probing the fetched sources. Run them in that order before
+building the application. Use `make deps-build MODE=filc` for Fil-C archives.
+The build target runs `vendor/probes/scripts/<name>-<compiler>.sh` in dependency
+order (OpenSSL before curl) and stops on the first failed build or probe.
+The consumer contract is:
 
 - Ordinary `make` targets must not fetch (no network access at build time;
   `01-foundation-http.md` F00). The explicit `make deps` step is the intended
@@ -129,13 +133,15 @@ targets. What it does fix for the consumer:
 | qrcodegen 1.8.0 (`720f62bd…`) | READY | READY | only `c/qrcodegen.c` compiled |
 | nghttp2 1.70.0 (`85e300c7…`) | READY | READY | library only (no tools/server) |
 | Fil-C 0.685 toolchain | READY (pizfix) | READY (optfil) | cell mapping documented in `DEPS.json` (`filc` entry) |
-| libvips 8.16.1 | BLOCKED | BLOCKED | (2) no probe record; S03 prerequisite open |
-| ffmpeg 7.1.5 | BLOCKED | BLOCKED | (2) no probe record; S03 prerequisite open |
+| libvips 8.16.1 | READY | READY | (2) pinned external tool+adapter;11 exact byte vectors, strict caller gate |
+| ffmpeg 7.1.5 | READY | READY | (2) pinned external ffmpeg/ffprobe; preview bytes and strict caller gate |
 
-(2) Per D-C05 these are subprocess dependencies (vips/ffmpeg/ffprobe), not
-libraries linked into the application; they were never fetched or probed
-(F00-verify discrepancy 8), so both cells are BLOCKED rather than UNTESTED —
-missing probe data may not be presented as a passing state.
+(2) Per D-C05 these are external subprocess dependencies, not libraries linked
+into the application. The 2026-10-06 repair delivers checksum-pinned source
+builds, license/provenance and eleven byte-identical reference vectors in
+`vendor/probes/media-pinned.json`. Strict application callers pass in clang
+and Fil-C (1,638 registered cases each). See [media setup](media/README.md);
+READY does not mean the tools were installed into host `/usr/bin`.
 
 ## 5. Recorded disclosures and open integrator questions
 
@@ -177,8 +183,9 @@ Details live in the `DEPS.json` entry `notes` and in the F00 evidence files.
    in the subtree. The SPDX statement (Apache-2.0) is unchanged. (F00-verify D5)
 6. Git probe records have `archive_sha256: null` (commit pins, not archives);
    only SQLite has a source-archive hash. (F00-verify D6)
-7. Media pins libvips 8.16.1 / ffmpeg 7.1.5 have no probe record anywhere, so
-   their cells are BLOCKED and S03's "F00 media" prerequisite remains open.
+7. (Repaired 2026-10-06) The previously unprobed media pins now have isolated
+   builds, source/license provenance, byte vectors and strict caller evidence
+   as recorded in section 4 and `vendor/probes/media-pinned.json`.
    (F00-verify D8)
 8. Disk figures disagree between the shared-rule guard and the measurements;
    both are stated in section 6 rather than reconciled.

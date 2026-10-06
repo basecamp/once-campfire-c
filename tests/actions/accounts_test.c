@@ -47,12 +47,15 @@
 #include "db/writer.h"
 #include "http/http_internal.h"
 #include "models/account.h"
+#include "models/active_storage.h"
 #include "models/user.h"
 #include "presenters/accounts.h"
 #include "views.h"
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "avatar_test.h"
+#include "auth_write_race.h"
 #include "../views/support/golden.h"
 
 #include <errno.h>
@@ -1100,6 +1103,110 @@ CF_TEST(accounts_update_cross_site_post_is_422) {
              1);
     cf_response_dispose(&resp);
     env_close(&env);
+}
+
+static const char *accounts_logo_upload_body =
+    "--logo\r\nContent-Disposition: form-data; name=\"account[name]\"\r\n\r\nUploaded Company\r\n--logo\r\n"
+    "Content-Disposition: form-data; name=\"account[logo]\"; filename=\"logo.svg\"\r\n"
+    "Content-Type: image/svg+xml\r\n\r\n" AVATAR_BYTES "\r\n--logo--\r\n";
+
+static void accounts_logo_request(cf_request *req, const char *cookie) {
+    prepare_form(req, CF_PATCH, "/account", accounts_logo_upload_body, cookie, true);
+    req->headers[0].value = SP("multipart/form-data; boundary=logo");
+}
+
+CF_TEST(accounts_multipart_logo_creates_replaces_and_purges) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db);
+    seed_user(env.scratch.db, 1, "Ada Admin", "ada@example.com", 1, 0);
+    seed_blob_attachment(env.scratch.db);
+    char cookie[4096];
+    make_session_cookie(env.config,env.scratch.db,cookie,sizeof cookie,"logo-session",1);
+    char root[] = "/tmp/cf-account-logo-XXXXXX";
+    avatar_test_root(env.config,root);
+    int64_t previous = 1;
+    for (size_t i=0;i<2;i++) {
+        cf_request req; cf_response resp;
+        accounts_logo_request(&req,cookie);
+        CF_REQUIRE(run_request(&env,&req,&resp));
+        CF_CHECK(resp.status==302);
+        CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM accounts WHERE name='Uploaded Company'")==1);
+        CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM active_storage_attachments WHERE record_type='Account' AND name='logo'")==1);
+        bool found=false; cf_attachment attachment={0}; cf_blob blob={0};
+        CF_REQUIRE(cf_attachment_find_for(env.scratch.db,(cf_str){"Account",7},1,(cf_str){"logo",4},&found,&attachment)==CF_OK);
+        CF_REQUIRE(found);
+        CF_REQUIRE(cf_attachment_blob(env.scratch.db,&attachment,&blob)==CF_OK);
+        CF_CHECK(blob.filename.len==8 && memcmp(blob.filename.ptr,"logo.svg",8)==0);
+        CF_CHECK(blob.byte_size==(int64_t)strlen(AVATAR_BYTES));
+        cf_storage *storage=NULL; int fd=-1; uint64_t size=0;
+        CF_REQUIRE(cf_storage_open(root,&storage)==CF_OK);
+        CF_REQUIRE(cf_storage_open_read(storage,(cf_span){(unsigned char *)blob.key.ptr,blob.key.len},&fd,&size)==CF_OK);
+        char bytes[64]={0}; CF_CHECK(read(fd,bytes,sizeof bytes)==(ssize_t)strlen(AVATAR_BYTES));
+        CF_CHECK(strcmp(bytes,AVATAR_BYTES)==0);
+        close(fd); cf_storage_close(storage);
+        CF_REQUIRE(env.purge_event_count==i+1);
+        CF_CHECK(env.purge_events[i].kind==CF_EVENT_PURGE_BLOB);
+        CF_CHECK(env.purge_events[i].blob_id==previous);
+        previous=blob.id;
+        cf_blob_dispose(&blob); cf_attachment_dispose(&attachment); cf_response_dispose(&resp);
+    }
+    env_close(&env);
+    avatar_test_remove_tree(root);
+}
+
+CF_TEST(accounts_multipart_logo_rolls_back_files_and_rows_on_write_failure) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db);
+    seed_user(env.scratch.db,1,"Ada Admin","ada@example.com",1,0);
+    seed_blob_attachment(env.scratch.db);
+    exec_sql(env.scratch.db,"CREATE TRIGGER fail_logo BEFORE INSERT ON active_storage_attachments BEGIN SELECT RAISE(ABORT,'test attachment failure'); END");
+    char cookie[4096];
+    make_session_cookie(env.config,env.scratch.db,cookie,sizeof cookie,"logo-failure-session",1);
+    char root[]="/tmp/cf-account-logo-failure-XXXXXX";
+    avatar_test_root(env.config,root);
+    cf_request req; cf_response resp;
+    accounts_logo_request(&req,cookie);
+    CF_REQUIRE(run_request(&env,&req,&resp));
+    CF_CHECK(resp.status==400);
+    CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM accounts WHERE name='Campfire'")==1);
+    CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM active_storage_blobs")==1);
+    CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM active_storage_attachments WHERE record_type='Account' AND name='logo' AND blob_id=1")==1);
+    CF_CHECK(avatar_test_file_count(root)==0);
+    CF_CHECK(env.purge_event_count==0);
+    cf_response_dispose(&resp);
+    env_close(&env);
+    avatar_test_remove_tree(root);
+}
+
+CF_TEST(accounts_multipart_logo_rejects_queued_admin_loss_and_cleans_files) {
+    const char *changes[]={"UPDATE users SET status=2 WHERE id=1","UPDATE users SET role=0 WHERE id=1"};
+    for(size_t i=0;i<2;i++) {
+        accounts_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_account(env.scratch.db);
+        seed_user(env.scratch.db,1,"Ada Admin","ada@example.com",1,0);
+        char cookie[4096];
+        make_session_cookie(env.config,env.scratch.db,cookie,sizeof cookie,"logo-race-session",1);
+        char root[]="/tmp/cf-account-logo-race-XXXXXX";
+        avatar_test_root(env.config,root);
+        cf_request req; cf_response resp;
+        accounts_logo_request(&req,cookie);
+        auth_write_race race;
+        CF_REQUIRE(auth_race_begin(env.app,env.scratch.path,&race,changes[i]));
+        CF_REQUIRE(auth_race_request(env.app,env.scratch.db,&race,&req,&resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status==403);
+        CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM accounts WHERE name='Campfire'")==1);
+        CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM active_storage_blobs")==0);
+        CF_CHECK(count_sql(env.scratch.db,"SELECT count(*) FROM active_storage_attachments")==0);
+        CF_CHECK(avatar_test_file_count(root)==0);
+        CF_CHECK(env.purge_event_count==0);
+        cf_response_dispose(&resp);
+        env_close(&env);
+        avatar_test_remove_tree(root);
+    }
 }
 
 CF_TEST_MAIN()

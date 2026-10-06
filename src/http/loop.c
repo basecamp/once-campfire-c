@@ -64,6 +64,9 @@ static void conn_restore(struct cf_http_loop *loop,
     }
     if (conn->fd < 0) conn->fd = saved;
     conn->swap_fd = -1;
+    /* An upgraded TLS transport has left this loop; never re-enroll it. */
+    if (conn->transport == CF_HTTP_TRANSPORT_TLS_H1 && conn->tls == NULL)
+        return;
     cf_http_conn_update_events(conn);
 }
 
@@ -71,6 +74,25 @@ void cf_http_loop_set_tls_server(struct cf_http_loop *loop,
                                  struct cf_front_tls_server *server) {
     if (loop == NULL) return;
     loop->tls_server = server;
+}
+
+static bool h2_reserve_input(void *user, size_t bytes) {
+    struct cf_http_loop *loop = user;
+    bool ok = cf_http_loop_reserve_input(loop, bytes);
+    if (!ok) loop->counters.budget_rejected++;
+    return ok;
+}
+static void h2_release_input(void *user, size_t bytes) {
+    cf_http_loop_release_input(user, bytes);
+}
+static bool h2_reserve_output(void *user, size_t bytes) {
+    struct cf_http_loop *loop = user;
+    bool ok = cf_http_loop_reserve_output(loop, bytes);
+    if (!ok) loop->counters.budget_rejected++;
+    return ok;
+}
+static void h2_release_output(void *user, size_t bytes) {
+    cf_http_loop_release_output(user, bytes);
 }
 
 /* ------------------------- H2 observer session ------------------------- */
@@ -97,11 +119,12 @@ struct h2obs_hdr {
 
 struct h2obs_stream {
     bool in_use;
+    struct cf_http_loop *loop;
+    nghttp2_session *observer;
+    size_t reserved;
     int32_t id;
     bool headers_done;
     bool end_stream;
-    bool admitted;
-    bool dropped;
     bool over; /* over a local budget mirror: RST and drop, never admit */
     unsigned char method[16];
     size_t method_len;
@@ -122,8 +145,15 @@ struct h2obs_stream {
 
 struct h2obs {
     nghttp2_session *sess;
+    struct cf_http_loop *loop;
+    struct cf_front_h2_session *policy;
     struct h2obs_stream streams[CF_H2OBS_MAX_STREAMS];
 };
+
+bool cf_http_h2_observer_stream_open(struct cf_http_conn *conn, int32_t id) {
+    struct h2obs *o = conn != NULL ? conn->h2obs : NULL;
+    return o != NULL && nghttp2_session_get_stream_local_close(o->sess, id) == 0;
+}
 
 static struct h2obs_stream *obs_lookup(struct h2obs *o, int32_t id,
                                        bool create) {
@@ -136,6 +166,8 @@ static struct h2obs_stream *obs_lookup(struct h2obs *o, int32_t id,
     for (size_t i = 0; i < CF_H2OBS_MAX_STREAMS; i++) {
         if (!o->streams[i].in_use) {
             memset(&o->streams[i], 0, sizeof o->streams[i]);
+            o->streams[i].loop = o->loop;
+            o->streams[i].observer = o->sess;
             o->streams[i].in_use = true;
             o->streams[i].id = id;
             return &o->streams[i];
@@ -156,6 +188,29 @@ static void obs_free_bufs(struct h2obs_stream *rec) {
     rec->body = NULL;
     rec->body_len = 0;
     rec->body_cap = 0;
+    cf_http_loop_release_input(rec->loop, rec->reserved);
+    rec->reserved = 0;
+}
+
+static void obs_release(struct h2obs_stream *rec) {
+    /* This receive-only mirror never sends an application response. Close
+     * its local half explicitly; discarding RST output retires nghttp2's
+     * own stream object as well as our custom record. Policy owns peer I/O. */
+    if (rec->in_use)
+        (void)nghttp2_submit_rst_stream(rec->observer, NGHTTP2_FLAG_NONE,
+                                        rec->id, NGHTTP2_CANCEL);
+    obs_free_bufs(rec);
+    memset(rec, 0, sizeof *rec);
+}
+
+static bool obs_reserve(struct h2obs_stream *rec, size_t bytes) {
+    if (!cf_http_loop_reserve_input(rec->loop, bytes)) {
+        rec->loop->counters.budget_rejected++;
+        rec->over = true;
+        return false;
+    }
+    rec->reserved += bytes;
+    return true;
 }
 
 static unsigned char *obs_copy(const uint8_t *p, size_t n) {
@@ -175,14 +230,14 @@ static int obs_begin_headers(nghttp2_session *session,
     (void)session;
     struct h2obs *o = user_data;
     if (frame->hd.type != NGHTTP2_HEADERS) return 0;
+    if (frame->headers.cat != NGHTTP2_HCAT_REQUEST) return 0;
     struct h2obs_stream *rec = obs_lookup(o, frame->hd.stream_id, true);
-    if (rec == NULL) return 0; /* table full: stream is never admitted */
-    obs_free_bufs(rec);
-    bool in_use = rec->in_use;
-    int32_t id = rec->id;
-    memset(rec, 0, sizeof *rec);
-    rec->in_use = in_use;
-    rec->id = id;
+    if (rec == NULL) {
+        (void)cf_front_h2_rst_stream(o->policy, frame->hd.stream_id,
+                                    NGHTTP2_REFUSED_STREAM);
+        (void)nghttp2_submit_rst_stream(o->sess, NGHTTP2_FLAG_NONE,
+                                        frame->hd.stream_id, NGHTTP2_REFUSED_STREAM);
+    }
     return 0;
 }
 
@@ -192,9 +247,15 @@ static int obs_header(nghttp2_session *session, const nghttp2_frame *frame,
     (void)session;
     (void)flags;
     struct h2obs *o = user_data;
-    if (frame->hd.type != NGHTTP2_HEADERS) return 0;
+    if (frame->hd.type != NGHTTP2_HEADERS ||
+        frame->headers.cat != NGHTTP2_HCAT_REQUEST) return 0;
     struct h2obs_stream *rec = obs_lookup(o, frame->hd.stream_id, false);
-    if (rec == NULL || rec->admitted || rec->dropped || rec->over) return 0;
+    if (rec == NULL || rec->over) return 0;
+    if (nlen > CF_H2OBS_FIELD_MAX || vlen > CF_H2OBS_FIELD_MAX) {
+        rec->over = true;
+        return 0;
+    }
+    if (!obs_reserve(rec, (nlen == 0 ? 1 : nlen) + (vlen == 0 ? 1 : vlen))) return 0;
     if (nlen != 0 && name[0] == ':') {
         if (obs_pseudo_eq(name, nlen, ":method")) {
             if (rec->have_method || vlen == 0 || vlen > sizeof rec->method) {
@@ -260,27 +321,19 @@ static int obs_data_chunk(nghttp2_session *session, uint8_t flags,
     (void)flags;
     struct h2obs *o = user_data;
     struct h2obs_stream *rec = obs_lookup(o, stream_id, false);
-    if (rec == NULL || rec->admitted || rec->dropped || rec->over) return 0;
+    if (rec == NULL || rec->over) return 0;
     if (len == 0) return 0;
-    if (rec->body_len > CF_H2OBS_BODY_MAX - len ||
-        rec->body_len + len > CF_H2OBS_BODY_MAX) {
+    if (len > CF_H2OBS_BODY_MAX || rec->body_len > CF_H2OBS_BODY_MAX - len) {
         rec->over = true;
-        free(rec->body);
-        rec->body = NULL;
-        rec->body_len = 0;
-        rec->body_cap = 0;
         return 0;
     }
     if (rec->body_len + len > rec->body_cap) {
-        size_t ncap = rec->body_cap == 0 ? 4096 : rec->body_cap * 2;
-        while (ncap < rec->body_len + len) ncap *= 2;
+        size_t ncap = rec->body_len + len;
+        size_t extra = ncap - rec->body_cap;
+        if (!obs_reserve(rec, extra)) return 0;
         unsigned char *grown = realloc(rec->body, ncap);
         if (grown == NULL) {
             rec->over = true;
-            free(rec->body);
-            rec->body = NULL;
-            rec->body_len = 0;
-            rec->body_cap = 0;
             return 0;
         }
         rec->body = grown;
@@ -327,13 +380,7 @@ static int obs_frame_recv(nghttp2_session *session,
     if (frame->hd.type == NGHTTP2_RST_STREAM) {
         struct h2obs_stream *rec =
             obs_lookup(o, frame->hd.stream_id, false);
-        if (rec != NULL && !rec->admitted) {
-            rec->dropped = true;
-            free(rec->body);
-            rec->body = NULL;
-            rec->body_len = 0;
-            rec->body_cap = 0;
-        }
+        if (rec != NULL) obs_release(rec);
         return 0;
     }
     return 0;
@@ -345,19 +392,16 @@ static int obs_stream_close(nghttp2_session *session, int32_t stream_id,
     (void)error_code;
     struct h2obs *o = user_data;
     struct h2obs_stream *rec = obs_lookup(o, stream_id, false);
-    if (rec != NULL && !rec->admitted) {
-        rec->dropped = true;
-        free(rec->body);
-        rec->body = NULL;
-        rec->body_len = 0;
-        rec->body_cap = 0;
-    }
+    if (rec != NULL) obs_release(rec);
     return 0;
 }
 
-static struct h2obs *h2obs_create(void) {
+static struct h2obs *h2obs_create(struct cf_http_loop *loop,
+                                     struct cf_front_h2_session *policy) {
     struct h2obs *o = calloc(1, sizeof *o);
     if (o == NULL) return NULL;
+    o->loop = loop;
+    o->policy = policy;
     nghttp2_session_callbacks *cbs = NULL;
     if (nghttp2_session_callbacks_new(&cbs) != 0) {
         free(o);
@@ -589,39 +633,115 @@ static void h2_unlink(struct cf_http_conn *conn, struct cf_h2_link *link) {
     }
 }
 
-/* Read a FILE response body synchronously for H2 (the h2 submit API takes
- * the whole body at once, unlike H1's file worker). Bounded by the queued
- * budget; false means serve 500. Blocking disk I/O on the loop thread is a
- * documented gap for large files. */
-static bool h2_read_file(const cf_response *resp, unsigned char **out,
-                         size_t *out_len) {
-    *out = NULL;
-    *out_len = 0;
-    if (resp->file_fd < 0) return false;
-    if (resp->file_length > CF_FRONT_H2_QUEUED_MAX) return false;
-    size_t len = (size_t)resp->file_length;
-    if (len == 0) return true;
-    unsigned char *buf = malloc(len);
-    if (buf == NULL) return false;
-    size_t off = 0;
-    while (off < len) {
-        ssize_t n =
-            pread(resp->file_fd, buf + off, len - off,
-                  (off_t)(resp->file_offset + off));
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            free(buf);
-            return false;
-        }
-        if (n == 0) {
-            free(buf);
-            return false; /* premature EOF */
-        }
-        off += (size_t)n;
+/* One DATA-provider chunk per file stream; all state belongs to the loop.
+ * A queued worker job retains this object and its fd across reset/close.
+ * The task stays alive until provider close and the final read completion. */
+struct cf_h2_file_provider {
+    struct cf_http_loop *loop;
+    struct cf_http_task *task;
+    struct cf_http_file_stream *stream;
+    cf_conn_id conn;
+    int32_t sid;
+    size_t refs;
+    uint64_t sent, length, start;
+    unsigned char *data;
+    size_t len, consumed, reserved;
+    bool pending, closed;
+};
+
+static void h2_file_release(struct cf_h2_file_provider *p) {
+    if (--p->refs != 0) return;
+    free(p->data);
+    cf_http_loop_release_output(p->loop, p->reserved);
+    cf_http_file_stream_release(p->stream);
+    if (p->task != NULL) cf_http_loop_release_task(p->loop, p->task);
+    free(p);
+}
+
+static void h2_file_close(void *user) {
+    struct cf_h2_file_provider *p = user;
+    p->closed = true;
+    /* A read in flight still owns its allocation reservation. */
+    if (!p->pending) {
+        free(p->data);
+        p->data = NULL;
+        cf_http_loop_release_output(p->loop, p->reserved);
+        p->reserved = 0;
     }
-    *out = buf;
-    *out_len = len;
-    return true;
+    h2_file_release(p);
+}
+
+static ssize_t h2_file_read(void *user, unsigned char *dst, size_t max,
+                            uint32_t *flags) {
+    struct cf_h2_file_provider *p = user;
+    if (p->closed) return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    if (p->data != NULL) {
+        size_t n = p->len - p->consumed;
+        if (n > max) n = max;
+        memcpy(dst, p->data + p->consumed, n);
+        p->consumed += n;
+        p->sent += n;
+        if (p->consumed == p->len) {
+            free(p->data);
+            p->data = NULL;
+            p->len = p->consumed = 0;
+            cf_http_loop_release_output(p->loop, p->reserved);
+            p->reserved = 0;
+        }
+        if (p->sent == p->length) *flags |= NGHTTP2_DATA_FLAG_EOF;
+        return (ssize_t)n;
+    }
+    if (p->sent == p->length) {
+        *flags |= NGHTTP2_DATA_FLAG_EOF;
+        return 0;
+    }
+    if (!p->pending) {
+        uint64_t remaining = p->length - p->sent;
+        size_t want = remaining < CF_HTTP_FILE_CHUNK ? (size_t)remaining
+                                                    : CF_HTTP_FILE_CHUNK;
+        struct cf_http_chunk_req *req = calloc(1, sizeof *req);
+        if (req == NULL) return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        if (!cf_http_loop_reserve_output(p->loop, want)) {
+            free(req);
+            p->loop->counters.budget_rejected++;
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
+        req->stream = p->stream;
+        cf_http_file_stream_retain(p->stream);
+        req->h2_file = p;
+        req->conn = p->conn;
+        req->offset = p->start + p->sent;
+        req->want = want;
+        p->pending = true;
+        p->reserved = want;
+        p->refs++;
+        cf_http_file_worker_submit(p->loop, req);
+    }
+    return NGHTTP2_ERR_DEFERRED;
+}
+
+static struct cf_h2_file_provider *h2_file_create(struct cf_http_loop *loop,
+                                                  struct cf_http_task *task) {
+    struct cf_h2_file_provider *p = calloc(1, sizeof *p);
+    struct cf_http_file_stream *stream = calloc(1, sizeof *stream);
+    int fd = dup(task->response.file_fd);
+    if (p == NULL || stream == NULL || fd < 0) {
+        if (fd >= 0) close(fd);
+        free(p);
+        free(stream);
+        return NULL;
+    }
+    atomic_init(&stream->refs, (size_t)1);
+    stream->loop = loop;
+    stream->fd = fd;
+    p->loop = loop;
+    p->stream = stream;
+    p->conn = task->conn;
+    p->sid = task->h2_stream_id;
+    p->length = task->response.file_length;
+    p->start = task->response.file_offset;
+    p->refs = 1;
+    return p;
 }
 
 /* Flush policy-session output (SETTINGS acks, HEADERS, flow-gated DATA)
@@ -633,37 +753,46 @@ static void conn_h2_flush(struct cf_http_loop *loop,
     nghttp2_session *h = cf_front_h2_handle(conn->h2);
     if (h == NULL) return;
     for (;;) {
-        const uint8_t *d = NULL;
-        nghttp2_ssize n = nghttp2_session_mem_send(h, &d);
-        if (n < 0) {
-            cf_http_conn_close(loop, conn);
-            return;
+        if (conn->h2_pending == NULL) {
+            const uint8_t *d = NULL;
+            nghttp2_ssize n = nghttp2_session_mem_send(h, &d);
+            if (n < 0) { cf_http_conn_close(loop, conn); return; }
+            if (n == 0) break;
+            if (!h2_reserve_output(loop, (size_t)n)) {
+                cf_http_conn_close(loop, conn);
+                return;
+            }
+            conn->h2_pending = malloc((size_t)n);
+            if (conn->h2_pending == NULL) {
+                h2_release_output(loop, (size_t)n);
+                cf_http_conn_close(loop, conn);
+                return;
+            }
+            memcpy(conn->h2_pending, d, (size_t)n);
+            conn->h2_pending_len = (size_t)n;
+            conn->h2_pending_off = 0;
         }
-        if (n == 0) break;
-        size_t off = 0;
-        while (off < (size_t)n) {
+        while (conn->h2_pending_off < conn->h2_pending_len) {
             size_t m = 0;
-            cf_front_tls_step st =
-                cf_front_tls_send(conn->tls, d + off, (size_t)n - off, &m);
-            if (st == CF_FRONT_TLS_DONE) {
-                if (m == 0) break; /* defensive: retry on writability */
-                off += m;
+            cf_front_tls_step st = cf_front_tls_send(
+                conn->tls, conn->h2_pending + conn->h2_pending_off,
+                conn->h2_pending_len - conn->h2_pending_off, &m);
+            if (st == CF_FRONT_TLS_DONE && m != 0) {
+                conn->h2_pending_off += m;
                 continue;
             }
-            if (st == CF_FRONT_TLS_WANT_READ) {
-                conn->tls_want_write = false;
-            } else {
-                conn->tls_want_write = true;
+            if (st == CF_FRONT_TLS_FAIL) {
+                cf_http_conn_close(loop, conn);
+                return;
             }
-            cf_http_conn_update_events(conn);
-            if (st == CF_FRONT_TLS_FAIL) cf_http_conn_close(loop, conn);
-            return;
-        }
-        if (off < (size_t)n) {
-            conn->tls_want_write = true;
+            conn->tls_want_write = st != CF_FRONT_TLS_WANT_READ;
             cf_http_conn_update_events(conn);
             return;
         }
+        h2_release_output(loop, conn->h2_pending_len);
+        free(conn->h2_pending);
+        conn->h2_pending = NULL;
+        conn->h2_pending_len = conn->h2_pending_off = 0;
     }
     conn->tls_want_write = false;
     cf_http_conn_update_events(conn);
@@ -735,8 +864,7 @@ static void h2_admit_stream(struct cf_http_loop *loop,
         loop->counters.budget_rejected++;
         (void)cf_front_h2_rst_stream(conn->h2, rec->id,
                                      NGHTTP2_ENHANCE_YOUR_CALM);
-        rec->dropped = true;
-        obs_free_bufs(rec);
+        obs_release(rec);
         conn_h2_flush(loop, conn);
         return;
     }
@@ -747,8 +875,7 @@ static void h2_admit_stream(struct cf_http_loop *loop,
         cf_http_request_free_input(loop, req, reserved);
         (void)cf_front_h2_rst_stream(conn->h2, rec->id,
                                      NGHTTP2_REFUSED_STREAM);
-        rec->dropped = true;
-        obs_free_bufs(rec);
+        obs_release(rec);
         conn_h2_flush(loop, conn);
         return;
     }
@@ -761,8 +888,7 @@ static void h2_admit_stream(struct cf_http_loop *loop,
         cf_http_request_free_input(loop, req, reserved);
         (void)cf_front_h2_rst_stream(conn->h2, rec->id,
                                      NGHTTP2_INTERNAL_ERROR);
-        rec->dropped = true;
-        obs_free_bufs(rec);
+        obs_release(rec);
         conn_h2_flush(loop, conn);
         return;
     }
@@ -790,16 +916,14 @@ static void h2_admit_stream(struct cf_http_loop *loop,
         free(task);
         (void)cf_front_h2_rst_stream(conn->h2, rec->id,
                                      NGHTTP2_REFUSED_STREAM);
-        rec->dropped = true;
-        obs_free_bufs(rec);
+        obs_release(rec);
         conn_h2_flush(loop, conn);
         return;
     }
     loop->counters.requests++;
     loop->counters.admissions++;
     loop->outstanding_tasks++;
-    rec->admitted = true;
-    obs_free_bufs(rec); /* the frozen request owns its copy now */
+    obs_release(rec); /* the task/link owns the request and completion token */
 }
 
 /* Scan observed streams after each input pump: admit what is complete AND
@@ -811,21 +935,26 @@ static void h2_scan_admit(struct cf_http_loop *loop,
     if (obs == NULL || conn->h2 == NULL) return;
     for (size_t i = 0; i < CF_H2OBS_MAX_STREAMS; i++) {
         struct h2obs_stream *rec = &obs->streams[i];
-        if (!rec->in_use || rec->admitted || rec->dropped) continue;
+        if (!rec->in_use) continue;
         if (rec->over) {
             (void)cf_front_h2_rst_stream(conn->h2, rec->id, NGHTTP2_CANCEL);
-            rec->dropped = true;
-            obs_free_bufs(rec);
+            obs_release(rec);
             continue;
         }
-        if (!rec->headers_done || !rec->end_stream) continue;
+        if (!rec->headers_done) continue;
         if (!cf_front_h2_stream_open(conn->h2, rec->id)) {
-            rec->dropped = true; /* policy refused: validation/budget/drain */
-            obs_free_bufs(rec);
+            obs_release(rec); /* policy refused: validation/budget/drain */
             continue;
         }
+        if (!rec->end_stream) continue;
         h2_admit_stream(loop, conn, rec);
         if (conn->h2 == NULL) return;
+    }
+    /* Retire mirrored protocol streams now, even if the peer sends no
+     * subsequent bytes (admitted, refused and incomplete cancelled cases). */
+    if (!h2obs_feed(obs, NULL, 0)) {
+        cf_http_conn_close(loop, conn);
+        return;
     }
     conn_h2_flush(loop, conn);
 }
@@ -881,9 +1010,11 @@ static void h2_complete_task(struct cf_http_loop *loop,
                                             &ser);
     const unsigned char *body = NULL;
     size_t body_len = 0;
-    unsigned char *file_buf = NULL;
-    size_t file_len = 0;
     bool ok = src == CF_OK;
+    bool file_body = ok && ser.send_body &&
+                     task->response.body_kind == CF_BODY_FILE;
+    uint64_t declared_length = src == CF_OK ? ser.body_length : 0;
+    bool send_body = src == CF_OK && ser.send_body;
     if (ok && ser.send_body) {
         if (task->response.body_kind == CF_BODY_BUFFER &&
             task->response.body != NULL) {
@@ -891,16 +1022,15 @@ static void h2_complete_task(struct cf_http_loop *loop,
             body = s.ptr;
             body_len = s.len;
         } else if (task->response.body_kind == CF_BODY_FILE) {
-            ok = h2_read_file(&task->response, &file_buf, &file_len);
-            body = file_buf;
-            body_len = file_len;
+            /* DATA is supplied asynchronously by a bounded file provider. */
         } else if (task->response.body_kind != CF_BODY_NONE) {
             ok = false;
         }
     }
-    if (ok && src == CF_OK) cf_buf_release(ser.headers);
+    if (src == CF_OK) cf_buf_release(ser.headers);
     unsigned status = task->response.status;
     cf_err s2;
+    bool task_in_provider = false;
     if (ok) {
         /* Forward the app's headers (Content-Type, Set-Cookie, ETag, ...)
          * into h2; the submitter skips HTTP/1-only classes and emits an
@@ -935,9 +1065,31 @@ static void h2_complete_task(struct cf_http_loop *loop,
             }
         }
         if (hrc == CF_OK) {
-            s2 = cf_front_h2_submit_response_headers(
-                conn->h2, sid, status, hnames, hnamelens, hvalues,
-                hvaluelens, hcount, body, body_len);
+            if (file_body) {
+                struct cf_h2_file_provider *p = h2_file_create(loop, task);
+                if (p == NULL) {
+                    s2 = CF_NOMEM;
+                } else {
+                    s2 = cf_front_h2_submit_response_provider(
+                        conn->h2, sid, status, hnames, hnamelens, hvalues,
+                        hvaluelens, hcount, declared_length,
+                        h2_file_read, h2_file_close, p);
+                    if (s2 == CF_OK) {
+                        p->task = task;
+                        task_in_provider = true;
+                    } else {
+                        h2_file_close(p);
+                    }
+                }
+            } else if (!send_body) {
+                s2 = cf_front_h2_submit_response_provider(
+                    conn->h2, sid, status, hnames, hnamelens, hvalues,
+                    hvaluelens, hcount, declared_length, NULL, NULL, NULL);
+            } else {
+                s2 = cf_front_h2_submit_response_headers(
+                    conn->h2, sid, status, hnames, hnamelens, hvalues,
+                    hvaluelens, hcount, body, body_len);
+            }
         } else {
             s2 = hrc;
         }
@@ -948,12 +1100,14 @@ static void h2_complete_task(struct cf_http_loop *loop,
     } else {
         s2 = cf_front_h2_submit_response(conn->h2, sid, 500, NULL, 0);
     }
-    free(file_buf);
-    cf_http_loop_release_task(loop, task);
+    if (!task_in_provider) cf_http_loop_release_task(loop, task);
     if (s2 == CF_OK) {
         loop->counters.responses_sent++;
     } else {
         loop->counters.errors++;
+        (void)cf_front_h2_rst_stream(conn->h2, sid,
+            (s2 == CF_BUSY || s2 == CF_LIMIT) ? NGHTTP2_ENHANCE_YOUR_CALM
+                                           : NGHTTP2_INTERNAL_ERROR);
     }
     conn_h2_flush(loop, conn);
 }
@@ -990,7 +1144,10 @@ static void conn_tls_handshake_step(struct cf_http_loop *loop,
                 cf_http_conn_close(loop, conn);
                 return;
             }
-            struct h2obs *obs = h2obs_create();
+            cf_front_h2_set_budget(h2, loop, h2_reserve_input,
+                                   h2_release_input, h2_reserve_output,
+                                   h2_release_output);
+            struct h2obs *obs = h2obs_create(loop, h2);
             if (obs == NULL) {
                 cf_front_h2_session_destroy(h2);
                 cf_http_conn_close(loop, conn);
@@ -1045,7 +1202,7 @@ static void conn_tls_h1_readable(struct cf_http_loop *loop,
             cf_http_request_input(conn, loop->scratch, n);
             bool closed = conn->state == CF_HTTP_STATE_CLOSED;
             conn_restore(loop, conn, saved);
-            if (closed || conn->fd < 0) return;
+            if (closed || conn->fd < 0 || conn->tls == NULL) return;
             conn_tls_h1_flush(conn);
             if (conn->fd < 0) return;
             continue;
@@ -1422,6 +1579,12 @@ void cf_http_conn_close(struct cf_http_loop *loop, struct cf_http_conn *conn) {
         cf_front_tls_conn_destroy(conn->tls);
         conn->tls = NULL;
     }
+    if (conn->h2_pending != NULL) {
+        h2_release_output(loop, conn->h2_pending_len);
+        free(conn->h2_pending);
+        conn->h2_pending = NULL;
+        conn->h2_pending_len = conn->h2_pending_off = 0;
+    }
     if (conn->h2 != NULL) {
         cf_front_h2_session_destroy(conn->h2);
         conn->h2 = NULL;
@@ -1673,6 +1836,38 @@ static void loop_drain_completions(struct cf_http_loop *loop) {
     }
     while (chunks != NULL) {
         struct cf_http_chunk_req *next = chunks->next;
+        if (chunks->h2_file != NULL) {
+            struct cf_h2_file_provider *p = chunks->h2_file;
+            struct cf_http_conn *conn = cf_http_loop_find_conn(loop, p->conn);
+            p->pending = false;
+            bool valid = !p->closed && conn != NULL && conn->h2 != NULL &&
+                         cf_front_h2_stream_open(conn->h2, p->sid);
+            if (valid && chunks->err == 0 && chunks->len == chunks->want) {
+                p->data = chunks->data;
+                chunks->data = NULL;
+                p->len = chunks->len;
+                p->consumed = 0;
+                (void)cf_front_h2_resume_data(conn->h2, p->sid);
+                conn_h2_flush(loop, conn);
+            } else {
+                free(chunks->data);
+                cf_http_loop_release_output(loop, p->reserved);
+                p->reserved = 0;
+                if (valid) {
+                    loop->counters.errors++;
+                    (void)cf_front_h2_rst_stream(conn->h2, p->sid,
+                                                 NGHTTP2_INTERNAL_ERROR);
+                    conn_h2_flush(loop, conn);
+                } else {
+                    loop->counters.stale_completions++;
+                }
+            }
+            cf_http_file_stream_release(chunks->stream);
+            free(chunks);
+            h2_file_release(p); /* worker job reference */
+            chunks = next;
+            continue;
+        }
         /* TLS-H1 chunks flush through TLS; everything else is untouched. */
         bool is_tls_h1 = false;
         struct cf_http_conn *peek =
@@ -1710,9 +1905,11 @@ static void *file_worker_main(void *arg) {
         if (w->head == NULL) w->tail = NULL;
         req->next = NULL;
         bool stopping = w->stop;
+        ssize_t (*read_at)(void *, int, void *, size_t, off_t) = w->read_at;
+        void *read_user = w->read_user;
         pthread_mutex_unlock(&w->mutex);
 
-        if (stopping) {
+        if (stopping && req->h2_file == NULL) {
             /* Teardown: no loop reader remains; drop the read reference. */
             req->stream->chunk_pending = false;
             cf_http_file_stream_release(req->stream);
@@ -1721,22 +1918,31 @@ static void *file_worker_main(void *arg) {
         }
 
         size_t want = req->want;
-        unsigned char *data = malloc(want == 0 ? 1 : want);
+        unsigned char *data = stopping ? NULL : malloc(want == 0 ? 1 : want);
         if (data == NULL) {
-            req->err = ENOMEM;
+            req->err = stopping ? ECANCELED : ENOMEM;
             req->len = 0;
         } else {
-            ssize_t n;
+            size_t total = 0;
             do {
-                n = pread(req->stream->fd, data, want, (off_t)req->offset);
-            } while (n < 0 && errno == EINTR);
-            if (n < 0) {
-                req->err = errno;
-                req->len = 0;
-            } else {
-                req->err = 0;
-                req->len = (size_t)n; /* 0 means premature EOF */
-            }
+                ssize_t n;
+                do {
+                    size_t step = want - total;
+                    if (step > CF_HTTP_FILE_CHUNK) step = CF_HTTP_FILE_CHUNK;
+                    n = read_at != NULL
+                        ? read_at(read_user, req->stream->fd, data + total,
+                                  step, (off_t)(req->offset + total))
+                        : pread(req->stream->fd, data + total, step,
+                                (off_t)(req->offset + total));
+                } while (n < 0 && errno == EINTR);
+                if (n < 0) { req->err = errno; break; }
+                if (n == 0) {
+                    if (req->h2_file != NULL && total < want) req->err = EIO;
+                    break;
+                }
+                total += (size_t)n;
+            } while (req->h2_file != NULL && total < want);
+            req->len = req->err == 0 ? total : 0;
             req->data = data;
         }
 
@@ -1811,6 +2017,8 @@ static void conn_init(struct cf_http_loop *loop, struct cf_http_conn *conn,
     conn->tls = NULL;
     conn->h2 = NULL;
     conn->h2obs = NULL;
+    conn->h2_pending = NULL;
+    conn->h2_pending_len = conn->h2_pending_off = 0;
     conn->tls_want_write = false;
     conn->swap_fd = -1;
     conn->h2_tasks = NULL;

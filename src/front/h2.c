@@ -10,12 +10,13 @@
 
 #include <nghttp2/nghttp2.h>
 
-/* One stream record. Records persist after close so tests and the loop seam
- * can distinguish open / cancelled / refused / drained outcomes. */
+/* Bounded recent stream records preserve diagnostic outcomes. Physically
+ * closed records are recycled without retaining an entire connection history. */
 struct h2_stream {
     int32_t stream_id;
     uint64_t sequence; /* per-connection request sequence at admission */
     bool open;
+    bool closed;
     bool refused;    /* never admitted: validation/budget/drain refusal */
     bool cancelled;  /* RST_STREAM after admission */
     bool committed;  /* response submitted (commit point) */
@@ -23,6 +24,12 @@ struct h2_stream {
     size_t header_bytes;
     size_t header_count;
     size_t body_len;
+    size_t input_counted;
+    size_t response_reserved;
+    cf_front_h2_provider_read provider_read;
+    cf_front_h2_provider_close provider_close;
+    void *provider_user;
+    uint64_t provider_length;
     size_t queued; /* submitted response bytes not yet framed out */
     size_t sent;   /* bytes handed to nghttp2 framing (committed) */
     unsigned char *resp_body; /* owned response copy until close */
@@ -33,6 +40,11 @@ struct h2_stream {
 
 struct cf_front_h2_session {
     nghttp2_session *ng;
+    void *budget_user;
+    cf_front_h2_reserve_fn reserve_input;
+    cf_front_h2_release_fn release_input;
+    cf_front_h2_reserve_fn reserve_output;
+    cf_front_h2_release_fn release_output;
     char *public_origin; /* owned copy */
     /* Accumulating decode state for the in-flight header block. nghttp2
      * reuses its inflate scratch area across headers, so names/values are
@@ -336,10 +348,26 @@ static struct h2_stream *get_or_add_stream(cf_front_h2_session *s,
                                            int32_t stream_id) {
     struct h2_stream *st = find_stream(s, stream_id);
     if (st != NULL) return st;
+    /* Keep recent outcomes for diagnostics, but recycle physically closed
+     * streams before the bounded history becomes a lifetime request cap.
+     * An outstanding response/provider must never be reused. */
+    if (s->stream_count >= 256) {
+        struct h2_stream *oldest = NULL;
+        for (size_t i = 0; i < s->stream_count; i++) {
+            struct h2_stream *candidate = &s->streams[i];
+            if (candidate->closed &&
+                (oldest == NULL || candidate->stream_id < oldest->stream_id))
+                oldest = candidate;
+        }
+        if (oldest == NULL) return NULL;
+        memset(oldest, 0, sizeof *oldest);
+        oldest->stream_id = stream_id;
+        return oldest;
+    }
     if (s->stream_count == s->stream_cap) {
         size_t ncap =
             s->stream_cap == 0 ? 16 : s->stream_cap * 2;
-        if (ncap > 16384) return NULL;
+        if (ncap > 256) return NULL;
         struct h2_stream * grown =
             realloc(s->streams, ncap * sizeof *grown);
         if (grown == NULL) return NULL;
@@ -383,6 +411,18 @@ static ssize_t response_read(nghttp2_session *session, int32_t stream_id,
     cf_front_h2_session *s = user_data;
     struct h2_stream *st = find_stream(s, stream_id);
     (void)source;
+    if (st != NULL && st->provider_read != NULL) {
+        ssize_t n = st->provider_read(st->provider_user, buf, length, data_flags);
+        if (n < 0) return n;
+        if ((size_t)n > length || st->sent > st->provider_length ||
+            (uint64_t)n > st->provider_length - st->sent)
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        st->sent += (size_t)n;
+        if ((*data_flags & NGHTTP2_DATA_FLAG_EOF) != 0 &&
+            st->sent != st->provider_length)
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        return n;
+    }
     if (st == NULL || st->resp_body == NULL) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
         return 0;
@@ -490,16 +530,24 @@ static int on_header(nghttp2_session *session, const nghttp2_frame *frame,
         return 0;
     }
     if (s->hdr_buf_len + need > s->hdr_buf_cap) {
-        size_t ncap = s->hdr_buf_cap == 0 ? 1024 : s->hdr_buf_cap * 2;
-        while (ncap < s->hdr_buf_len + need) ncap *= 2;
+        size_t ncap = s->hdr_buf_len + need;
         if (ncap > 48 * 1024) ncap = 48 * 1024;
         if (ncap < s->hdr_buf_len + need) {
             s->hdr_over = true;
             s->hdr_bytes = CF_FRONT_H2_HEADER_MAX + 1;
             return 0;
         }
+        size_t extra = ncap - s->hdr_buf_cap;
+        if (s->reserve_input != NULL &&
+            !s->reserve_input(s->budget_user, extra)) {
+            s->hdr_over = true;
+            return 0;
+        }
         unsigned char *grown = realloc(s->hdr_buf, ncap);
-        if (grown == NULL) return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        if (grown == NULL) {
+            if (s->release_input != NULL) s->release_input(s->budget_user, extra);
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
         s->hdr_buf = grown;
         s->hdr_buf_cap = ncap;
     }
@@ -528,7 +576,8 @@ static int on_data_chunk(nghttp2_session *session, uint8_t flags,
     cf_front_h2_session *s = user_data;
     struct h2_stream *st = find_stream(s, stream_id);
     if (st == NULL || !st->open || st->refused || st->cancelled) return 0;
-    if (st->body_len > CF_FRONT_H2_BODY_MAX - len ||
+    if (len > CF_FRONT_H2_BODY_MAX ||
+        st->body_len > CF_FRONT_H2_BODY_MAX - len ||
         st->body_len + len > CF_FRONT_H2_BODY_MAX) {
         /* Body cap (413-class): cancel delivery, keep the connection. */
         st->cancelled = true;
@@ -547,11 +596,12 @@ static int on_data_chunk(nghttp2_session *session, uint8_t flags,
         return 0;
     }
     st->body_len += len;
+    st->input_counted += len;
     s->conn_input_used += len;
     return 0;
 }
 
-static int on_frame_recv(nghttp2_session *session, const nghttp2_frame *frame,
+static int process_frame_recv(nghttp2_session *session, const nghttp2_frame *frame,
                          void *user_data) {
     (void)session;
     cf_front_h2_session *s = user_data;
@@ -611,6 +661,7 @@ static int on_frame_recv(nghttp2_session *session, const nghttp2_frame *frame,
             return 0;
         }
         s->conn_input_used += s->hdr_bytes;
+        st->input_counted += s->hdr_bytes;
         st->open = true;
         st->sequence = s->next_sequence++;
         s->admitted_total++;
@@ -641,6 +692,30 @@ static int on_frame_recv(nghttp2_session *session, const nghttp2_frame *frame,
     return 0;
 }
 
+static int on_frame_recv(nghttp2_session *session,
+                          const nghttp2_frame *frame, void *user_data) {
+    cf_front_h2_session *s = user_data;
+    int rc = process_frame_recv(session, frame, user_data);
+    if (frame->hd.type == NGHTTP2_HEADERS) {
+        if (s->release_input != NULL)
+            s->release_input(s->budget_user, s->hdr_buf_cap);
+        free(s->hdr_buf);
+        s->hdr_buf = NULL;
+        s->hdr_buf_len = s->hdr_buf_cap = 0;
+        s->hdr_active = false;
+    }
+    return rc;
+}
+
+static void provider_close(struct h2_stream *st) {
+    cf_front_h2_provider_close close = st->provider_close;
+    void *user = st->provider_user;
+    st->provider_read = NULL;
+    st->provider_close = NULL;
+    st->provider_user = NULL;
+    if (close != NULL) close(user);
+}
+
 static int on_stream_close(nghttp2_session *session, int32_t stream_id,
                            uint32_t error_code, void *user_data) {
     (void)session;
@@ -654,6 +729,7 @@ static int on_stream_close(nghttp2_session *session, int32_t stream_id,
             if (tomb != NULL && !tomb->counted_refusal) {
                 tomb->counted_refusal = true;
                 tomb->refused = true;
+                tomb->closed = true;
                 s->refused_total++;
             } else if (tomb == NULL) {
                 s->refused_total++;
@@ -677,8 +753,16 @@ static int on_stream_close(nghttp2_session *session, int32_t stream_id,
         }
         st->queued = 0;
     }
+    provider_close(st);
     free(st->resp_body);
     st->resp_body = NULL;
+    if (s->release_output != NULL)
+        s->release_output(s->budget_user, st->response_reserved);
+    st->response_reserved = 0;
+    st->closed = true;
+    size_t input = st->input_counted;
+    s->conn_input_used = input <= s->conn_input_used ? s->conn_input_used - input : 0;
+    st->input_counted = 0;
     return 0;
 }
 
@@ -730,13 +814,31 @@ cf_err cf_front_h2_session_create(const char *public_origin,
     return CF_OK;
 }
 
+void cf_front_h2_set_budget(cf_front_h2_session *session, void *user,
+                            cf_front_h2_reserve_fn reserve_input,
+                            cf_front_h2_release_fn release_input,
+                            cf_front_h2_reserve_fn reserve_output,
+                            cf_front_h2_release_fn release_output) {
+    if (session == NULL) return;
+    session->budget_user = user;
+    session->reserve_input = reserve_input;
+    session->release_input = release_input;
+    session->reserve_output = reserve_output;
+    session->release_output = release_output;
+}
+
 void cf_front_h2_session_destroy(cf_front_h2_session *session) {
     if (session == NULL) return;
     for (size_t i = 0; i < session->stream_count; i++) {
+        provider_close(&session->streams[i]);
         free(session->streams[i].resp_body);
+        if (session->release_output != NULL)
+            session->release_output(session->budget_user, session->streams[i].response_reserved);
     }
     free(session->streams);
     free(session->hdr_buf);
+    if (session->release_input != NULL)
+        session->release_input(session->budget_user, session->hdr_buf_cap);
     nghttp2_session_del(session->ng);
     free(session->public_origin);
     free(session);
@@ -844,7 +946,9 @@ bool cf_front_h2_flow_stalled(cf_front_h2_session *session) {
     bool conn_zero =
         nghttp2_session_get_remote_window_size(session->ng) == 0;
     for (size_t i = 0; i < session->stream_count; i++) {
-        if (session->streams[i].queued == 0) continue;
+        if (session->streams[i].queued == 0 &&
+            (session->streams[i].provider_read == NULL ||
+             session->streams[i].sent >= session->streams[i].provider_length)) continue;
         if (conn_zero) return true;
         if (nghttp2_session_get_stream_remote_window_size(
                 session->ng, session->streams[i].stream_id) == 0) {
@@ -894,11 +998,12 @@ static bool h2_skip_response_header(const unsigned char *name, size_t len) {
  * above, plus one nghttp2 name/value pair per kept header (nghttp2 copies
  * and lower-cases every pair, so borrowed spans are safe). Duplicate
  * names (Set-Cookie) are submitted as repeated pairs. */
-cf_err cf_front_h2_submit_response_headers(
+static cf_err submit_response(
     cf_front_h2_session *session, int32_t stream_id, unsigned status,
     const unsigned char **names, const size_t *name_lens,
     const unsigned char **values, const size_t *value_lens, size_t count,
-    const unsigned char *body, size_t body_len) {
+    const unsigned char *body, size_t body_len, uint64_t content_length,
+    cf_front_h2_provider_read read, cf_front_h2_provider_close close, void *user) {
     if (session == NULL || session->ng == NULL) return CF_INVALID;
     struct h2_stream *st = find_stream(session, stream_id);
     if (st == NULL || !st->open || st->refused || st->cancelled ||
@@ -914,15 +1019,10 @@ cf_err cf_front_h2_submit_response_headers(
         return CF_LIMIT;
     }
     unsigned char *copy = NULL;
-    if (body_len != 0) {
-        copy = malloc(body_len == 0 ? 1 : body_len);
-        if (copy == NULL) return CF_NOMEM;
-        memcpy(copy, body, body_len);
-    }
     char status_text[4];
     snprintf(status_text, sizeof status_text, "%03u", status);
     char length_text[24];
-    snprintf(length_text, sizeof length_text, "%zu", body_len);
+    snprintf(length_text, sizeof length_text, "%llu", (unsigned long long)content_length);
     /* App headers ride after the two fixed pairs; skipped classes never
      * reach the wire. Cap the header count so one pathological response
      * cannot unboundedly grow the NV array. */
@@ -964,6 +1064,22 @@ cf_err cf_front_h2_submit_response_headers(
         nva[at].flags = NGHTTP2_NV_FLAG_NONE;
         at++;
     }
+    if (body_len != 0) {
+        if (session->reserve_output != NULL &&
+            !session->reserve_output(session->budget_user, body_len)) {
+            free(nva);
+            return CF_LIMIT;
+        }
+        copy = malloc(body_len);
+        if (copy == NULL) {
+            if (session->release_output != NULL)
+                session->release_output(session->budget_user, body_len);
+            free(nva);
+            return CF_NOMEM;
+        }
+        memcpy(copy, body, body_len);
+        st->response_reserved = body_len;
+    }
     nghttp2_data_provider prd;
     nghttp2_data_provider *prdp = NULL;
     if (body_len != 0) {
@@ -976,6 +1092,11 @@ cf_err cf_front_h2_submit_response_headers(
         prd.read_callback = response_read;
         prdp = &prd;
     }
+    if (read != NULL) {
+        prd.source.ptr = NULL;
+        prd.read_callback = response_read;
+        prdp = &prd;
+    }
     int rc = nghttp2_submit_response(session->ng, stream_id, nva, at, prdp);
     free(nva);
     free(copy);
@@ -983,12 +1104,47 @@ cf_err cf_front_h2_submit_response_headers(
         free(st->resp_body);
         st->resp_body = NULL;
         st->resp_len = st->resp_off = 0;
+        if (session->release_output != NULL)
+            session->release_output(session->budget_user, st->response_reserved);
+        st->response_reserved = 0;
         return CF_INTERNAL;
     }
+    st->provider_read = read;
+    st->provider_close = close;
+    st->provider_user = user;
+    st->provider_length = content_length;
     st->committed = true;
     st->queued += body_len;
     session->conn_output_used += body_len;
     return CF_OK;
+}
+
+cf_err cf_front_h2_submit_response_headers(
+    cf_front_h2_session *session, int32_t stream_id, unsigned status,
+    const unsigned char **names, const size_t *name_lens,
+    const unsigned char **values, const size_t *value_lens, size_t count,
+    const unsigned char *body, size_t body_len) {
+    return submit_response(session, stream_id, status, names, name_lens,
+                           values, value_lens, count, body, body_len, body_len,
+                           NULL, NULL, NULL);
+}
+
+cf_err cf_front_h2_submit_response_provider(
+    cf_front_h2_session *session, int32_t stream_id, unsigned status,
+    const unsigned char **names, const size_t *name_lens,
+    const unsigned char **values, const size_t *value_lens, size_t count,
+    uint64_t content_length, cf_front_h2_provider_read read,
+    cf_front_h2_provider_close close, void *user) {
+    return submit_response(session, stream_id, status, names, name_lens,
+                           values, value_lens, count, NULL, 0, content_length,
+                           read, close, user);
+}
+
+cf_err cf_front_h2_resume_data(cf_front_h2_session *session, int32_t stream_id) {
+    if (session == NULL || !cf_front_h2_stream_open(session, stream_id))
+        return CF_NOT_FOUND;
+    return nghttp2_session_resume_data(session->ng, stream_id) == 0
+               ? CF_OK : CF_INVALID;
 }
 
 cf_err cf_front_h2_rst_stream(cf_front_h2_session *session, int32_t stream_id,

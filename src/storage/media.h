@@ -40,16 +40,11 @@
  *   cf_media_pinned_available() accepts the host tools, otherwise the live
  *   case reports BLOCKED (never a silent skip or PASS).
  *
- * Known CLI-equivalence gap (reported, not approximated): the reference
- * sharpen step convolves with a 3x3 mask whose image carries scale=24 and
- * offset=0 metadata (vips.rs::sharpen_mask). The `vips conv` CLI spelling
- * of that mask metadata is unverified while the pinned `vips` is absent
- * (F00-BLOCKED, no probe here), so cf_media_vips_sharpen_argv() emits the
- * verified operation/precision arguments with a caller-supplied mask path
- * and documents the gap. Likewise the reference `block_untrusted(true)` maps
- * to the VIPS_BLOCK_UNTRUSTED=1 environment (see CF_MEDIA_VIPS_ENV), while
- * the VipsForeignLoadOpenslide block has no CLI equivalent: runners must
- * not process Openslide-backed inputs until the adapter lands.
+ * Exact image operations use the fixed cf-vips subprocess adapter compiled
+ * against pinned libvips, including block_untrusted, the Openslide block,
+ * loader page probing, autorotation and the reference sharpen mask metadata.
+ * The historical CLI argv builders remain deterministic utility vectors;
+ * production transforms use the adapter so mask metadata is never guessed.
  */
 #ifndef CF_STORAGE_MEDIA_H
 #define CF_STORAGE_MEDIA_H
@@ -148,6 +143,19 @@ typedef enum {
 cf_err cf_media_preset_describe(cf_media_preset preset, cf_media_resize *resize_out,
                                 const char **format_out);
 
+/* Production analysis. Probe parsing is separated for deterministic reference
+ * vectors. These APIs append only a complete metadata object; on failure no
+ * analyzed flag is saved. Path is task-owned, never a request filename.
+ * Blob analysis opens a validated storage key and copies through a bounded
+ * owned intermediate before running the fixed subprocess off the writer. */
+struct cf_blob;
+cf_err cf_media_probe_metadata(cf_media_analyzer analyzer, cf_span probe_json,
+                               cf_span metadata_json, cf_builder *out);
+cf_err cf_media_analyze_path(const char *input_path, cf_span content_type,
+                             cf_span metadata_json, cf_builder *out);
+cf_err cf_media_analyze_blob(cf_app *app, const struct cf_blob *blob,
+                             cf_builder *out);
+
 /* ---- fixed argv builders -------------------------------------------------
  * Each builder fills out with a NULL-terminated argv after argv[0] for
  * cf_proc_run (exe selected by the caller from the S01 enum). Switches are
@@ -226,5 +234,8 @@ cf_err cf_media_checksum_file(const char *path, cf_builder *out);
  * Otherwise false with a human-readable BLOCKED reason in reason[] (always
  * NUL-terminated when cap > 0). Version drift reports BLOCKED, never PASS. */
 bool cf_media_pinned_available(char *reason, size_t cap);
+
+/* Analyze and warm the default image/video representation before rendering. */
+cf_err cf_media_process_attachment(cf_ctx *ctx, const struct cf_blob *blob);
 
 #endif /* CF_STORAGE_MEDIA_H */

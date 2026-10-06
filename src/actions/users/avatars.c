@@ -1,7 +1,6 @@
 /* src/actions/users/avatars.c — Users::AvatarsController#show (task
  * A-users-avatars, route ID 53; contracts/routes.json).  `destroy` (route 54)
- * stays on the development 501 per the integrator ruling and is not
- * implemented here.
+ * is implemented by users/avatars_destroy.c.
  *
  * Source: tmp/rust-ref/crates/campfire/src/controllers/users/avatars.rs
  * (whole file), the port of reference/app/controllers/users/avatars_controller.rb:
@@ -46,21 +45,10 @@
  * Cache-Control and Date; kit/src/ctx.rs:503-516; the Date header is added
  * by the C serializer for every response).
  *
- * BLOCKED ARM — the attachment-variant branch:
- *   `avatar.variant(:square).processed` (`resize_to_limit: [512, 512],
- *   format: :webp`) -> `send_file path, content_type: "image/webp"` is
- *   S02/S03-dependent (Active Storage variants + libvips, whose pins are
- *   still open) and is out of scope for this packet.  When the user has an
- *   `avatar` attachment (`cf_attachment_find_for`, D01), the action returns
- *   CF_INTERNAL (500) instead of falling through: the fallback arms must
- *   never silently serve initials/bot bytes for a user whose reference
- *   response is the processed webp.  This is the same fail-loudly convention
- *   A-first_runs uses for its S02-dependent arms ("fail loudly instead of
- *   silently skipping it").  `Blob::is_variable` is also S02/S03-owned and
- *   not exposed by D01, so the blocked arm covers every attached avatar
- *   (a non-variable attachment would fall through in the reference; that
- *   distinction is reported, not invented here).  The B01 benchmark seed
- *   omits the avatar attachment, so the preflight exercises the fallback.
+ * Uploaded variable images are processed as the :square webp variant;
+ * non-variable attachments preserve the source initials/bot fallback.
+ * Processing and file reads run on request/media workers before response
+ * ownership transfers the opened file descriptor to the HTTP loop.
  *
  * c_symbol for the integrator's route rebind (src/routes.c row 53):
  *   cf_action_users_avatars_show.
@@ -74,6 +62,8 @@
 #include "models/active_storage.h"
 #include "models/user.h"
 #include "routes.h"      /* cf_static_root: the pinned asset tree */
+#include "storage/active_storage.h"
+#include "storage/storage.h"
 #include "views.h"       /* cf_views_asset_path, cf_view_users_avatar_svg */
 
 #include <fcntl.h>
@@ -439,19 +429,55 @@ static cf_err av_resolve_user(cf_ctx *ctx, cf_user *out, bool *halted) {
     return CF_OK;
 }
 
-/* The blocked arm: an avatar attachment exists, so the reference would serve
- * the processed :square webp variant (S02/S03, libvips pins open).  Failing
- * loudly is deliberate — falling through to the initials/bot arms would
- * silently serve different bytes for the same user. */
-static cf_err av_require_no_attachment(cf_ctx *ctx, int64_t user_id) {
+/* Process only variable images. Non-variable attachments retain the source's
+ * initials/bot fallback, rather than turning every attached file into a 500. */
+static cf_err av_send_uploaded(cf_ctx *ctx, int64_t user_id, bool *sent) {
+    *sent = false;
     bool found = false;
     cf_attachment attachment = {0};
+    cf_blob blob = {0}, variant = {0};
     cf_err rc = cf_attachment_find_for(ctx->reader, av_cstr("User"), user_id,
                                        av_cstr("avatar"), &found, &attachment);
+    if (rc == CF_OK && found) rc = cf_attachment_blob(ctx->reader, &attachment, &blob);
     cf_attachment_dispose(&attachment);
-    if (rc != CF_OK) return rc;
-    if (found) return CF_INTERNAL;
-    return CF_OK;
+    if (rc != CF_OK || !found) goto done;
+    if (!blob.content_type.present ||
+        !cf_active_content_type_variable(av_str_span(blob.content_type.value))) goto done;
+    cf_active_ventries variation = {0};
+    cf_active_vval *format = NULL, *dimensions = NULL, *width = NULL, *height = NULL;
+    rc = cf_active_vsym(av_span("webp"), &format);
+    if (rc == CF_OK) rc = cf_active_ventries_push(&variation, av_span("format"), format);
+    if (rc == CF_OK) format = NULL;
+    if (rc == CF_OK) rc = cf_active_varr(&dimensions);
+    if (rc == CF_OK) rc = cf_active_vint(512, &width);
+    if (rc == CF_OK) rc = cf_active_varr_push(dimensions, width);
+    if (rc == CF_OK) width = NULL;
+    if (rc == CF_OK) rc = cf_active_vint(512, &height);
+    if (rc == CF_OK) rc = cf_active_varr_push(dimensions, height);
+    if (rc == CF_OK) height = NULL;
+    if (rc == CF_OK) rc = cf_active_ventries_push(&variation, av_span("resize_to_limit"), dimensions);
+    if (rc == CF_OK) dimensions = NULL;
+    if (rc == CF_OK) rc = cf_active_processed_representation(ctx, &blob, &variation, &variant);
+    cf_active_vval_dispose(format); cf_active_vval_dispose(dimensions);
+    cf_active_vval_dispose(width); cf_active_vval_dispose(height);
+    cf_active_ventries_dispose(&variation);
+    cf_storage *storage = NULL; int fd = -1; uint64_t size = 0;
+    const cf_config *config = cf_app_config(ctx->app);
+    if (rc == CF_OK) rc = cf_storage_open(config->storage_path, &storage);
+    if (rc == CF_OK) rc = cf_storage_open_read(storage, av_str_span(variant.key), &fd, &size);
+    cf_storage_close(storage);
+    if (rc == CF_OK) rc = cf_response_header(ctx->response, av_span("Content-Type"), av_span("image/webp"));
+    if (rc == CF_OK) rc = cf_response_header(ctx->response, av_span("Content-Disposition"), av_span("inline"));
+    if (rc == CF_OK) rc = cf_response_header(ctx->response, av_span("content-transfer-encoding"), av_span("binary"));
+    if (rc == CF_OK) {
+        rc = cf_response_file(ctx->response, fd, 0, size);
+        if (rc == CF_OK) { fd = -1; *sent = true; ctx->response->status = 200; }
+    }
+    if (fd >= 0) close(fd);
+    if (rc == CF_NOT_FOUND) rc = CF_INTERNAL;
+done:
+    cf_blob_dispose(&variant); cf_blob_dispose(&blob);
+    return rc;
 }
 
 /* `send_file <assets>/default-bot-avatar.svg, content_type: "image/svg+xml",
@@ -587,8 +613,9 @@ cf_err cf_action_users_avatars_show(cf_ctx *ctx) {
         rc = cf_response_header(ctx->response, av_span("Cache-Control"),
                                 av_span(AV_MAX_AGE));
     }
-    if (rc == CF_OK) rc = av_require_no_attachment(ctx, user.id);
-    if (rc == CF_OK) {
+    bool sent = false;
+    if (rc == CF_OK) rc = av_send_uploaded(ctx, user.id, &sent);
+    if (rc == CF_OK && !sent) {
         if (cf_user_is_bot(&user)) {
             rc = av_send_default_bot(ctx);
         } else {

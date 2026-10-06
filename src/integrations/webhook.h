@@ -70,6 +70,7 @@ typedef struct {
     cf_webhook_reply_kind kind;
     /* TEXT: text is the lossy-UTF-8 body. ATTACHMENT: data/filename/content_type. */
     char *text;
+    size_t text_len;
     unsigned char *data;
     size_t data_len;
     char *filename;
@@ -100,7 +101,7 @@ cf_webhook_err cf_webhook_classify(unsigned status, const char *content_type,
 bool cf_webhook_mime_lookup(const char *content_type, const char **symbol,
                             const char **registered_spelling);
 
-/* J02/D02 consumer seam (NOT wired here; proposed patch in the handoff).
+/* J02 applies delivery replies with fresh writer authorization checks.
  * After CF_WEBHOOK_OK the consumer must, in order:
  *  1. re-check the bot row (and its webhook) still exists — a bot removed
  *     while the request was in flight must NOT be resurrected by its reply;

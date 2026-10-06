@@ -15,9 +15,10 @@
  *   - failure paths: tampered variation keys and wrong-purpose keys are
  *     the 404 head; a bad signed blob is the 404 head; a valid signed blob
  *     for a missing blob is the mapped 404;
- *   - S03 arms fail loudly: a variable blob with no variant record, an
- *     unrepresentable (non-variable, non-video) blob, a video with no
- *     preview, and a preview with a non-empty variation are all 500;
+ *   - missing source files report404; unrepresentable blobs and invalid
+ *     operations fail explicitly;
+ *   - real generated variants persist analyzed images and reuse them; video
+ *     previews match the committed pinnedJPEG bytes;
  *   - preview path: a video blob with a recorded preview image and an
  *     empty variation redirects to the preview's disk URL;
  *   - public: no session cookie is sent on any case above.
@@ -664,12 +665,12 @@ CF_TEST(active_storage_representations_failure_paths) {
              "/rails/active_storage/representations/redirect/%s/%s/photo.png",
              esc_id, esc_key);
 
-    /* No variant record yet: media completion required -> 500. */
+    /* No variant record and no source file: missing storage file -> 404. */
     cf_request req;
     cf_response resp;
     rp_request(&req, path, NULL);
     CF_REQUIRE(run_request(&env, &req, &resp));
-    CF_CHECK(resp.status == 500);
+    CF_CHECK(resp.status == 404); /* missing source file */
     cf_response_dispose(&resp);
 
     /* Tampered variation key: 404 head. */
@@ -811,7 +812,7 @@ CF_TEST(active_storage_representations_preview_image_paths) {
     CF_CHECK(strstr(location, "/clip.png") != NULL);
     cf_response_dispose(&resp);
 
-    /* Non-empty variation: varianting the preview needs S03 -> 500. */
+    /* Unsupported width operation remains an internal processing error. */
     cf_active_ventries entries = {0};
     cf_active_vval *width = NULL;
     CF_REQUIRE(cf_active_vint(100, &width) == CF_OK);
@@ -840,7 +841,7 @@ CF_TEST(active_storage_representations_preview_image_paths) {
     env_close(&env);
 }
 
-CF_TEST(active_storage_representations_video_without_preview_is_500) {
+CF_TEST(active_storage_representations_missing_video_source_is_404) {
     rp_env env;
     CF_REQUIRE(env_open(&env));
     seed_blob(env.scratch.db, 1, KEY_SRC, "clip.mp4", "video/mp4", 100);
@@ -864,12 +865,145 @@ CF_TEST(active_storage_representations_video_without_preview_is_500) {
     cf_response resp;
     rp_request(&req, path, NULL);
     CF_REQUIRE(run_request(&env, &req, &resp));
-    /* Drawing the preview needs S03: fail loudly. */
-    CF_CHECK(resp.status == 500);
+    /* A blob without its disk file cannot be processed. */
+    CF_CHECK(resp.status == 404);
     cf_response_dispose(&resp);
 
     cf_str_dispose(&signed_id);
     cf_str_dispose(&vkey);
+    env_close(&env);
+}
+
+CF_TEST(active_storage_representations_generates_and_reuses_image_variant) {
+    rp_env env;
+    CF_REQUIRE(env_open(&env));
+    FILE *fixture = fopen("tests/fixtures/vectors/storage/black_hole-logo-small.png", "rb");
+    CF_REQUIRE(fixture != NULL);
+    CF_REQUIRE(fseek(fixture, 0, SEEK_END) == 0);
+    long size = ftell(fixture);
+    CF_REQUIRE(size > 0);
+    rewind(fixture);
+    unsigned char *bytes = malloc((size_t)size);
+    CF_REQUIRE(bytes != NULL);
+    CF_REQUIRE(fread(bytes, 1, (size_t)size, fixture) == (size_t)size);
+    fclose(fixture);
+    stage_file(&env, KEY_SRC, bytes, (size_t)size);
+    free(bytes);
+    seed_blob(env.scratch.db, 1, KEY_SRC, "black-hole.png", "image/png", size);
+    cf_active_ventries variation = {0};
+    cf_active_vval *resize = NULL, *dim = NULL;
+    CF_REQUIRE(cf_active_varr(&resize) == CF_OK);
+    CF_REQUIRE(cf_active_vint(16, &dim) == CF_OK);
+    CF_REQUIRE(cf_active_varr_push(resize, dim) == CF_OK);
+    CF_REQUIRE(cf_active_vint(16, &dim) == CF_OK);
+    CF_REQUIRE(cf_active_varr_push(resize, dim) == CF_OK);
+    CF_REQUIRE(cf_active_ventries_push(&variation, SP("resize_to_limit"), resize) == CF_OK);
+    cf_str key = {0}, signed_id = {0};
+    CF_REQUIRE(cf_active_variation_sign(secret_of(&env), &variation, &key) == CF_OK);
+    CF_REQUIRE(cf_active_blob_sign(secret_of(&env), 1, false, 0, &signed_id) == CF_OK);
+    char esc_id[1024], esc_key[4096], path[8192];
+    escape_token(&signed_id, esc_id, sizeof esc_id);
+    escape_token(&key, esc_key, sizeof esc_key);
+    snprintf(path, sizeof path, "/rails/active_storage/representations/proxy/%s/%s/black-hole.png", esc_id, esc_key);
+    for (int attempt = 0; attempt < 2; attempt++) {
+        cf_request req;
+        cf_response resp;
+        rp_request(&req, path, NULL);
+        CF_REQUIRE(run_request(&env, &req, &resp));
+        CF_CHECK(resp.status == 200);
+        unsigned char *body = NULL;
+        size_t len = 0;
+        CF_REQUIRE(response_body(&resp, &body, &len));
+        CF_CHECK(len > 24 && memcmp(body, "\x89PNG\r\n\x1a\n", 8) == 0);
+        if (len > 24) {
+            unsigned width = (unsigned)body[16] << 24 | (unsigned)body[17] << 16 | (unsigned)body[18] << 8 | body[19];
+            unsigned height = (unsigned)body[20] << 24 | (unsigned)body[21] << 16 | (unsigned)body[22] << 8 | body[23];
+            CF_CHECK(width > 0 && width <= 16 && height > 0 && height <= 16);
+        }
+        free(body);
+        cf_response_dispose(&resp);
+        if (attempt == 0) {
+            /* The second request must reuse the recorded variant even when
+             * its source file is no longer available. */
+            cf_storage *storage = NULL;
+            CF_REQUIRE(cf_storage_open(env.storage_root, &storage) == CF_OK);
+            CF_REQUIRE(cf_storage_delete(storage, SP(KEY_SRC)) == CF_OK);
+            cf_storage_close(storage);
+        }
+    }
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(env.scratch.db), "SELECT count(*) FROM active_storage_variant_records WHERE blob_id=1", -1, &stmt, NULL) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt) == SQLITE_ROW);
+    CF_CHECK(sqlite3_column_int(stmt, 0) == 1);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(env.scratch.db),
+        "SELECT json_extract(metadata,'$.analyzed'), json_extract(metadata,'$.width'), json_extract(metadata,'$.height') FROM active_storage_blobs WHERE id != 1", -1, &stmt, NULL) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt) == SQLITE_ROW);
+    CF_CHECK(sqlite3_column_int(stmt, 0) == 1);
+    CF_CHECK(sqlite3_column_int(stmt, 1) > 0 && sqlite3_column_int(stmt, 1) <= 16);
+    CF_CHECK(sqlite3_column_int(stmt, 2) > 0 && sqlite3_column_int(stmt, 2) <= 16);
+    CF_CHECK(sqlite3_step(stmt) == SQLITE_DONE);
+    sqlite3_finalize(stmt);
+    cf_active_ventries_dispose(&variation);
+    cf_str_dispose(&key);
+    cf_str_dispose(&signed_id);
+    env_close(&env);
+}
+
+CF_TEST(active_storage_representations_draws_pinned_video_preview) {
+    rp_env env;
+    CF_REQUIRE(env_open(&env));
+    FILE *input = fopen("tests/fixtures/media/alpha-centuri.mov", "rb");
+    CF_REQUIRE(input != NULL);
+    CF_REQUIRE(fseek(input, 0, SEEK_END) == 0);
+    long size = ftell(input);
+    CF_REQUIRE(size > 0);
+    rewind(input);
+    unsigned char *bytes = malloc((size_t)size);
+    CF_REQUIRE(bytes != NULL);
+    CF_REQUIRE(fread(bytes, 1, (size_t)size, input) == (size_t)size);
+    fclose(input);
+    stage_file(&env, KEY_SRC, bytes, (size_t)size);
+    free(bytes);
+    seed_blob(env.scratch.db, 1, KEY_SRC, "alpha-centuri.mov", "video/quicktime", size);
+    cf_active_ventries variation = {0};
+    cf_str key = {0}, id = {0};
+    CF_REQUIRE(cf_active_variation_sign(secret_of(&env), &variation, &key) == CF_OK);
+    CF_REQUIRE(cf_active_blob_sign(secret_of(&env), 1, false, 0, &id) == CF_OK);
+    char esc_id[1024], esc_key[4096], path[8192];
+    escape_token(&id, esc_id, sizeof esc_id);
+    escape_token(&key, esc_key, sizeof esc_key);
+    snprintf(path, sizeof path, "/rails/active_storage/representations/proxy/%s/%s/alpha-centuri.mov", esc_id, esc_key);
+    cf_request req;
+    cf_response resp;
+    rp_request(&req, path, NULL);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    unsigned char *body = NULL;
+    size_t len = 0;
+    CF_REQUIRE(response_body(&resp, &body, &len));
+    FILE *expected = fopen("tests/fixtures/vectors/storage/alpha-centuri-preview_image.jpg", "rb");
+    CF_REQUIRE(expected != NULL);
+    CF_REQUIRE(fseek(expected, 0, SEEK_END) == 0);
+    long expected_size = ftell(expected);
+    rewind(expected);
+    CF_CHECK(expected_size > 0 && len == (size_t)expected_size);
+    unsigned char *golden = malloc((size_t)expected_size);
+    CF_REQUIRE(golden != NULL);
+    CF_REQUIRE(fread(golden, 1, (size_t)expected_size, expected) == (size_t)expected_size);
+    fclose(expected);
+    if (len == (size_t)expected_size) CF_CHECK(memcmp(body, golden, len) == 0);
+    free(golden); free(body);
+    cf_response_dispose(&resp);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(cf_db_handle(env.scratch.db),
+        "SELECT filename,content_type,json_extract(metadata,'$.analyzed') FROM active_storage_blobs WHERE id != 1", -1, &stmt, NULL) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_step(stmt) == SQLITE_ROW);
+    CF_CHECK(strcmp((const char *)sqlite3_column_text(stmt, 0), "alpha-centuri.jpg") == 0);
+    CF_CHECK(strcmp((const char *)sqlite3_column_text(stmt, 1), "image/jpeg") == 0);
+    CF_CHECK(sqlite3_column_int(stmt, 2) == 1);
+    sqlite3_finalize(stmt);
+    cf_str_dispose(&key); cf_str_dispose(&id);
     env_close(&env);
 }
 

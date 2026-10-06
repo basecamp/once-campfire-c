@@ -78,6 +78,7 @@
  *      the turbo frame layout per the caller.
  */
 #include "cf.h"
+#include "actions/avatar_upload.h"
 
 #include "app.h"
 #include "auth.h"
@@ -463,6 +464,8 @@ struct users_write {
     cf_str password_digest; /* borrowed; valid only when has_digest */
     bool has_digest;
     users_avatar avatar;
+    const cf_active_staged *staged;
+    int64_t blob_id;
     cf_user created; /* out on success */
 };
 
@@ -485,7 +488,7 @@ static cf_err users_write_cb(cf_tx *tx, void *arg) {
 
     /* `attachments::assign(tx, Record::user(id), "avatar", avatar)`: the
      * created user can hold no attachment yet, so Delete is a verified
-     * no-op; Create/Invalid need the S02 staging layer (cf. first_runs). */
+     * no-op; Create inserts the staged upload, Invalid fails the save. */
     switch (write->avatar) {
     case USERS_AVATAR_UNCHANGED:
         return CF_OK;
@@ -500,6 +503,7 @@ static cf_err users_write_cb(cf_tx *tx, void *arg) {
         return found ? CF_INTERNAL : CF_OK;
     }
     case USERS_AVATAR_CREATE:
+        return cf_avatar_attach(tx, &write->created, write->staged, &write->blob_id);
     case USERS_AVATAR_INVALID:
         return CF_INTERNAL;
     }
@@ -796,6 +800,11 @@ cf_err cf_action_users_create(cf_ctx *ctx) {
         }
     }
 
+    cf_storage *storage = NULL;
+    cf_active_staged staged = {0};
+    if (fields.avatar == USERS_AVATAR_CREATE)
+        rc = cf_avatar_stage(ctx, cf_param_field(cf_ctx_param(ctx, users_span("user")), users_span("avatar")), &storage, &staged);
+
     struct users_write write = {
         .name = fields.name,
         .has_email = fields.has_email,
@@ -803,13 +812,18 @@ cf_err cf_action_users_create(cf_ctx *ctx) {
         .password_digest = digest,
         .has_digest = has_digest,
         .avatar = fields.avatar,
+        .staged = fields.avatar == USERS_AVATAR_CREATE ? &staged : NULL,
     };
-    rc = cf_write(ctx->app, users_write_cb, &write);
+    if (rc == CF_OK) rc = cf_write(ctx->app, users_write_cb, &write);
+    if (rc == CF_OK && write.staged != NULL) {
+        rc = cf_active_staged_commit(&staged);
+        if (rc == CF_OK) cf_avatar_analyze_later(ctx, write.blob_id);
+    }
+    cf_active_staged_dispose(&staged);
+    cf_storage_close(storage);
     cf_str_dispose(&digest);
 
     if (rc == CF_OK) {
-        /* `attachments::analyze_later(pending)`: pending is only non-empty
-         * for an uploaded avatar (S02); every reachable path has none. */
         cf_session session = {0};
         cf_err session_rc =
             cf_auth_start_new_session_for(ctx, &write.created, &session);

@@ -42,6 +42,7 @@
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "avatar_test.h"
 #include "../views/support/golden.h"
 
 #include <limits.h>
@@ -910,6 +911,25 @@ CF_TEST(first_runs_concurrent_setup_yields_one_account_and_room) {
     pthread_mutex_destroy(&blocker.mu);
     pthread_cond_destroy(&blocker.cv);
     env_close(&env);
+}
+
+CF_TEST(first_runs_multipart_avatar_is_committed_with_the_administrator) {
+    fr_env env;
+    CF_REQUIRE(env_open(&env));
+    char root[] = "/tmp/cf-avatar-first-XXXXXX";
+    avatar_test_root(env.config, root);
+    const char *body = "--avatar\r\nContent-Disposition: form-data; name=\"user[name]\"\r\n\r\nAda\r\n--avatar\r\nContent-Disposition: form-data; name=\"user[email_address]\"\r\n\r\nada@example.com\r\n--avatar\r\nContent-Disposition: form-data; name=\"user[password]\"\r\n\r\nsecret\r\n--avatar\r\n" AVATAR_PART;
+    cf_request req; cf_response resp;
+    post_first_run(&req, body, NULL, NULL);
+    req.headers[0].value = SP("multipart/form-data; boundary=avatar");
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    avatar_test_persisted(env.scratch.db, root);
+    CF_CHECK(count_rows(env.scratch.db,"accounts") == 1);
+    CF_CHECK(count_rows(env.scratch.db,"users") == 1);
+    cf_response_dispose(&resp);
+    env_close(&env);
+    avatar_test_remove_tree(root);
 }
 
 CF_TEST_MAIN()

@@ -39,6 +39,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "cf.h"
 
@@ -47,6 +48,18 @@
 typedef struct nghttp2_session nghttp2_session;
 
 typedef struct cf_front_h2_session cf_front_h2_session;
+
+/* Optional owner-loop aggregate reservations, installed before any input.
+ * Policy decode scratch and response copies are charged for their lifetime.
+ * Framing/HPACK have their own fixed protocol bounds. */
+typedef bool (*cf_front_h2_reserve_fn)(void *user, size_t bytes);
+typedef void (*cf_front_h2_release_fn)(void *user, size_t bytes);
+void cf_front_h2_set_budget(cf_front_h2_session *session, void *user,
+                            cf_front_h2_reserve_fn reserve_input,
+                            cf_front_h2_release_fn release_input,
+                            cf_front_h2_reserve_fn reserve_output,
+                            cf_front_h2_release_fn release_output);
+
 
 /* Fixed budgets: stream limits match the HTTP/1 budgets (http_internal.h);
  * connection-global limits match the loop-wide input/output reservations. */
@@ -181,6 +194,22 @@ cf_err cf_front_h2_submit_response_headers(
     const unsigned char **names, const size_t *name_lens,
     const unsigned char **values, const size_t *value_lens, size_t count,
     const unsigned char *body, size_t body_len);
+
+/* A bounded external DATA source. read returns nghttp2's DEFERRED until
+ * worker data is ready and sets its EOF flag only at the declared length.
+ * close runs exactly once after successful submission: physical stream
+ * close/reset or session teardown. On submission failure caller owns user.
+ * A NULL read emits headers only (HEAD), retaining content_length. */
+typedef ssize_t (*cf_front_h2_provider_read)(void *user, unsigned char *dst,
+                                           size_t max, uint32_t *flags);
+typedef void (*cf_front_h2_provider_close)(void *user);
+cf_err cf_front_h2_submit_response_provider(
+    cf_front_h2_session *session, int32_t stream_id, unsigned status,
+    const unsigned char **names, const size_t *name_lens,
+    const unsigned char **values, const size_t *value_lens, size_t count,
+    uint64_t content_length, cf_front_h2_provider_read read,
+    cf_front_h2_provider_close close, void *user);
+cf_err cf_front_h2_resume_data(cf_front_h2_session *session, int32_t stream_id);
 
 /* Cancel a stream (RST_STREAM CANCEL). Drops queued-but-unframed output;
  * committed bytes already left through mem_send. Idempotent. */

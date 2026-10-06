@@ -20,6 +20,7 @@
 #include "db/db_internal.h"
 #include "db/writer.h"
 #include "http/http.h"
+#include "jobs/jobs.h"
 #include "routes.h" /* cf_assets_serve (H03 static front mount) */
 
 #include <stdatomic.h>
@@ -59,6 +60,7 @@ struct cf_request_worker {
 struct cf_app {
     cf_config *config;               /* owned; freed only after workers join */
     cf_cable *cable;                 /* borrowed C02 cable (cf_app_set_cable) */
+    cf_jobs *jobs;                   /* startup-set borrowed job queue */
     cf_cache *cache;                 /* K01c: owned; created by cf_app_start */
     _Atomic uint64_t data_version;   /* 06: initialized to 1, one writer */
     _Atomic bool stop_requested;
@@ -189,6 +191,18 @@ cf_cable *cf_app_cable(const cf_app *app) {
     if (app == NULL) return NULL;
     return app->cable;
 }
+
+void cf_app_set_jobs(cf_app *app, cf_jobs *jobs) {
+    if (app != NULL) app->jobs = jobs;
+}
+
+cf_err cf_app_enqueue_media(cf_app *app, int64_t blob_id,
+                            cf_span task_type, cf_span variation) {
+    if (app == NULL) return CF_INVALID;
+    if (app->jobs == NULL) return CF_BUSY;
+    return cf_jobs_enqueue_media(app->jobs, blob_id, task_type, variation);
+}
+
 
 cf_err cf_app_register_worker(cf_app *app, pthread_t thread) {
     if (app == NULL) return CF_INVALID;

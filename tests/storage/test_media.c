@@ -480,7 +480,54 @@ CF_TEST(live_pinned_tool_bytes) {
     cf_span outspan = cf_buf_span(res.out);
     CF_CHECK(outspan.len > 0);
     cf_proc_result_dispose(&res);
+    cf_builder analyzed = {0};
+    CF_REQUIRE(cf_media_analyze_path(path,span("image/png"),span("{\"identified\":true}"),&analyzed) == CF_OK);
+    const char *image_meta = "{\"identified\":true,\"width\":1,\"height\":1,\"analyzed\":true}";
+    CF_CHECK(analyzed.len == strlen(image_meta));
+    CF_CHECK(memcmp(analyzed.ptr,image_meta,analyzed.len) == 0);
+    cf_builder_dispose(&analyzed);
     CF_REQUIRE(cf_media_temp_cleanup(path) == CF_OK);
+    /* Actual analyzer output against the committed Rails storage vectors.
+     * earth.png exceeds upload policy: this is tool metadata parity only. */
+    static const struct {const char *path,*type,*metadata;} vectors[] = {
+        {"tests/fixtures/media/moon.jpg","image/jpeg","{\"identified\":true,\"width\":640,\"height\":640,\"analyzed\":true}"},
+        {"tests/fixtures/media/earth.png","image/png","{\"identified\":true,\"width\":8877,\"height\":11096,\"analyzed\":true}"},
+        {"tests/fixtures/media/black_hole.jpg","image/jpeg","{\"identified\":true,\"width\":3840,\"height\":2160,\"analyzed\":true}"},
+        {"tests/fixtures/media/alpha-centuri.mov","video/quicktime","{\"identified\":true,\"width\":320.0,\"height\":180.0,\"duration\":65.84,\"display_aspect_ratio\":[16,9],\"audio\":false,\"video\":true,\"analyzed\":true}"}
+    };
+    for (size_t i=0;i<sizeof vectors/sizeof vectors[0];i++) {
+        CF_REQUIRE(cf_media_analyze_path(vectors[i].path,span(vectors[i].type),span("{\"identified\":true}"),&analyzed)==CF_OK);
+        CF_CHECK(analyzed.len==strlen(vectors[i].metadata));
+        CF_CHECK(analyzed.len==strlen(vectors[i].metadata) && memcmp(analyzed.ptr,vectors[i].metadata,analyzed.len)==0);
+        cf_builder_dispose(&analyzed);
+    }
+
+}
+
+/* Production analyzer metadata follows the pinned Ruby field rules. */
+CF_TEST(media_probe_metadata_video_rotation_and_aspect_ratio) {
+    cf_builder out = {0};
+    CF_REQUIRE(cf_media_probe_metadata(CF_MEDIA_ANALYZER_VIDEO,
+        span("{\"streams\":[{\"codec_type\":\"video\",\"width\":1920,\"height\":1080,\"display_aspect_ratio\":\"16:9\",\"side_data_list\":[{\"side_data_type\":\"Display Matrix\",\"rotation\":-90}]},{\"codec_type\":\"audio\"}],\"format\":{\"duration\":\"3.5\"}}"),
+        span("{\"identified\":true}"), &out) == CF_OK);
+    CF_CHECK(out.len == strlen("{\"identified\":true,\"width\":1080.0,\"height\":1920.0,\"duration\":3.5,\"angle\":-90,\"display_aspect_ratio\":[16,9],\"audio\":true,\"video\":true,\"analyzed\":true}"));
+    CF_CHECK(memcmp(out.ptr,"{\"identified\":true,\"width\":1080.0,\"height\":1920.0,\"duration\":3.5,\"angle\":-90,\"display_aspect_ratio\":[16,9],\"audio\":true,\"video\":true,\"analyzed\":true}",out.len) == 0);
+    cf_builder_dispose(&out);
+}
+
+CF_TEST(media_probe_metadata_audio_and_invalid_numbers) {
+    cf_builder out = {0};
+    CF_REQUIRE(cf_media_probe_metadata(CF_MEDIA_ANALYZER_AUDIO,
+        span("{\"streams\":[{\"codec_type\":\"audio\",\"duration\":\"1.25\",\"bit_rate\":\"16000\",\"sample_rate\":\"8000\",\"tags\":{\"title\":\"Example\"}}]}"),span("{}"),&out) == CF_OK);
+    CF_CHECK(out.len == strlen("{\"duration\":1.25,\"bit_rate\":16000,\"sample_rate\":8000,\"tags\":{\"title\":\"Example\"},\"analyzed\":true}"));
+    CF_CHECK(memcmp(out.ptr,"{\"duration\":1.25,\"bit_rate\":16000,\"sample_rate\":8000,\"tags\":{\"title\":\"Example\"},\"analyzed\":true}",out.len) == 0);
+    cf_builder_dispose(&out);
+    CF_CHECK(cf_media_probe_metadata(CF_MEDIA_ANALYZER_AUDIO,
+        span("{\"streams\":[{\"codec_type\":\"audio\",\"duration\":\"not-a-number\"}]}"),span("{}"),&out) == CF_INVALID);
+    CF_CHECK(out.len == 0);
+    CF_CHECK(cf_media_probe_metadata(CF_MEDIA_ANALYZER_VIDEO,
+        span("{\"streams\":[{\"codec_type\":\"video\",\"display_aspect_ratio\":\"16\"}]}"),span("{}"),&out) == CF_INVALID);
+    cf_builder_dispose(&out);
 }
 
 CF_TEST_MAIN()

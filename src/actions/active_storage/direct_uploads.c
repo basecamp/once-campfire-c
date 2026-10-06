@@ -16,8 +16,7 @@
  *   non-object `blob` is ParameterMissing, i.e. the C 400) -> the filename
  *   / checksum presence checks and the `byte_size` integer cast (422), the
  *   16 MiB cap (413) -> the blob row insert inside the writer (the P12-01
- *   mutation transaction; a pure insert, so there is nothing to
- *   revalidate) -> the direct-upload token signing (purpose `blob_token`,
+ *   mutation transaction; revalidate the authenticated actor) -> the direct-upload token signing (purpose `blob_token`,
  *   5-minute expiry) and the exact `as_json(...).merge(direct_upload:)`
  *   body at 200 (`application/json; charset=utf-8`).
  *
@@ -54,6 +53,7 @@
 #include "models/active_storage.h"
 #include "models/session.h"
 #include "models/types.h"
+#include "models/user.h"
 #include "storage/active_storage.h"
 #include "storage/storage.h"
 
@@ -93,7 +93,7 @@ static cf_err du_head(cf_ctx *ctx, unsigned status) {
 }
 
 /* `require_active_storage_authentication`: 401 without a session. */
-static cf_err du_require_session(cf_ctx *ctx) {
+static cf_err du_require_session(cf_ctx *ctx, int64_t *user_id) {
     cf_span raw = {NULL, 0};
     if (cf_ctx_cookie_get(ctx, du_span("session_token"), &raw) != CF_OK) {
         return du_head(ctx, 401);
@@ -112,6 +112,7 @@ static cf_err du_require_session(cf_ctx *ctx) {
     cf_session session = {0};
     rc = cf_session_find_by_token(ctx->reader, token, &found, &session);
     cf_str_dispose(&token);
+    if (rc == CF_OK && found) *user_id = session.user_id;
     cf_session_dispose(&session);
     if (rc != CF_OK) return rc;
     if (!found) return du_head(ctx, 401);
@@ -175,6 +176,7 @@ static cf_err du_metadata_json(cf_ctx *ctx, const cf_param *blob,
 }
 
 typedef struct {
+    int64_t user_id;
     cf_span filename;
     cf_span content_type;
     bool has_content_type;
@@ -186,11 +188,19 @@ typedef struct {
     bool has_created;
 } du_write_arg;
 
-/* The P12-01 mutation transaction: a pure blob-row insert (nothing read
- * before it to revalidate). Spans borrow the action's params/builders,
+/* The P12-01 mutation transaction: a blob-row insert with actor revalidation. Spans borrow the action's params/builders,
  * which stay alive until `cf_write` returns. */
 static cf_err du_write_cb(cf_tx *tx, void *arg) {
     du_write_arg *write = arg;
+    cf_db *db = cf_tx_db(tx);
+    if (db == NULL) return CF_INTERNAL;
+    bool found = false;
+    cf_user actor = {0};
+    cf_err auth_rc = cf_user_find_by_id(db, write->user_id, &found, &actor);
+    bool allowed = auth_rc == CF_OK && found && cf_user_is_active(&actor);
+    cf_user_dispose(&actor);
+    if (auth_rc != CF_OK) return auth_rc;
+    if (!allowed) return CF_FORBIDDEN;
     cf_blob input;
     memset(&input, 0, sizeof input);
     input.byte_size = write->byte_size;
@@ -224,7 +234,8 @@ cf_err cf_action_active_storage_direct_uploads_create(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
     cf_err rc = cf_check_csrf(ctx, false);
     if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
-    rc = du_require_session(ctx);
+    int64_t user_id = 0;
+    rc = du_require_session(ctx, &user_id);
     if (rc != CF_OK || cf_auth_halted(ctx)) return rc;
 
     /* `params.expect(blob: [...])`: missing/non-object is ParameterMissing
@@ -274,6 +285,7 @@ cf_err cf_action_active_storage_direct_uploads_create(cf_ctx *ctx) {
 
     du_write_arg write;
     memset(&write, 0, sizeof write);
+    write.user_id = user_id;
     write.filename = filename;
     write.content_type = content_type;
     write.has_content_type = has_content_type;

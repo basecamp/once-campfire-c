@@ -39,8 +39,8 @@
  *    key iterator (a second integrator request).
  *  - logo Delete reuses the logos packet's destroy/touch/purge sequence
  *    (duplicated here because packets cannot share code through shared
- *    files); logo Upload returns CF_INTERNAL before the write (S02 staging
- *    has not landed) and a non-empty logo string returns CF_INTERNAL (the
+ *    files); logo Upload stages bytes before the writer and attaches the
+ *    blob atomically. A non-empty logo string returns CF_INTERNAL (the
  *    reference raises "expected attachable").
  *
  * Render (A02/V02): the Edit shim is gone; edit renders
@@ -61,6 +61,8 @@
  * c_symbols: cf_action_accounts_edit, cf_action_accounts_update.
  */
 #include "cf.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
 
 #include "http/params.h"
 
@@ -413,7 +415,7 @@ static const char accounts_settings_key[] =
 /* `params.require(:account).permit(:name, :logo, settings: {})` with the
  * reference reads. CF_INVALID is ParameterMissing (400); CF_INTERNAL is a
  * value the reference raises on (unknown settings key, non-empty logo
- * string) or media work that has not landed (logo upload). */
+ * string). Multipart uploads are staged before the writer transaction. */
 static cf_err accounts_parse_account(cf_ctx *ctx, accounts_fields *fields) {
     memset(fields, 0, sizeof *fields);
     const cf_param *account = cf_ctx_param(ctx, accounts_span("account"));
@@ -590,10 +592,12 @@ typedef struct {
     size_t settings_len;
     bool settings_given;
     accounts_logo logo;
+    const cf_active_staged *staged;
+    int64_t blob_id;
 } accounts_write_arg;
 
 static cf_err accounts_write_cb(cf_tx *tx, void *arg) {
-    const accounts_write_arg *write = arg;
+    accounts_write_arg *write = arg;
     cf_err rc = accounts_revalidate_admin(tx, write->actor_id);
     if (rc != CF_OK) return rc;
     cf_db *db = cf_tx_db(tx);
@@ -611,10 +615,34 @@ static cf_err accounts_write_cb(cf_tx *tx, void *arg) {
         cf_account_dispose(&account);
         return rc;
     }
-    if (write->logo == ACCOUNTS_LOGO_DELETE) {
+    if (write->logo == ACCOUNTS_LOGO_DELETE || write->logo == ACCOUNTS_LOGO_CREATE) {
         bool destroyed = false;
         rc = accounts_logo_destroy(tx, account.id, &destroyed);
         (void)destroyed;
+    }
+    if (rc == CF_OK && write->logo == ACCOUNTS_LOGO_CREATE) {
+        if (write->staged == NULL) {
+            rc = CF_INTERNAL;
+        } else {
+            const cf_active_staged *staged = write->staged;
+            cf_blob input = {0}, blob = {0};
+            input.key = staged->key;
+            input.filename = staged->filename;
+            input.content_type = staged->content_type;
+            input.metadata = (cf_optional_str){true, staged->metadata};
+            input.service_name = staged->service_name;
+            input.byte_size = staged->byte_size;
+            input.checksum = (cf_optional_str){true, staged->checksum};
+            rc = cf_blob_create(tx, &input, &blob);
+            cf_attachment attachment = {0};
+            if (rc == CF_OK)
+                rc = cf_attachment_create(tx, accounts_cstr("Account"),
+                    account.id, accounts_cstr("logo"), blob.id, &attachment);
+            if (rc == CF_OK) rc = accounts_touch_account(tx, account.id);
+            if (rc == CF_OK) write->blob_id = blob.id;
+            cf_attachment_dispose(&attachment);
+            cf_blob_dispose(&blob);
+        }
     }
     cf_account_dispose(&account);
     return rc;
@@ -640,12 +668,26 @@ cf_err cf_action_accounts_update(cf_ctx *ctx) {
     rc = accounts_parse_account(ctx, &fields);
     if (rc != CF_OK) return rc;
 
-    /* The reference stages the logo before the write and raises on an
-     * invalid value: both fail before any row changes (500). */
-    if (fields.logo == ACCOUNTS_LOGO_CREATE ||
-        fields.logo == ACCOUNTS_LOGO_INVALID) {
+    /* Invalid values fail before mutation. Upload bytes are staged off the
+     * writer; the blob/attachment rows follow the account save atomically. */
+    if (fields.logo == ACCOUNTS_LOGO_INVALID) {
         accounts_fields_dispose(&fields);
         return CF_INTERNAL;
+    }
+
+    cf_storage *storage = NULL;
+    cf_active_staged staged = {0};
+    if (fields.logo == ACCOUNTS_LOGO_CREATE) {
+        const cf_param *raw = cf_ctx_param(ctx, accounts_span("account"));
+        const cf_param *logo = cf_param_field(raw, accounts_span("logo"));
+        cf_upload upload = {0};
+        rc = cf_param_upload(logo, &upload);
+        const cf_config *config = cf_app_config(ctx->app);
+        if (rc == CF_OK && config == NULL) rc = CF_INTERNAL;
+        if (rc == CF_OK) rc = cf_storage_open(config->storage_path, &storage);
+        if (rc == CF_OK)
+            rc = cf_active_stage_upload(storage, upload.fd, upload.filename,
+                upload.content_type, upload.has_content_type, &staged);
     }
 
     accounts_write_arg arg;
@@ -653,6 +695,7 @@ cf_err cf_action_accounts_update(cf_ctx *ctx) {
     arg.actor_id = actor_id;
     arg.account_id = account_id;
     arg.logo = fields.logo;
+    arg.staged = fields.logo == ACCOUNTS_LOGO_CREATE ? &staged : NULL;
     if (fields.has_name) {
         arg.name.present = true;
         arg.name.value = fields.name;
@@ -662,7 +705,15 @@ cf_err cf_action_accounts_update(cf_ctx *ctx) {
         arg.settings_len = fields.settings_len;
         arg.settings_given = true;
     }
-    rc = cf_write(ctx->app, accounts_write_cb, &arg);
+    if (rc == CF_OK) rc = cf_write(ctx->app, accounts_write_cb, &arg);
+    if (rc == CF_OK && arg.staged != NULL) {
+        rc = cf_active_staged_commit(&staged);
+        if (rc == CF_OK && cf_app_enqueue_media(ctx->app, arg.blob_id,
+            accounts_span("analyze"), (cf_span){NULL, 0}) != CF_OK)
+            fprintf(stderr, "campfire: dropped account logo analysis job\n");
+    }
+    cf_active_staged_dispose(&staged);
+    cf_storage_close(storage);
     accounts_fields_dispose(&fields);
     if (rc != CF_OK) return rc;
 

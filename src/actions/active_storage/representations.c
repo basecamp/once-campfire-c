@@ -1,63 +1,11 @@
-/* src/actions/active_storage/representations.c — ActiveStorage
- * representations controllers (task S02-C; route IDs 172
- * `redirect#show`, 173 `proxy#show`, 174 the legacy `redirect#show` path;
- * contracts/routes.json).
- *
- * Source: tmp/rust-ref/crates/campfire/src/active_storage.rs
- * (`representations_redirect`, `representations_proxy`, `set_blob`,
- * `set_representation`, `processed_representation`, `processed_preview`),
- * over the S02 helpers (src/storage/active_storage.{c,h}), the D01 blob
- * and attachment models, and the S01 disk service. Storage semantics stay
- * S02's; this file is the controller layer.
- *
- * Translated in order:
- *   verify_authenticity_token (CSRF only, as in blobs.c) -> set_blob (bad
- *   signature: `head :not_found`; missing blob: RecordNotFound) ->
- *   set_representation (`Variation.decode`: a bad key is `head :not_found`;
- *   a verified key whose JSON is not a transformations object raises
- *   internally, i.e. CF_INTERNAL from the S02 verify helper) -> the
- *   already-processed image, or the S03 arm:
- *     variable blobs: the variation defaulted with `format` (see the shim
- *     below), digested, and resolved through the variant-record SELECT the
- *     S02 worker left for actions (`find_variant_record` + the record's
- *     `image` attachment, D01); a recorded image is served, anything that
- *     still needs a transform fails loudly through
- *     cf_active_representation_process (CF_INTERNAL until S03 lands — a
- *     route never serves an approximated or stub transform).
- *     previewable (video) blobs: the existing `preview_image` attachment
- *     serves only an empty variation; drawing the preview and varianting it
- *     both need S03 and fail loudly.
- *     anything else (`Unrepresentable`) fails loudly as well.
- *   -> redirect: `expires_in(5.minutes)` + `redirect_to image.url`;
- *   proxy: `http_cache_forever` (304 when fresh) else the image stream
- *   (no byte ranges and no Accept-Ranges on this controller, exactly like
- *   the reference).
- *
- * The variant-record INSERT half of `create_or_find_by!` (with its
- * SQLITE_CONSTRAINT_UNIQUE loser-path and re-read) and the purge
- * selection/refuse/delete with PurgeBlob events belong to the packets that
- * can transform and destroy blobs (S03 and the purge job): recording a
- * variant requires the transformed file, so no INSERT happens here. The
- * SELECT half lives here (static statement below); D01 owns no accessor
- * for active_storage_variant_records (see the integrator request at the
- * end of this file).
- *
- * SHIM (S03-owned): `default_variant_format` needs Marcel's extension
- * tables (`for_extension`, `extensions().first()`), which the S02 port
- * deliberately leaves with S03 analysis. The static table below carries
- * the exact pinned rows for the image extensions (verified against
- * tmp/rust-ref/crates/storage/src/tables.rs EXTENSIONS) plus the exact
- * TYPE_EXTS firsts for the four web-image types; every other extension
- * reports no agreement (falling back to the first registered extension,
- * then "png", exactly like the reference's `unwrap_or_else`). Any
- * extension outside the table whose agreement matters is S03's to add
- * with the full Marcel port.
- *
- * c_symbols for the integrator's route rebind (src/routes.c rows 172-174):
- *   cf_action_active_storage_representations_redirect_show,
- *   cf_action_active_storage_representations_proxy_show.
- * The integrator also owns src/actions/actions.h and the Makefile
- * (this file's build entry).
+/* Active Storage representations: reuse recorded images, otherwise transform
+ * variants or draw video previews off the writer through bounded subprocesses.
+ * The fixed libvips adapter mirrors the pinned reference's page0/autorotation,
+ * down-only resize and sharpen mask; ffmpeg uses the reference poster argv.
+ * Generated images are staged and analyzed before a short writer transaction
+ * records the variant/preview attachment. A competing winner is re-read and
+ * the losing staged file is discarded. Failed work never publishes a row.
+ * Source: crates/campfire/src/active_storage.rs and crates/storage/src/storage.rs.
  */
 #include "cf.h"
 
@@ -71,6 +19,9 @@
 #include "models/types.h"
 #include "storage/active_storage.h"
 #include "storage/storage.h"
+#include "storage/media.h"
+#include <errno.h>
+#include <fcntl.h>
 
 #include <openssl/evp.h>
 #include <sqlite3.h>
@@ -323,10 +274,7 @@ static bool rp_content_is_video(cf_span content_type) {
 
 /* ---- representation resolution -------------------------------------------- */
 
-/* The processed image for `variation` over `blob`, without transforming:
- * an already-recorded variant or preview image. found=false exactly when
- * media completion would be required (the caller fails loudly through
- * cf_active_representation_process). */
+/* Resolve an already recorded image without doing media work. */
 static cf_err rp_resolve_image(cf_ctx *ctx, const cf_blob *blob,
                                const cf_active_ventries *variation,
                                cf_blob *out, bool *found) {
@@ -416,6 +364,260 @@ static cf_err rp_resolve_image(cf_ctx *ctx, const cf_blob *blob,
         return CF_OK;
     }
     return CF_OK;
+}
+
+/* Expensive processing runs on the request worker before the short writer
+ * transaction. Published files remain owned by staged until the commit. */
+static bool rp_blank(const cf_active_vval *v) {
+    if (v->kind == CF_ACTIVE_V_NIL) return true;
+    if (v->kind == CF_ACTIVE_V_BOOL) return !v->boolean;
+    if (v->kind == CF_ACTIVE_V_ARR) return v->count == 0;
+    if (v->kind == CF_ACTIVE_V_HASH) return v->hcount == 0;
+    if (v->kind == CF_ACTIVE_V_STR) {
+        for (size_t i = 0; i < v->len; i++)
+            if (v->bytes[i] != ' ' && v->bytes[i] != '\t' &&
+                v->bytes[i] != '\r' && v->bytes[i] != '\n') return false;
+        return true;
+    }
+    return false;
+}
+
+static cf_err rp_operation(const cf_active_ventries *variation,
+                           char format[16], int32_t *width, int32_t *height) {
+    strcpy(format, "png");
+    *width = *height = 0;
+    for (size_t i = 0; i < variation->len; i++) {
+        const cf_active_ventry *e = &variation->items[i];
+        const cf_active_vval *v = e->value;
+        if (strcmp(e->key, "format") == 0) {
+            if ((v->kind != CF_ACTIVE_V_STR && v->kind != CF_ACTIVE_V_SYM) ||
+                v->len >= 16 || !cf_media_format_valid((cf_span){(unsigned char *)v->bytes, v->len})) return CF_INVALID;
+            for (size_t k = 0; k < v->len; k++)
+                format[k] = v->bytes[k] >= 'A' && v->bytes[k] <= 'Z' ? v->bytes[k] + ('a' - 'A') : v->bytes[k];
+            format[v->len] = 0;
+        } else {
+            if (strcmp(e->key, "combine_options") == 0) return CF_INVALID;
+            if (rp_blank(v)) continue;
+            if (strcmp(e->key, "resize_to_limit") != 0 ||
+                v->kind != CF_ACTIVE_V_ARR || v->count != 2) return CF_INVALID;
+            int32_t dims[2] = {0, 0};
+            for (size_t k = 0; k < 2; k++) {
+                const cf_active_vval *d = v->items[k];
+                if (d->kind == CF_ACTIVE_V_NIL) continue;
+                if (d->kind != CF_ACTIVE_V_INT || d->integer <= 0 || d->integer > INT32_MAX) return CF_INVALID;
+                dims[k] = (int32_t)d->integer;
+            }
+            if (dims[0] == 0 && dims[1] == 0) return CF_INVALID;
+            *width = dims[0]; *height = dims[1];
+        }
+    }
+    return CF_OK;
+}
+
+static cf_err rp_copy_to_temp(cf_storage *storage, cf_span key,
+                              char path[512], int *fd_out) {
+    int src = -1;
+    uint64_t size = 0;
+    cf_err rc = cf_storage_open_read(storage, key, &src, &size);
+    if (rc == CF_OK && size > CF_STORAGE_IMPORT_MAX_BYTES) rc = CF_LIMIT;
+    if (rc == CF_OK) rc = cf_media_temp_create("/tmp", ".input", path, 512, fd_out);
+    unsigned char buffer[65536];
+    uint64_t offset = 0;
+    while (rc == CF_OK && offset < size) {
+        size_t take = size - offset < sizeof buffer ? (size_t)(size - offset) : sizeof buffer;
+        ssize_t got = pread(src, buffer, take, (off_t)offset);
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) { rc = CF_IO; break; }
+        size_t done = 0;
+        while (done < (size_t)got) {
+            ssize_t wrote = write(*fd_out, buffer + done, (size_t)got - done);
+            if (wrote < 0 && errno == EINTR) continue;
+            if (wrote <= 0) { rc = CF_IO; break; }
+            done += (size_t)wrote;
+        }
+        offset += (uint64_t)got;
+    }
+    if (src >= 0) close(src);
+    return rc;
+}
+
+typedef struct {
+    const cf_blob *source;
+    const cf_active_staged *staged;
+    cf_span digest;
+    bool preview, inserted;
+    cf_blob image;
+} rp_record_arg;
+
+static cf_err rp_record(cf_tx *tx, void *opaque) {
+    rp_record_arg *arg = opaque;
+    cf_db *db = cf_tx_db(tx);
+    cf_blob source = {0};
+    cf_err rc = cf_blob_find(db, arg->source->id, &source);
+    cf_blob_dispose(&source);
+    if (rc != CF_OK) return rc;
+    int64_t record = arg->source->id;
+    bool existing = false;
+    cf_attachment attachment = {0};
+    if (arg->preview) {
+        rc = cf_attachment_find_for(db, (cf_str){"ActiveStorage::Blob", 19},
+                                   record, (cf_str){"preview_image", 13}, &existing, &attachment);
+    } else {
+        rc = rp_find_variant_record(db, record, arg->digest, &existing, &record);
+        if (rc == CF_OK && existing) {
+            bool found = false;
+            rc = cf_attachment_find_for(db, (cf_str){"ActiveStorage::VariantRecord", 28}, record,
+                                       (cf_str){"image", 5}, &found, &attachment);
+            if (rc == CF_OK && !found) rc = CF_NOT_FOUND;
+        }
+    }
+    if (rc == CF_OK && existing) rc = cf_blob_find(db, attachment.blob_id, &arg->image);
+    cf_attachment_dispose(&attachment);
+    if (rc != CF_OK || existing) return rc;
+    if (!arg->preview) {
+        sqlite3_stmt *stmt = NULL;
+        int step = sqlite3_prepare_v2(cf_db_handle(db),
+            "INSERT INTO active_storage_variant_records(blob_id,variation_digest) VALUES (?1,?2)", -1, &stmt, NULL);
+        rc = cf_db_err(step);
+        if (rc == CF_OK) rc = cf_stmt_bind_i64(stmt, 1, arg->source->id);
+        if (rc == CF_OK) rc = cf_stmt_bind_text(stmt, 2, arg->digest);
+        if (rc == CF_OK) {
+            int result = sqlite3_step(stmt);
+            rc = result == SQLITE_DONE ? CF_OK : cf_db_err(result);
+        }
+        sqlite3_finalize(stmt);
+        if (rc != CF_OK) return rc;
+        record = sqlite3_last_insert_rowid(cf_db_handle(db));
+    }
+    const cf_active_staged *st = arg->staged;
+    cf_blob blob = {.key=st->key, .filename=st->filename, .content_type=st->content_type,
+        .metadata={true, st->metadata}, .service_name=st->service_name, .byte_size=st->byte_size,
+        .checksum={true, st->checksum}};
+    rc = cf_blob_create(tx, &blob, &arg->image);
+    if (rc == CF_OK) {
+        rc = cf_attachment_create(tx, arg->preview ? (cf_str){"ActiveStorage::Blob", 19} : (cf_str){"ActiveStorage::VariantRecord", 28},
+            record, arg->preview ? (cf_str){"preview_image", 13} : (cf_str){"image", 5}, arg->image.id, &attachment);
+        cf_attachment_dispose(&attachment);
+    }
+    if (rc == CF_OK) arg->inserted = true;
+    return rc;
+}
+
+static cf_err rp_process(cf_ctx *ctx, const cf_blob *blob,
+                         const cf_active_ventries *variation, bool preview,
+                         cf_blob *out) {
+    cf_active_ventries defaults = {0}, defaulted = {0};
+    cf_active_vval *v = NULL;
+    cf_str digest = {0};
+    cf_span ct = blob->content_type.present ? rp_str_span(blob->content_type.value) : (cf_span){0};
+    cf_err rc = CF_OK;
+    char format[16] = "jpg";
+    int32_t width = 0, height = 0;
+    if (!preview) {
+        rc = cf_active_vstr(rp_default_variant_format(ct, rp_str_span(blob->filename)), &v);
+        if (rc == CF_OK) { rc = cf_active_ventries_push(&defaults, rp_span("format"), v); if (rc != CF_OK) cf_active_vval_dispose(v); }
+        if (rc == CF_OK) rc = cf_active_variation_default(&defaults, variation, &defaulted);
+        if (rc == CF_OK) {
+            rc = rp_operation(&defaulted, format, &width, &height);
+            if (rc == CF_INVALID) rc = CF_INTERNAL;
+        }
+        if (rc == CF_OK) rc = cf_active_variation_digest(&defaulted, &digest);
+    }
+    cf_active_ventries_dispose(&defaults);
+    cf_active_ventries_dispose(&defaulted);
+    if (rc != CF_OK) { cf_str_dispose(&digest); return rc; }
+    rc = cf_media_slots_acquire();
+    if (rc != CF_OK) { cf_str_dispose(&digest); return rc; }
+    cf_storage *storage = NULL;
+    cf_active_staged staged = {0};
+    char input[512] = {0}, output[512] = {0};
+    int input_fd = -1, output_fd = -1;
+    cf_proc_result result = {0};
+    rc = rp_storage_open(ctx, &storage);
+    if (rc == CF_OK) rc = rp_copy_to_temp(storage, rp_str_span(blob->key), input, &input_fd);
+    char suffix[20];
+    snprintf(suffix, sizeof suffix, ".%s", format);
+    if (rc == CF_OK) rc = cf_media_temp_create("/tmp", suffix, output, sizeof output, &output_fd);
+    cf_proc_opts opts;
+    cf_media_argv argv;
+    char width_text[16], height_text[16];
+    snprintf(width_text, sizeof width_text, "%d", width);
+    snprintf(height_text, sizeof height_text, "%d", height);
+    char *args[] = {"transform", input, output, format, width_text, height_text, NULL};
+    if (rc == CF_OK && preview) {
+        rc = cf_media_poster_argv(&argv, input);
+        if (rc == CF_OK) rc = cf_media_proc_opts(&opts, CF_PROC_FFMPEG, &argv, CF_MEDIA_OUTPUT_MAX_BYTES, CF_MEDIA_FFMPEG_TIMEOUT_MS);
+    } else if (rc == CF_OK) {
+        opts = (cf_proc_opts){.exe=CF_PROC_VIPS_ADAPTER, .args=args, .stdin_fd=-1, .stdout_fd=-1,
+            .stdout_limit=CF_MEDIA_METADATA_MAX_BYTES, .stderr_fd=-1, .timeout_ms=CF_MEDIA_VIPS_TIMEOUT_MS};
+    }
+    if (rc == CF_OK) {
+        rc = cf_proc_run(&opts, &result);
+        if (rc == CF_NOT_FOUND) rc = CF_INTERNAL; /* missing required tool */
+    }
+    if (rc == CF_OK) rc = cf_media_check_result(&result);
+    if (rc == CF_OK && preview) {
+        cf_span bytes = cf_buf_span(result.out);
+        if (bytes.len == 0) rc = CF_IO;
+        size_t done = 0;
+        while (rc == CF_OK && done < bytes.len) {
+            ssize_t n = write(output_fd, bytes.ptr + done, bytes.len - done);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) { rc = CF_IO; break; }
+            done += (size_t)n;
+        }
+    }
+    cf_proc_result_dispose(&result);
+    cf_media_slots_release();
+    cf_builder filename = {0}, metadata = {0};
+    size_t base = blob->filename.len;
+    for (size_t i = blob->filename.len; i > 0; i--) {
+        if (blob->filename.ptr[i-1] == '.') { base = i-1; break; }
+        if (blob->filename.ptr[i-1] == '/' || blob->filename.ptr[i-1] == '\\') break;
+    }
+    if (rc == CF_OK) rc = cf_builder_append(&filename, (cf_span){(unsigned char *)blob->filename.ptr, base});
+    if (rc == CF_OK) rc = cf_builder_append(&filename, rp_span(suffix));
+    const char *output_ct = preview ? "image/jpeg" : cf_media_content_type_for_format(rp_span(format));
+    if (rc == CF_OK) rc = cf_active_stage_upload(storage, output_fd, (cf_span){filename.ptr,filename.len}, rp_span(output_ct), true, &staged);
+    if (rc == CF_OK) rc = cf_media_analyze_path(output, rp_str_span(staged.content_type.value), rp_str_span(staged.metadata), &metadata);
+    if (rc == CF_OK) {
+        cf_str_dispose(&staged.metadata);
+        staged.metadata.ptr = malloc(metadata.len + 1);
+        if (staged.metadata.ptr == NULL) rc = CF_NOMEM;
+        else { memcpy(staged.metadata.ptr, metadata.ptr, metadata.len); staged.metadata.ptr[metadata.len] = 0; staged.metadata.len = metadata.len; }
+    }
+    rp_record_arg record = {.source=blob, .staged=&staged, .digest=rp_str_span(digest), .preview=preview};
+    if (rc == CF_OK) rc = cf_write(ctx->app, rp_record, &record);
+    if (rc == CF_OK && record.inserted) rc = cf_active_staged_commit(&staged);
+    if (rc == CF_OK) { *out = record.image; memset(&record.image,0,sizeof record.image); }
+    cf_blob_dispose(&record.image);
+    cf_active_staged_dispose(&staged);
+    if (input_fd >= 0) close(input_fd);
+    if (output_fd >= 0) close(output_fd);
+    if (input[0]) (void)cf_media_temp_cleanup(input);
+    if (output[0]) (void)cf_media_temp_cleanup(output);
+    if (storage != NULL) cf_storage_close(storage);
+    cf_builder_dispose(&filename); cf_builder_dispose(&metadata); cf_str_dispose(&digest);
+    return rc;
+}
+
+cf_err cf_active_processed_representation(cf_ctx *ctx, const cf_blob *blob,
+                           const cf_active_ventries *variation, cf_blob *out) {
+    bool found = false;
+    cf_err rc = rp_resolve_image(ctx, blob, variation, out, &found);
+    if (rc != CF_OK || found) return rc;
+    cf_span ct = blob->content_type.present ? rp_str_span(blob->content_type.value) : (cf_span){0};
+    if (cf_active_content_type_variable(ct)) return rp_process(ctx, blob, variation, false, out);
+    if (!rp_content_is_video(ct)) return CF_INTERNAL;
+    cf_active_ventries empty = {0};
+    cf_blob preview = {0};
+    rc = rp_resolve_image(ctx, blob, &empty, &preview, &found);
+    if (rc == CF_OK && !found) rc = rp_process(ctx, blob, &empty, true, &preview);
+    if (rc == CF_OK && cf_active_ventries_empty(variation)) {
+        *out = preview; memset(&preview, 0, sizeof preview);
+    } else if (rc == CF_OK) rc = cf_active_processed_representation(ctx, &preview, variation, out);
+    cf_blob_dispose(&preview);
+    return rc;
 }
 
 /* ---- shared serve machinery (over the resolved image blob) ---------------- */
@@ -720,8 +922,7 @@ static cf_err rp_answer_proxy(cf_ctx *ctx, const cf_blob *image,
     return rc;
 }
 
-/* Resolve the blob, decode the variation, and find the processed image;
- * the S03 arm fails loudly where media completion would be required. */
+/* Verify both signed parameters before processing or serving the image. */
 static cf_err rp_resolve_image_request(cf_ctx *ctx, cf_blob *image_out,
                                        cf_span *disp_param_out,
                                        bool *has_disp_out) {
@@ -749,21 +950,9 @@ static cf_err rp_resolve_image_request(cf_ctx *ctx, cf_blob *image_out,
         cf_blob_dispose(&blob);
         return rp_head(ctx, 404);
     }
-    bool served = false;
     memset(image_out, 0, sizeof *image_out);
-    rc = rp_resolve_image(ctx, &blob, &variation, image_out, &served);
-    bool empty = cf_active_ventries_empty(&variation);
+    rc = cf_active_processed_representation(ctx, &blob, &variation, image_out);
     cf_active_ventries_dispose(&variation);
-    cf_span raw_ct = {NULL, 0};
-    if (blob.content_type.present) {
-        raw_ct = rp_str_span(blob.content_type.value);
-    }
-    if (rc == CF_OK && !served) {
-        /* Media completion required (transform, preview draw, variant
-         * recording) or an unrepresentable blob: fail loudly, never
-         * approximate. */
-        rc = cf_active_representation_process(raw_ct, !empty);
-    }
     cf_blob_dispose(&blob);
     if (rc != CF_OK) {
         cf_blob_dispose(image_out);
@@ -813,21 +1002,3 @@ cf_err cf_action_active_storage_representations_proxy_show(cf_ctx *ctx) {
     cf_blob_dispose(&image);
     return rc;
 }
-
-/* Integrator requests (routes.c/actions.h/Makefile, owned by the
- * integrator):
- *   1. Bind rows 172-174 to
- *      cf_action_active_storage_representations_redirect_show (172, 174)
- *      and cf_action_active_storage_representations_proxy_show (173); add
- *      both declarations to src/actions/actions.h and this file to the
- *      Makefile's action sources.
- *   2. D01 model accessor for `find_variant_record`
- *      (`SELECT id FROM active_storage_variant_records WHERE blob_id = ?1
- *      AND variation_digest = ?2`) so the static statement above can move
- *      into src/models/active_storage.*.
- *   3. S03 owns the Marcel port (`for_extension`, `extensions`) behind
- *      `default_variant_format`, the `ffmpeg_exists` preview gate, and the
- *      variant/preview transform + record path (INSERT with the
- *      SQLITE_CONSTRAINT_UNIQUE loser-path and re-read, purge
- *      selection/refuse/delete with PurgeBlob events).
- */

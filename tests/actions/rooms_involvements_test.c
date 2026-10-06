@@ -366,6 +366,8 @@ static void seed_base(inv_env *env) {
 
 /* --- route IDs ------------------------------------------------------------- */
 
+#include "auth_write_race.h"
+
 CF_TEST(involvements_route_ids_bind_the_actions) {
     inv_env env;
     CF_REQUIRE(env_open(&env));
@@ -456,6 +458,10 @@ CF_TEST(involvements_show_renders_the_room_kind_and_involvement) {
     CF_CHECK(response_body_contains(
         &resp, "data-turbo-frame-url-param=\"/rooms/42/involvement\""));
     CF_CHECK(response_body_contains(&resp, "mentions"));
+    CF_CHECK(response_body_contains(&resp, "action=\"/rooms/42/involvement?involvement=everything\""));
+    CF_CHECK(response_body_contains(&resp, "value=\"put\""));
+    CF_CHECK(response_body_contains(&resp, "Notifying about @ mentions"));
+    CF_CHECK(!response_body_contains(&resp, "disabled"));
     CF_CHECK(response_body_contains(&resp, "<title>"));
     CF_CHECK(response_head_contains(&resp, &req, "Link:"));
     cf_response_dispose(&resp);
@@ -481,7 +487,8 @@ CF_TEST(involvements_show_renders_nil_and_other_kinds) {
     CF_CHECK(closed_resp.status == 200);
     CF_CHECK(response_body_contains(&closed_resp,
                                     "id=\"involvement_rooms_closed_42\""));
-    CF_CHECK(!response_body_contains(&closed_resp, "mentions"));
+    CF_CHECK(response_body_contains(&closed_resp, "involvement?involvement=mentions"));
+    CF_CHECK(response_body_contains(&closed_resp, "notification-bell-loading"));
     cf_response_dispose(&closed_resp);
 
     cf_request direct_req;
@@ -1013,4 +1020,36 @@ CF_TEST(involvements_update_direct_room_skips_the_broadcast) {
     env_close(&env);
 }
 
+CF_TEST(involvements_rejects_queued_authorization_loss) {
+    const char *changes[] = {
+        "UPDATE users SET status=2 WHERE id=1",
+        "UPDATE users SET status=1 WHERE id=1",
+        "DELETE FROM memberships WHERE user_id=1 AND room_id=42"};
+    for (size_t i = 0; i < 3; i++) {
+        inv_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_base(&env);
+        cf_cable_stats before = {0}, after = {0};
+        cf_cable_stats_get(env.cable, &before);
+        cf_request req;
+        cf_response resp;
+        prepare_update(&env, &req, CF_PATCH, 1, "/rooms/42/involvement",
+                       "involvement=everything");
+        auth_write_race race;
+        CF_REQUIRE(
+            auth_race_begin(env.app, env.scratch.path, &race, changes[i]));
+        CF_REQUIRE(
+            auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status == 403);
+        char *value = read_involvement(env.scratch.db, 42, 1);
+        CF_CHECK(i < 2 ? value != NULL && strcmp(value, "mentions") == 0
+                       : value == NULL);
+        free(value);
+        cf_cable_stats_get(env.cable, &after);
+        CF_CHECK(after.published == before.published);
+        cf_response_dispose(&resp);
+        env_close(&env);
+    }
+}
 CF_TEST_MAIN()

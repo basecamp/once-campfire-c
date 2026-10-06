@@ -34,6 +34,7 @@
 #include "db/writer.h"
 #include "http/http_internal.h"
 #include "models/active_storage.h"
+#include "storage/storage.h"
 #include "models/membership.h"
 #include "models/room.h"
 #include "models/user.h"
@@ -42,6 +43,7 @@
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "avatar_test.h"
 #include "../views/support/golden.h"
 
 #include <errno.h>
@@ -603,6 +605,8 @@ static void profile_fixture_get(profiles_env *env, cf_request *req,
 }
 
 /* --- acceptance ------------------------------------------------------------ */
+
+#include "auth_write_race.h"
 
 CF_TEST(users_profiles_route_ids_bind_the_actions) {
     cf_test_routes_reset();
@@ -1268,6 +1272,104 @@ CF_TEST(users_profiles_update_cross_site_post_is_422) {
     CF_CHECK(strcmp(name, "David") == 0);
     cf_response_dispose(&resp);
     env_close(&env);
+}
+
+CF_TEST(users_profiles_rejects_queued_ban) {
+    const char *changes[] = {"UPDATE users SET status=2 WHERE id=1",
+                             "UPDATE users SET status=1 WHERE id=1"};
+    for (size_t i = 0; i < 2; i++) {
+        profiles_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_user(env.scratch.db, 1, "David", NULL, "2020-01-01 00:00:00");
+        char cookie[4096];
+        make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                            "david-session", 1);
+        cf_request req;
+        cf_response resp;
+        profile_request(
+            &req, CF_PATCH, "/users/me/profile", "user[name]=AfterBan",
+            "application/x-www-form-urlencoded", "same-origin", cookie);
+        auth_write_race race;
+        CF_REQUIRE(
+            auth_race_begin(env.app, env.scratch.path, &race, changes[i]));
+        CF_REQUIRE(
+            auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status == 403);
+        char name[64];
+        read_text(env.scratch.db, "SELECT name FROM users WHERE id=1", name,
+                  sizeof name);
+        CF_CHECK(strcmp(name, "David") == 0);
+        cf_response_dispose(&resp);
+        env_close(&env);
+    }
+}
+CF_TEST(users_profiles_multipart_avatar_creates_and_replaces_the_attachment) {
+    profiles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_user(env.scratch.db, 1, "Dave", "dave@example.com", "2026-01-02 03:04:05");
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie, "avatar-session", 1);
+    char root[] = "/tmp/cf-avatar-profile-XXXXXX";
+    avatar_test_root(env.config, root);
+    const char *body = "--avatar\r\nContent-Disposition: form-data; name=\"user[avatar]\"; filename=\"avatar.svg\"\r\nContent-Type: image/svg+xml\r\n\r\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>\r\n--avatar--\r\n";
+    for (int i = 0; i < 2; i++) {
+        cf_request req; cf_response resp;
+        profile_request(&req, CF_PATCH, "/users/me/profile", body,
+                        "multipart/form-data; boundary=avatar", "same-origin", cookie);
+        CF_REQUIRE(run_request(&env, &req, &resp));
+        CF_CHECK(resp.status == 302);
+        avatar_test_persisted(env.scratch.db, root);
+        cf_response_dispose(&resp);
+    }
+    bool ok = false;
+    CF_CHECK(cf_db_test_i64(cf_db_handle(env.scratch.db),
+        "SELECT count(*) FROM active_storage_attachments WHERE record_type='User' AND record_id=1 AND name='avatar'", &ok) == 1 && ok);
+    cf_writer_stats stats = {0};
+    CF_REQUIRE(cf_writer_stats_get(env.app, &stats) == CF_OK);
+    CF_CHECK(stats.best_effort_dropped[CF_EVENT_PURGE_BLOB] == 1);
+    env_close(&env);
+    avatar_test_remove_tree(root);
+}
+
+CF_TEST(users_profiles_multipart_avatar_rejects_queued_authorization_loss) {
+    const char *changes[] = {"UPDATE users SET status=2 WHERE id=1",
+                             "UPDATE users SET status=1 WHERE id=1"};
+    for (size_t i = 0; i < 2; i++) {
+        profiles_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_user(env.scratch.db, 1, "David", NULL, "2020-01-01 00:00:00");
+        char cookie[4096];
+        make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                            "avatar-race-session", 1);
+        char root[] = "/tmp/cf-avatar-profile-race-XXXXXX";
+        avatar_test_root(env.config, root);
+        cf_request req;
+        cf_response resp;
+        profile_request(&req, CF_PATCH, "/users/me/profile",
+                        "--avatar\r\n" AVATAR_PART,
+                        "multipart/form-data; boundary=avatar", "same-origin",
+                        cookie);
+        auth_write_race race;
+        CF_REQUIRE(auth_race_begin(env.app, env.scratch.path, &race, changes[i]));
+        CF_REQUIRE(auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status == 403);
+        CF_CHECK(count_rows(env.scratch.db,
+                            "SELECT count(*) FROM active_storage_blobs") == 0);
+        CF_CHECK(count_rows(env.scratch.db,
+                            "SELECT count(*) FROM active_storage_attachments") == 0);
+        CF_CHECK(count_rows(env.scratch.db,
+                            "SELECT count(*) FROM users WHERE id=1 AND "
+                            "updated_at='2020-01-01 00:00:00'") == 1);
+        CF_CHECK(avatar_test_file_count(root) == 0);
+        cf_writer_stats stats = {0};
+        CF_REQUIRE(cf_writer_stats_get(env.app, &stats) == CF_OK);
+        CF_CHECK(stats.best_effort_dropped[CF_EVENT_PURGE_BLOB] == 0);
+        cf_response_dispose(&resp);
+        env_close(&env);
+        avatar_test_remove_tree(root);
+    }
 }
 
 CF_TEST_MAIN()

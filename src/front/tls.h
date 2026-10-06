@@ -83,6 +83,9 @@ cf_front_tls_step cf_front_tls_send(cf_front_tls_conn *conn,
                                      const unsigned char *buf, size_t len,
                                      size_t *out_n);
 
+/* Decrypted bytes already buffered by TLS (owner thread only). */
+bool cf_front_tls_pending(const cf_front_tls_conn *conn);
+
 /* Negotiated ALPN protocol after a DONE handshake ("h2", "http/1.1", or
  * NULL when the client offered neither). Borrowed static string. */
 const char *cf_front_tls_alpn(const cf_front_tls_conn *conn);

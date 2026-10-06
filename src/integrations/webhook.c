@@ -219,7 +219,7 @@ bool cf_webhook_mime_lookup(const char *content_type, const char **symbol, const
 }
 
 /* Lossy UTF-8 (String#from_utf8_lossy): invalid sequences become U+FFFD. */
-static char *lossy_utf8(const unsigned char *p, size_t n) {
+static char *lossy_utf8(const unsigned char *p, size_t n, size_t *length) {
     /* Worst case: every byte becomes 3-byte U+FFFD. */
     char *o = malloc(n * 3 + 1);
     if (!o) return NULL;
@@ -272,6 +272,7 @@ static char *lossy_utf8(const unsigned char *p, size_t n) {
         i++;
     }
     o[w] = '\0';
+    *length=w;
     return o;
 }
 
@@ -287,7 +288,7 @@ cf_webhook_err cf_webhook_classify(unsigned status, const char *content_type,
     }
     if (status == 200 && (!strcmp(content_type, "text/html") || !strcmp(content_type, "text/plain"))) {
         out->kind = CF_WEBHOOK_REPLY_TEXT;
-        out->text = lossy_utf8(body ? body : (const unsigned char *)"", body_len);
+        out->text = lossy_utf8(body ? body : (const unsigned char *)"", body_len, &out->text_len);
         if (!out->text) return CF_WEBHOOK_NOMEM;
         return CF_WEBHOOK_OK;
     }

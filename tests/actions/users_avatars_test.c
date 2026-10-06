@@ -195,7 +195,7 @@ static void seed_avatar_attachment(cf_db *db, int64_t user_id) {
              "INSERT INTO active_storage_blobs (id, byte_size, checksum, "
              "content_type, created_at, filename, key, metadata, service_name)"
              " VALUES (1, 1234, NULL, 'image/png', "
-             "'2026-09-26 13:00:20.000000', 'avatar.png', 'key1', NULL, "
+             "'2026-09-26 13:00:20.000000', 'avatar.png', 'abcdefghijklmnopqrstuvwx1234', NULL, "
              "'local')");
     char sql[256];
     snprintf(sql, sizeof sql,
@@ -720,9 +720,9 @@ CF_TEST(users_avatars_etag_if_none_match_is_304) {
     env_close(&env);
 }
 
-/* The blocked attachment arm: a user WITH an avatar attachment never falls
- * through to the initials/bot bytes (S02/S03 owns the webp variant). */
-CF_TEST(users_avatars_attachment_arm_is_blocked) {
+/* A variable image whose published file is missing must fail; no initials
+ * fallback hides a broken attachment. */
+CF_TEST(users_avatars_missing_uploaded_file_is_internal) {
     av_env env;
     CF_REQUIRE(env_open(&env));
     seed_user(env.scratch.db, 1, "Member", "member@example.com", 0,
@@ -748,6 +748,38 @@ CF_TEST(users_avatars_attachment_arm_is_blocked) {
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 500);
     CF_CHECK(resp.body_kind == CF_BODY_NONE);
+    cf_response_dispose(&resp);
+    cf_str_dispose(&token);
+    env_close(&env);
+}
+
+CF_TEST(users_avatars_nonvariable_attachment_uses_initials) {
+    av_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_user(env.scratch.db, 1, "Member", "member@example.com", 0,
+              DAVID_UPDATED);
+    seed_user(env.scratch.db, DAVID_ID, "David", "david@37signals.com", 1,
+              DAVID_UPDATED);
+    seed_avatar_attachment(env.scratch.db, DAVID_ID);
+    exec_sql(env.scratch.db, "UPDATE active_storage_blobs SET content_type='text/plain'");
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                        "member-session-token", 1);
+    cf_str token = {0};
+    make_token((cf_span){(const unsigned char *)env.config->secret_key_base,
+                         env.config->secret_key_base_len},
+               DAVID_ID, &token);
+
+    char target[512];
+    snprintf(target, sizeof target, "/users/%.*s/avatar", (int)token.len,
+             token.ptr);
+    cf_request req;
+    cf_response resp;
+    av_headers headers = {.cookie = cookie};
+    av_request(&req, target, &headers);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    CF_CHECK(header_equals(&resp, &req, "Content-Type", "image/svg+xml; charset=utf-8"));
     cf_response_dispose(&resp);
     cf_str_dispose(&token);
     env_close(&env);

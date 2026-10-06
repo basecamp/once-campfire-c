@@ -43,6 +43,8 @@
  * decoded request body, uploads included"). Enforced while receiving bytes,
  * never by buffering. */
 #define CF_STORAGE_UPLOAD_MAX_BYTES UINT64_C(16777216)
+/* Bounded imported webhook replies; browser uploads retain their16MiB cap. */
+#define CF_STORAGE_IMPORT_MAX_BYTES UINT64_C(104857600)
 
 /* ---- disk service ------------------------------------------------------- */
 
@@ -84,6 +86,8 @@ cf_err cf_storage_checksum(cf_storage *s, cf_span key, cf_builder *out);
 typedef struct cf_storage_upload cf_storage_upload;
 
 cf_err cf_storage_upload_begin(cf_storage *s, cf_storage_upload **out);
+/* Explicit bounded imported-file policy; byte_limit must be1..100MiB. */
+cf_err cf_storage_upload_begin_bounded(cf_storage *s, uint64_t byte_limit, cf_storage_upload **out);
 /* Append received bytes; CF_LIMIT before anything is written when the
  * 16 MiB cap would be exceeded. */
 cf_err cf_storage_upload_write(cf_storage_upload *u, cf_span bytes);
@@ -118,16 +122,28 @@ cf_err cf_storage_delete_variants(cf_storage *s, cf_span key);
 
 /* ---- subprocess boundary ------------------------------------------------ */
 
-/* Only these three pinned executables may ever be spawned; the path and
- * argv[0] are fixed constants chosen by the enum, so no parameter can pick
- * or influence an executable path. F00 status (vendor/DEPS.json): libvips is
- * BLOCKED (no probe, not installed) and the ffmpeg/ffprobe binaries present
- * on this machine are not the pinned 7.1.5 artifacts; S01 smoke claims the
- * interface only. */
+/* Fixed executable allowlist. Absolute compile-time paths and argv[0] are
+ * chosen by enum, never by request values or a runtime PATH search. External
+ * source-pinned tools/adapter are prepared by vendor/media/build.sh; media
+ * parity is checked separately from the subprocess lifecycle interface. */
+#ifndef CF_PROC_VIPS_PATH
+#define CF_PROC_VIPS_PATH "/usr/bin/vips"
+#endif
+#ifndef CF_PROC_FFMPEG_PATH
+#define CF_PROC_FFMPEG_PATH "/usr/bin/ffmpeg"
+#endif
+#ifndef CF_PROC_FFPROBE_PATH
+#define CF_PROC_FFPROBE_PATH "/usr/bin/ffprobe"
+#endif
+#ifndef CF_PROC_VIPS_ADAPTER_PATH
+#define CF_PROC_VIPS_ADAPTER_PATH "/usr/local/bin/cf-vips"
+#endif
+
 typedef enum {
     CF_PROC_VIPS = 0,
     CF_PROC_FFMPEG,
-    CF_PROC_FFPROBE
+    CF_PROC_FFPROBE,
+    CF_PROC_VIPS_ADAPTER
 } cf_proc_exe;
 
 /* Fixed executable path/argv[0] for diagnostics; NULL for an unknown enum. */

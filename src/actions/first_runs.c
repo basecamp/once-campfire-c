@@ -22,13 +22,11 @@
  * cf_auth_halted.  Absolute URLs use PUBLIC_ORIGIN (03-application.md,
  * "URL helpers ... use PUBLIC_ORIGIN for absolute URLs"; D-C07).
  *
- * S02 (Active Storage assignment) is a listed dependency that has not
- * landed: an uploaded avatar cannot be staged or attached here, and H02
- * currently rejects multipart file parts and never builds an upload param
- * node.  Every reachable avatar input (absent, nil, "") behaves exactly as
- * the reference; the upload arm is reported to the integrator in
- * docs/devel/evidence/A-first_runs.md rather than faked. */
+ * Multipart avatars are staged before the writer transaction; attachment
+ * and blob rows commit with the administrator. Failed writes remove the
+ * staged file; successful writes enqueue best-effort media analysis. */
 #include "cf.h"
+#include "actions/avatar_upload.h"
 #include "http/params.h"
 
 #include "app.h"
@@ -409,6 +407,8 @@ struct fr_write {
     cf_str email_address;    /* borrowed */
     cf_str password_digest;  /* borrowed */
     fr_avatar avatar;
+    const cf_active_staged *staged;
+    int64_t blob_id;
     cf_user administrator; /* out on success */
 };
 
@@ -439,11 +439,7 @@ static cf_err fr_write_cb(cf_tx *tx, void *arg) {
         return found ? CF_INTERNAL : CF_OK;
     }
     case FR_AVATAR_CREATE:
-        /* `avatar.stage` + attach: Active Storage staging and the blob /
-         * attachment rows belong to S02, which has not landed.  Multipart
-         * file parts never produce an upload param node today, so this arm is
-         * unreachable through dispatch. */
-        return CF_INTERNAL;
+        return cf_avatar_attach(tx, &write->administrator, write->staged, &write->blob_id);
     case FR_AVATAR_INVALID:
         /* "Could not find or build blob: expected attachable". */
         return CF_INTERNAL;
@@ -496,19 +492,28 @@ cf_err cf_action_first_runs_create(cf_ctx *ctx) {
         return rc;
     }
 
+    cf_storage *storage = NULL;
+    cf_active_staged staged = {0};
+    if (fields.avatar == FR_AVATAR_CREATE)
+        rc = cf_avatar_stage(ctx, cf_param_field(cf_ctx_param(ctx, fr_span("user")), fr_span("avatar")), &storage, &staged);
+
     struct fr_write write = {
         .name = fields.name,
         .email_address = fields.email_address,
         .password_digest = digest,
         .avatar = fields.avatar,
+        .staged = fields.avatar == FR_AVATAR_CREATE ? &staged : NULL,
     };
-    rc = cf_write(ctx->app, fr_write_cb, &write);
+    if (rc == CF_OK) rc = cf_write(ctx->app, fr_write_cb, &write);
+    if (rc == CF_OK && write.staged != NULL) {
+        rc = cf_active_staged_commit(&staged);
+        if (rc == CF_OK) cf_avatar_analyze_later(ctx, write.blob_id);
+    }
+    cf_active_staged_dispose(&staged);
+    cf_storage_close(storage);
     fr_str_dispose(&digest);
 
     if (rc == CF_OK) {
-        /* `attachments::analyze_later(pending)`: pending is only non-empty
-         * for an uploaded avatar (S02); every reachable path has no blob to
-         * analyze. */
         cf_session session = {0};
         cf_err session_rc =
             cf_auth_start_new_session_for(ctx, &write.administrator, &session);

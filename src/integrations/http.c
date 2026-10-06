@@ -517,6 +517,7 @@ typedef struct {
     size_t body_len, body_cap;
     size_t max_bytes;
     size_t length_cap;
+    size_t header_bytes, max_header_bytes;
     bool length_abort;   /* Content-Length passed length_cap */
     bool length_bad;     /* malformed Content-Length with length_cap set */
     bool too_large;      /* decoded body passed max_bytes */
@@ -581,8 +582,31 @@ static bool xfer_emit(xfer *x, const unsigned char *p, size_t n) {
 
 static size_t header_cb(char *ptr, size_t size, size_t nitems, void *ud) {
     xfer *x = ud;
+    if (size && nitems > SIZE_MAX / size) { x->too_large = true; return 0; }
     size_t n = size * nitems;
+    if (x->max_header_bytes &&
+        (n > x->max_header_bytes - x->header_bytes)) {
+        x->too_large = true;
+        return 0;
+    }
+    if (x->max_header_bytes) x->header_bytes += n;
     x->last_activity_ms = ms_now();
+    if (n >= 5 && !memcmp(ptr, "HTTP/", 5)) {
+        /* HTTP/2 has no reason phrase. HTTP/1 status is three digits,
+         * followed by an optional reason; never retain transport text past
+         * the fixed diagnostic buffer. */
+        x->res->reason[0] = '\0';
+        const char *sp = memchr(ptr, ' ', n);
+        if (sp && (size_t)(ptr + n - sp) > 4 && sp[4] == ' ') {
+            const char *r = sp + 5;
+            size_t len = (size_t)(ptr + n - r);
+            while (len && (r[len-1] == '\r' || r[len-1] == '\n')) len--;
+            if (len >= sizeof x->res->reason) len = sizeof x->res->reason - 1;
+            memcpy(x->res->reason, r, len);
+            x->res->reason[len] = '\0';
+        }
+        return n;
+    }
     if (n == 2 && ptr[0] == '\r' && ptr[1] == '\n') {
         x->head_done = true;
         return n;
@@ -830,6 +854,7 @@ cf_http_err cf_http_exchange(const cf_http_config *cfg, const char *method, cons
     x.res = out;
     x.max_bytes = cfg->max_bytes;
     x.length_cap = cfg->length_cap;
+    x.max_header_bytes = cfg->max_header_bytes;
     x.is_head = is_head;
     x.read_timeout_ms = cfg->read_timeout_ms;
     x.last_activity_ms = ms_now();
@@ -906,7 +931,12 @@ cf_http_err cf_http_exchange(const cf_http_config *cfg, const char *method, cons
     curl_easy_setopt(h, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs);
-    if (reslv) curl_easy_setopt(h, CURLOPT_RESOLVE, reslv);
+    if (reslv) {
+        curl_easy_setopt(h, CURLOPT_RESOLVE, reslv);
+        /* A proxy resolves the target itself and would bypass the caller's
+         * checked address. Explicit address pins must use a direct socket. */
+        curl_easy_setopt(h, CURLOPT_PROXY, "");
+    }
     if (is_head) curl_easy_setopt(h, CURLOPT_NOBODY, 1L);
     if (is_post) {
         curl_easy_setopt(h, CURLOPT_POST, 1L);

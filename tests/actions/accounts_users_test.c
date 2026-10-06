@@ -30,6 +30,7 @@
 #include "cf.h"
 #include "config.h"
 #include "context.h"
+#include "views.h"
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h"
@@ -96,6 +97,7 @@ static bool env_open(accounts_users_env *env) {
         env->config = NULL;
         return false;
     }
+    if (cf_views_assets_configure("tests/fixtures/assets") != CF_OK) return false;
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
     env->writer_started = true;
     if (cf_writer_set_control_handler(env->app,
@@ -311,9 +313,12 @@ CF_TEST(accounts_users_index_serves_the_ordered_turbo_stream) {
                            "Content-Type: text/vnd.turbo-stream.html; "
                            "charset=utf-8\r\n"));
     /* Ordered, without bots: Ada before Bob, no Zed. */
-    CF_CHECK(body_contains(&resp, "data-user-id=\"1\""));
+    CF_CHECK(body_contains(&resp, "My settings"));
     CF_CHECK(body_contains(&resp, "Ada Admin"));
-    CF_CHECK(body_contains(&resp, "data-user-id=\"2\""));
+    CF_CHECK(body_contains(&resp, "action=\"/account/users/2\""));
+    CF_CHECK(body_contains(&resp, "name=\"user[role]\""));
+    CF_CHECK(body_contains(&resp, "value=\"delete\""));
+    CF_CHECK(body_contains(&resp, "Delete Bob Member"));
     CF_CHECK(body_contains(&resp, "Bob Member"));
     CF_CHECK(!body_contains(&resp, "Zed Bot"));
     CF_CHECK(!body_contains(&resp, "next_page_container\" src="));

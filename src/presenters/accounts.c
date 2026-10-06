@@ -307,6 +307,20 @@ static cf_err accounts_last_room_visited(cf_ctx *ctx, int64_t user_id,
     return rc;
 }
 
+cf_err cf_presenter_accounts_user(cf_ctx *ctx, const cf_user *row,
+                                  cf_view_account_user_vector *out) {
+    cf_str title = {0}, avatar = {0};
+    cf_err rc = cf_user_title(row, &title);
+    if (rc == CF_OK) rc = accounts_avatar_path(ctx, row, &avatar);
+    if (rc == CF_OK)
+        rc = cf_view_account_user_vector_push(out, row->id, cf_str_span(row->name),
+                                              cf_str_span(title), cf_str_span(avatar),
+                                              row->role, row->status);
+    cf_str_dispose(&title);
+    cf_str_dispose(&avatar);
+    return rc;
+}
+
 cf_err cf_presenter_accounts_edit(cf_ctx *ctx, const cf_account *account,
                                   const cf_user *current_user,
                                   bool can_administer,

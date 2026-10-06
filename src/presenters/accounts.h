@@ -54,6 +54,18 @@ cf_err cf_view_account_user_vector_push(cf_view_account_user_vector *vector,
                                         cf_span title, cf_span avatar_path,
                                         cf_role role, cf_status status);
 
+typedef struct cf_view_accounts_users_model {
+    cf_view_account_user_vector users;
+    bool has_next_page;
+    cf_str next_page;
+} cf_view_accounts_users_model;
+void cf_view_accounts_users_model_dispose(cf_view_accounts_users_model *model);
+cf_err cf_view_accounts_users_stream(const cf_view_ctx *ctx,
+                                     const cf_view_accounts_users_model *model,
+                                     cf_builder *out);
+cf_err cf_presenter_accounts_user(cf_ctx *ctx, const cf_user *row,
+                                  cf_view_account_user_vector *out);
+
 /* accounts::Edit: the account id (the singular-resource form action
  * "/account.<id>"), the join code, the room-creation setting, the
  * partitioned user lists and the next user-page param, plus the resolved

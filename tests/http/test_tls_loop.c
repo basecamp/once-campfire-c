@@ -16,6 +16,7 @@
 #include "cf.h"
 #include "cf_test.h"
 #include "front/h2.h"
+#include "cable/cable.h"
 #include "front/tls.h"
 #include "http/http.h"
 #include "http/http_internal.h"
@@ -29,6 +30,7 @@
 #include <openssl/x509_vfy.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -55,6 +57,7 @@ static int64_t now_ms(void) {
 struct tloop {
     cf_http_loop *loop;
     cf_front_tls_server *tls;
+    cf_cable_server *cable;
     int listen_fd;
     pthread_t thread;
     unsigned port;
@@ -94,12 +97,21 @@ static int tloop_listen(unsigned *port_out) {
 /* Admit hook: echoes the request target as the body. Hold mode captures
  * tasks for the revocation test instead of answering. */
 struct echo_state {
+    cf_cable_server *cable;
     pthread_mutex_t mutex;
     unsigned admits;
     unsigned tls_count;
+    unsigned h1_count, h2_count;
     size_t last_body_len;
     char last_target[256];
     bool hold;
+    bool check_observer_retirement;
+    bool observer_retained;
+    size_t big_response_len;
+    size_t output_budget;
+    int file_fd;
+    bool file_reply;
+    uint64_t file_length;
     cf_http_task *held[16];
     size_t held_count;
 };
@@ -126,7 +138,18 @@ static cf_err echo_admit(void *user, cf_http_task *task) {
     if (req == NULL) return CF_BUSY;
     pthread_mutex_lock(&st->mutex);
     st->admits++;
+    if (st->check_observer_retirement && task->h2_stream_id > 1) {
+        struct cf_http_conn *conn = cf_http_loop_find_conn(task->loop, task->conn);
+        if (cf_http_h2_observer_stream_open(conn, task->h2_stream_id - 2))
+            st->observer_retained = true;
+    }
     if (req->tls) st->tls_count++;
+    /* The admit hook executes on the owner loop. Snapshot transport here,
+     * then publish through the harness mutex; tests must never scan live
+     * connection slots from their client thread. */
+    struct cf_http_conn *live = cf_http_loop_find_conn(task->loop, task->conn);
+    if (live != NULL && live->transport == CF_HTTP_TRANSPORT_TLS_H1) st->h1_count++;
+    if (live != NULL && live->transport == CF_HTTP_TRANSPORT_TLS_H2) st->h2_count++;
     st->last_body_len = req->body.len;
     size_t n = req->target.len < sizeof st->last_target - 1
                    ? req->target.len
@@ -137,17 +160,45 @@ static cf_err echo_admit(void *user, cf_http_task *task) {
     if (hold) st->held[st->held_count++] = task;
     pthread_mutex_unlock(&st->mutex);
     if (hold) return CF_OK; /* test completes it later (or abandons) */
-    cf_response r = echo_reply((const char *)req->target.ptr,
-                               req->target.len);
+    cf_response r;
+    if (st->big_response_len != 0) {
+        struct cf_http_conn *conn = cf_http_loop_find_conn(task->loop, task->conn);
+        int small = 1024;
+        if (conn != NULL) (void)setsockopt(conn->fd, SOL_SOCKET, SO_SNDBUF, &small, sizeof small);
+        unsigned char *bytes = malloc(st->big_response_len);
+        if (bytes == NULL) return CF_BUSY;
+        memset(bytes, 'x', st->big_response_len);
+        r = echo_reply((const char *)bytes, st->big_response_len);
+        free(bytes);
+    } else {
+        r = echo_reply((const char *)req->target.ptr, req->target.len);
+    }
+    if (st->file_reply && req->target.len == 5 &&
+        memcmp(req->target.ptr, "/file", 5) == 0) {
+        (void)cf_response_file(&r, dup(st->file_fd), 0,
+                               st->file_length ? st->file_length : 10);
+    }
     cf_err rc = cf_http_task_submit(task, &r);
     cf_response_dispose(&r);
     return rc == CF_OK ? CF_OK : CF_BUSY;
 }
 
-static struct tloop *tloop_start(struct echo_state *st) {
+static cf_http_upgrade_result wss_test_upgrade(void *user,
+                                                cf_http_upgrade_request *request) {
+    int small = 8192;
+    (void)setsockopt(request->fd, SOL_SOCKET, SO_SNDBUF, &small, sizeof small);
+    return cf_cable_server_upgrade(user, request);
+}
+
+static struct tloop *tloop_start_budget(struct echo_state *st, size_t budget) {
+    /* Mirror main.c before creating any reactor/worker threads. OpenSSL
+     * socket BIO writes report failed peer I/O only if SIGPIPE cannot
+     * terminate the process; production installs this same disposition. */
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) return NULL;
     struct tloop *t = calloc(1, sizeof *t);
     if (t == NULL) return NULL;
     t->listen_fd = -1;
+    t->cable = st->cable;
     FILE *f = fopen(kCert, "r");
     if (f == NULL) goto fail;
     fclose(f);
@@ -165,6 +216,12 @@ static struct tloop *tloop_start(struct echo_state *st) {
     cfg.public_origin = t->origin;
     cfg.admit = echo_admit;
     cfg.admit_user = st;
+    cfg.input_bytes = budget;
+    cfg.output_bytes = st->output_budget;
+    if (st->cable != NULL) {
+        cfg.upgrade = wss_test_upgrade;
+        cfg.upgrade_user = st->cable;
+    }
     if (cf_http_loop_create(&cfg, &t->loop) != CF_OK) goto fail;
     cf_http_loop_set_tls_server(t->loop, t->tls);
     if (pthread_create(&t->thread, NULL, tloop_run, t) != 0) goto fail;
@@ -178,11 +235,16 @@ fail: {
 }
 }
 
+static struct tloop *tloop_start(struct echo_state *st) {
+    return tloop_start_budget(st, 0);
+}
+
 static void tloop_stop(struct tloop *t, cf_http_counters *out) {
     if (t == NULL) return;
     if (t->loop != NULL) {
         cf_http_loop_stop(t->loop);
         pthread_join(t->thread, NULL);
+        if (t->cable != NULL) cf_cable_server_stop(t->cable);
         if (out != NULL) cf_http_loop_counters(t->loop, out);
         cf_http_loop_destroy(t->loop);
     }
@@ -349,6 +411,8 @@ struct cli_stream {
     int status; /* -1 until response HEADERS */
     unsigned char data[8192];
     size_t received;
+    uint64_t content_length;
+    bool nonzero;
     bool end_stream;
     bool rst;
 };
@@ -392,6 +456,12 @@ static int h2c_on_header(nghttp2_session *s, const nghttp2_frame *f,
         st->status = (int)((value[0] - '0') * 100 + (value[1] - '0') * 10 +
                            (value[2] - '0'));
     }
+    if (nlen == 14 && memcmp(name, "content-length", 14) == 0) {
+        for (size_t i = 0; i < vlen; i++) {
+            if (value[i] < '0' || value[i] > '9') return -1;
+            st->content_length = st->content_length * 10 + (value[i] - '0');
+        }
+    }
     return 0;
 }
 
@@ -407,8 +477,9 @@ static int h2c_on_data(nghttp2_session *s, uint8_t flags, int32_t sid,
     size_t n = len < room ? len : room;
     if (n != 0) {
         memcpy(st->data + st->received, data, n);
-        st->received += n;
     }
+    for (size_t i = 0; i < len; i++) if (data[i] != 0) st->nonzero = true;
+    st->received += len;
     return 0;
 }
 
@@ -482,6 +553,8 @@ struct h2c_upload {
     const uint8_t *base;
     size_t len;
     size_t off;
+    bool incomplete;
+    bool trailers;
 };
 
 static struct h2c_upload h2c_uploads[CLI_MAX_STREAMS];
@@ -492,30 +565,39 @@ static ssize_t h2c_up_read(nghttp2_session *session, int32_t stream_id,
                            uint32_t *data_flags,
                            nghttp2_data_source *source, void *user_data) {
     (void)session;
-    (void)stream_id;
     (void)user_data;
     struct h2c_upload *u = source != NULL ? source->ptr : NULL;
     if (u == NULL) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
         return 0;
     }
+    if (u->off == u->len && u->incomplete) return NGHTTP2_ERR_DEFERRED;
     size_t rem = u->len - u->off;
     size_t n = rem < length ? rem : length;
     if (n != 0) {
         memcpy(buf, u->base + u->off, n);
         u->off += n;
     }
-    if (u->off >= u->len) *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    if (u->off >= u->len && !u->incomplete) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        if (u->trailers) {
+            *data_flags |= NGHTTP2_DATA_FLAG_NO_END_STREAM;
+            nghttp2_nv nv = {(uint8_t *)"x-review-trailer", (uint8_t *)"yes",
+                              16, 3, NGHTTP2_NV_FLAG_NONE};
+            if (nghttp2_submit_trailer(session, stream_id, &nv, 1) != 0)
+                return NGHTTP2_ERR_CALLBACK_FAILURE;
+        }
+    }
     return (ssize_t)n;
 }
 
-static int32_t h2c_get(struct h2client *c, const char *path,
-                       const uint8_t *body, size_t body_len) {
+static int32_t h2c_request(struct h2client *c, const char *path,
+                          const uint8_t *body, size_t body_len, bool head) {
     nghttp2_nv nva[4];
     nva[0].name = (uint8_t *)":method";
     nva[0].namelen = 7;
-    nva[0].value = (uint8_t *)(body != NULL ? "POST" : "GET");
-    nva[0].valuelen = body != NULL ? 4 : 3;
+    nva[0].value = (uint8_t *)(head ? "HEAD" : body != NULL ? "POST" : "GET");
+    nva[0].valuelen = head || body != NULL ? 4 : 3;
     nva[0].flags = NGHTTP2_NV_FLAG_NONE;
     nva[1].name = (uint8_t *)":scheme";
     nva[1].namelen = 7;
@@ -537,6 +619,7 @@ static int32_t h2c_get(struct h2client *c, const char *path,
     if (body != NULL) {
         struct h2c_upload *u =
             &h2c_uploads[h2c_upload_next++ % CLI_MAX_STREAMS];
+        memset(u, 0, sizeof *u);
         u->base = body;
         u->len = body_len;
         u->off = 0;
@@ -548,6 +631,11 @@ static int32_t h2c_get(struct h2client *c, const char *path,
                                         NULL);
     if (id > 0) cli_find(&c->state, id, true); /* observe from submit */
     return id;
+}
+
+static int32_t h2c_get(struct h2client *c, const char *path,
+                       const uint8_t *body, size_t body_len) {
+    return h2c_request(c, path, body, body_len, false);
 }
 
 static bool h2client_start(struct h2client *c, unsigned port,
@@ -665,31 +753,9 @@ CF_TEST(tls_h1_handshake_and_echo) {
     CF_CHECK(st.tls_count == 1); /* the request observed TLS */
     pthread_mutex_unlock(&st.mutex);
 
-    /* Server-side transport for the live keep-alive connection. The scan
-     * reads loop-owned slots without the loop lock (the same pattern as
-     * loop_accept_sets_tcp_nodelay); retry briefly so loop-thread
-     * scheduling lag cannot flake it. */
-    {
-        cf_http_loop *loop = t->loop;
-        bool saw_h1 = false;
-        int64_t scan_deadline = now_ms() + 2000;
-        while (!saw_h1 && now_ms() < scan_deadline) {
-            for (size_t i = 0; i < loop->conn_cap; i++) {
-                if (loop->conns[i].fd >= 0 &&
-                    loop->conns[i].transport ==
-                        CF_HTTP_TRANSPORT_TLS_H1) {
-                    saw_h1 = true;
-                    break;
-                }
-            }
-            if (!saw_h1) {
-                struct timespec ts = {.tv_sec = 0,
-                                      .tv_nsec = 5 * 1000 * 1000};
-                nanosleep(&ts, NULL);
-            }
-        }
-        CF_CHECK(saw_h1);
-    }
+    pthread_mutex_lock(&st.mutex);
+    CF_CHECK(st.h1_count == 1 && st.h2_count == 0);
+    pthread_mutex_unlock(&st.mutex);
 
     SSL_free(ssl);
     SSL_CTX_free(ctx);
@@ -792,26 +858,9 @@ CF_TEST(h2_multiplexed_pair_through_admit) {
     CF_CHECK(st.tls_count == 2);
     pthread_mutex_unlock(&st.mutex);
 
-    {
-        bool saw_h2 = false;
-        int64_t scan_deadline = now_ms() + 2000;
-        while (!saw_h2 && now_ms() < scan_deadline) {
-            for (size_t i = 0; i < t->loop->conn_cap; i++) {
-                if (t->loop->conns[i].fd >= 0 &&
-                    t->loop->conns[i].transport ==
-                        CF_HTTP_TRANSPORT_TLS_H2) {
-                    saw_h2 = true;
-                    break;
-                }
-            }
-            if (!saw_h2) {
-                struct timespec ts = {.tv_sec = 0,
-                                      .tv_nsec = 5 * 1000 * 1000};
-                nanosleep(&ts, NULL);
-            }
-        }
-        CF_CHECK(saw_h2);
-    }
+    pthread_mutex_lock(&st.mutex);
+    CF_CHECK(st.h2_count == 2 && st.h1_count == 0);
+    pthread_mutex_unlock(&st.mutex);
     h2client_stop(&c);
     cf_http_counters cnt;
     tloop_stop(t, &cnt);
@@ -930,4 +979,626 @@ CF_TEST(h2_revocation_with_outstanding_stream) {
     pthread_mutex_destroy(&st.mutex);
 }
 
+
+static bool h2_wait_stream(struct h2client *c, int32_t id, bool reset) {
+    int64_t deadline = now_ms() + 2000;
+    while (now_ms() < deadline) {
+        if (h2pump_once(c, deadline) != 0) return false;
+        struct cli_stream *st = cli_find(&c->state, id, false);
+        if (st != NULL && (reset ? st->rst : st->end_stream))
+            return reset || (st->status == 200 && !st->rst);
+    }
+    return false;
+}
+
+CF_TEST(h2_long_lived_connection_recycles_streams) {
+    struct echo_state st = {0};
+    st.check_observer_retirement = true;
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    bool success = true;
+    for (unsigned i = 0; i < 2048; i++) {
+        int32_t id = h2c_get(&c, "/sequential", NULL, 0);
+        if (id <= 0 || !h2_wait_stream(&c, id, false)) {
+            success = false;
+            break;
+        }
+        cli_find(&c.state, id, false)->used = false;
+    }
+    h2client_stop(&c);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(success);
+    CF_CHECK(!st.observer_retained);
+    CF_CHECK(cnt.admissions == 2048);
+    CF_CHECK(cnt.responses_sent == 2048);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+CF_TEST(h2_trailers_preserve_original_request_and_body) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    bool success = true;
+    for (unsigned i = 0; i < 2; i++) {
+        static const uint8_t body[] = "original body";
+        size_t len = i == 0 ? 0 : sizeof body - 1;
+        int32_t id = h2c_get(&c, "/with-trailers", body, len);
+        h2c_uploads[(h2c_upload_next - 1) % CLI_MAX_STREAMS].trailers = true;
+        if (id <= 0 || !h2_wait_stream(&c, id, false)) {
+            success = false;
+            break;
+        }
+        struct cli_stream *r = cli_find(&c.state, id, false);
+        CF_CHECK(r->received == 14 && memcmp(r->data, "/with-trailers", 14) == 0);
+        pthread_mutex_lock(&st.mutex);
+        CF_CHECK(st.last_body_len == len);
+        pthread_mutex_unlock(&st.mutex);
+    }
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    CF_CHECK(success);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+CF_TEST(h2_incomplete_body_enforces_loop_budget_and_releases_reset) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start_budget(&st, 1024);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    uint8_t body[8192];
+    memset(body, 'x', sizeof body);
+    int32_t id = h2c_get(&c, "/incomplete", body, sizeof body);
+    h2c_uploads[(h2c_upload_next - 1) % CLI_MAX_STREAMS].incomplete = true;
+    bool reset = h2_wait_stream(&c, id, true);
+    int32_t next = h2c_get(&c, "/after-reset", NULL, 0);
+    bool answered = h2_wait_stream(&c, next, false);
+    h2client_stop(&c);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(reset);
+    CF_CHECK(answered);
+    CF_CHECK(cnt.admissions == 1);
+    CF_CHECK(cnt.budget_rejected >= 1);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+
+static cf_err wss_test_auth(void *user, cf_cable_socket *socket,
+                            const cf_cable_request *request,
+                            bool *authenticated, int64_t *user_id) {
+    (void)user; (void)socket; (void)request;
+    *authenticated = true;
+    *user_id = 1;
+    return CF_OK;
+}
+
+static cf_err wss_test_echo(void *user, cf_cable_socket *socket, cf_span text) {
+    (void)user;
+    return cf_cable_socket_send_text(socket, text);
+}
+
+/* Real TLS-H1 parsing, ownership handoff, encrypted 101 and bidirectional
+ * frames. The pending frame is deliberately sent in the same TLS record as
+ * the request so bytes already decrypted by HTTP survive the handoff. */
+CF_TEST(tls_cable_upgrade_and_bidirectional_frames) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    cf_cable_server_config cfg = {0};
+    cfg.disable_request_forgery_protection = true;
+    cfg.hooks.authenticate = wss_test_auth;
+    cfg.hooks.on_text = wss_test_echo;
+    CF_REQUIRE(cf_cable_server_create(&cfg, &st.cable) == CF_OK);
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    int64_t deadline = now_ms() + TLS_LOOP_DEADLINE_MS;
+    SSL_CTX *ctx = client_ctx(kAlpnH1, (unsigned)sizeof kAlpnH1);
+    CF_REQUIRE(ctx != NULL);
+    int fd = tcp_connect(t->port);
+    CF_REQUIRE(fd >= 0);
+    SSL *ssl = SSL_new(ctx);
+    CF_REQUIRE(ssl != NULL);
+    CF_REQUIRE(SSL_set_fd(ssl, fd) == 1);
+    CF_REQUIRE(ssl_handshake_client(ssl, fd, deadline) == 0);
+    /* A refused upgrade stays owned by HTTP and remains encrypted. */
+    char refusal[256];
+    snprintf(refusal, sizeof refusal,
+             "GET /cable HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n\r\n", t->port);
+    CF_REQUIRE(ssl_write_all(ssl, fd, refusal, strlen(refusal), deadline) == 0);
+    char refused_response[1024];
+    CF_REQUIRE(tls_read_response(ssl, fd, refused_response,
+                                 sizeof refused_response, deadline) > 0);
+    CF_CHECK(strstr(refused_response, "HTTP/1.1 404") != NULL);
+    char request[512];
+    int n = snprintf(request, sizeof request,
+        "GET /cable HTTP/1.1\r\nHost: 127.0.0.1:%u\r\n"
+        "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n", t->port);
+    const unsigned char frame[] = {0x81, 0x84, 1, 2, 3, 4,
+                                  'p'^1, 'i'^2, 'n'^3, 'g'^4};
+    memcpy(request + n, frame, sizeof frame);
+    CF_REQUIRE(ssl_write_all(ssl, fd, request, (size_t)n + sizeof frame,
+                            deadline) == 0);
+    unsigned char received[4096] = {0};
+    size_t have = 0;
+    bool echoed = false;
+    while (!echoed && have < sizeof received - 1) {
+        ssize_t got = ssl_read_some(ssl, fd, received + have,
+                                    sizeof received - 1 - have, deadline);
+        if (got <= 0) break;
+        have += (size_t)got;
+        echoed = memmem(received, have, "ping", 4) != NULL;
+    }
+    CF_CHECK(strstr((char *)received, "HTTP/1.1 101") != NULL);
+    CF_CHECK(memmem(received, have, "welcome", 7) != NULL);
+    CF_CHECK(echoed);
+    /* A later record must also decrypt on the Cable reactor. */
+    CF_CHECK(ssl_write_all(ssl, fd, frame, sizeof frame, deadline) == 0);
+    have = 0;
+    while (have < 6) {
+        ssize_t got = ssl_read_some(ssl, fd, received + have,
+                                    sizeof received - have, deadline);
+        if (got <= 0) break;
+        have += (size_t)got;
+    }
+    CF_CHECK(have >= 6 && received[0] == 0x81 && received[1] == 4 &&
+             memcmp(received + 2, "ping", 4) == 0);
+    /* Larger than the deliberately small server send buffer: SSL_write must
+     * retain the same queued payload over readiness retries. Verify the
+     * complete bytes, rather than just a successful response header. */
+    size_t payload_len = 256 * 1024;
+    unsigned char *large = malloc(payload_len + 14);
+    unsigned char *echo = malloc(payload_len + 10);
+    CF_REQUIRE(large != NULL && echo != NULL);
+    unsigned char big_head[] = {0x81, 0xff, 0, 0, 0, 0, 0, 4, 0, 0,
+                               1, 2, 3, 4};
+    memcpy(large, big_head, sizeof big_head);
+    for (size_t i = 0; i < payload_len; i++)
+        large[14 + i] = 'x' ^ big_head[10 + i % 4];
+    CF_CHECK(ssl_write_all(ssl, fd, large, payload_len + 14, deadline) == 0);
+    have = 0;
+    while (have < payload_len + 10) {
+        ssize_t got = ssl_read_some(ssl, fd, echo + have,
+                                    payload_len + 10 - have, deadline);
+        if (got <= 0) break;
+        have += (size_t)got;
+    }
+    CF_CHECK(have == payload_len + 10);
+    CF_CHECK(echo[0] == 0x81 && echo[1] == 127 &&
+             memcmp(echo + 2, big_head + 2, 8) == 0);
+    bool intact = have == payload_len + 10;
+    for (size_t i = 10; intact && i < have; i++) intact = echo[i] == 'x';
+    CF_CHECK(intact);
+    free(large);
+    free(echo);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    close(fd);
+    tloop_stop(t, NULL);
+    cf_cable_server_destroy(st.cable);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+
+CF_TEST(h2_partial_tls_writes_preserve_all_response_bytes) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    st.big_response_len = 2 * 1024 * 1024;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    nghttp2_settings_entry setting = {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 4 * 1024 * 1024};
+    CF_REQUIRE(nghttp2_submit_settings(c.sess, NGHTTP2_FLAG_NONE, &setting, 1) == 0);
+    CF_REQUIRE(nghttp2_submit_window_update(c.sess, NGHTTP2_FLAG_NONE, 0, 4 * 1024 * 1024) == 0);
+    int32_t id = h2c_get(&c, "/large", NULL, 0);
+    int64_t deadline = now_ms() + 10000;
+    bool done = false;
+    while (now_ms() < deadline) {
+        if (h2pump_once(&c, deadline) != 0) break;
+        struct cli_stream *r = cli_find(&c.state, id, false);
+        if (r != NULL && r->end_stream) { done = true; break; }
+    }
+    struct cli_stream *r = cli_find(&c.state, id, false);
+    CF_CHECK(done);
+    CF_CHECK(r != NULL && r->status == 200 && r->received == st.big_response_len);
+    if (r != NULL) for (size_t i = 0; i < sizeof r->data; i++) CF_CHECK(r->data[i] == 'x');
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+CF_TEST(h2_input_budget_is_shared_across_connections) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start_budget(&st, 1024);
+    CF_REQUIRE(t != NULL);
+    struct h2client a, b;
+    CF_REQUIRE(h2client_start(&a, t->port, kAlpnH2, sizeof kAlpnH2));
+    CF_REQUIRE(h2client_start(&b, t->port, kAlpnH2, sizeof kAlpnH2));
+    uint8_t body[600];
+    memset(body, 'x', sizeof body);
+    int32_t aid = h2c_get(&a, "/partial-a", body, sizeof body);
+    h2c_uploads[(h2c_upload_next - 1) % CLI_MAX_STREAMS].incomplete = true;
+    CF_REQUIRE(h2pump_until(&a, now_ms() + 2000) == 0);
+    int32_t bid = h2c_get(&b, "/partial-b", body, sizeof body);
+    h2c_uploads[(h2c_upload_next - 1) % CLI_MAX_STREAMS].incomplete = true;
+    bool reset = h2_wait_stream(&b, bid, true);
+    CF_REQUIRE(nghttp2_submit_rst_stream(a.sess, NGHTTP2_FLAG_NONE, aid, NGHTTP2_CANCEL) == 0);
+    CF_REQUIRE(h2pump_until(&a, now_ms() + 2000) == 0);
+    int32_t next = h2c_get(&b, "/released", NULL, 0);
+    bool recovered = h2_wait_stream(&b, next, false);
+    h2client_stop(&a);
+    h2client_stop(&b);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(reset);
+    CF_CHECK(recovered);
+    CF_CHECK(cnt.admissions == 1);
+    CF_CHECK(cnt.budget_rejected >= 1);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+
+CF_TEST(h2_response_budget_failure_resets_stream) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    st.big_response_len = 2048;
+    st.output_budget = 1024;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t id = h2c_get(&c, "/output-limit", NULL, 0);
+    bool reset = h2_wait_stream(&c, id, true);
+    h2client_stop(&c);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(reset);
+    CF_CHECK(cnt.responses_sent == 0);
+    CF_CHECK(cnt.budget_rejected >= 1);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+CF_TEST(h2_policy_refusal_releases_incomplete_request_immediately) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start_budget(&st, 1024);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    char authority[sizeof c.authority];
+    memcpy(authority, c.authority, sizeof authority);
+    strcpy(c.authority, "wrong.example");
+    uint8_t rejected[600], accepted[300];
+    memset(rejected, 'x', sizeof rejected);
+    memset(accepted, 'y', sizeof accepted);
+    int32_t bad = h2c_get(&c, "/wrong-origin", rejected, sizeof rejected);
+    h2c_uploads[(h2c_upload_next - 1) % CLI_MAX_STREAMS].incomplete = true;
+    bool reset = h2_wait_stream(&c, bad, true);
+    memcpy(c.authority, authority, sizeof authority);
+    int32_t good = h2c_get(&c, "/authorized", accepted, sizeof accepted);
+    bool answered = h2_wait_stream(&c, good, false);
+    h2client_stop(&c);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(reset);
+    CF_CHECK(answered);
+    CF_CHECK(cnt.admissions == 1);
+    CF_CHECK(st.last_body_len == sizeof accepted);
+    pthread_mutex_destroy(&st.mutex);
+}
+
+
+CF_TEST(tls_loop_installs_production_sigpipe_policy) {
+    struct sigaction disposition = {0};
+    disposition.sa_handler = SIG_DFL;
+    sigemptyset(&disposition.sa_mask);
+    CF_REQUIRE(sigaction(SIGPIPE, &disposition, NULL) == 0);
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    CF_REQUIRE(sigaction(SIGPIPE, NULL, &disposition) == 0);
+    bool ignored = disposition.sa_handler == SIG_IGN;
+    CF_CHECK(ignored);
+    if (ignored) {
+        /* OpenSSL socket BIO writes can raise SIGPIPE after peer close.
+         * Production ignores that signal, allowing failed I/O to reach
+         * transport cleanup. Check the same OS failure returns EPIPE. */
+        int pair[2];
+        CF_REQUIRE(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+        close(pair[1]);
+        errno = 0;
+        CF_CHECK(send(pair[0], "x", 1, 0) == -1 && errno == EPIPE);
+        close(pair[0]);
+    }
+    tloop_stop(t, NULL);
+    pthread_mutex_destroy(&st.mutex);
+}
+
 CF_TEST_MAIN()
+
+/* An injected slow disk read must stall the file worker only. */
+struct file_gate {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    bool entered, released;
+    size_t largest_read, reads;
+};
+
+static ssize_t gated_read(void *user, int fd, void *buf, size_t len,
+                          off_t offset) {
+    struct file_gate *gate = user;
+    pthread_mutex_lock(&gate->mutex);
+    gate->entered = true;
+    gate->reads++;
+    if (len > gate->largest_read) gate->largest_read = len;
+    pthread_cond_broadcast(&gate->cond);
+    while (!gate->released) pthread_cond_wait(&gate->cond, &gate->mutex);
+    pthread_mutex_unlock(&gate->mutex);
+    return pread(fd, buf, len, offset);
+}
+
+CF_TEST(h2_slow_file_read_does_not_stall_sibling) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    CF_REQUIRE(fwrite("file-bytes", 1, 10, file) == 10);
+    CF_REQUIRE(fflush(file) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct file_gate gate = {0};
+    pthread_mutex_init(&gate.mutex, NULL);
+    pthread_cond_init(&gate.cond, NULL);
+    pthread_mutex_lock(&t->loop->file_worker.mutex);
+    t->loop->file_worker.read_at = gated_read;
+    t->loop->file_worker.read_user = &gate;
+    pthread_mutex_unlock(&t->loop->file_worker.mutex);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t file_id = h2c_get(&c, "/file", NULL, 0);
+    int32_t sibling = h2c_get(&c, "/sibling", NULL, 0);
+    bool sibling_done = h2_wait_stream(&c, sibling, false);
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec++;
+    pthread_mutex_lock(&gate.mutex);
+    while (!gate.entered) {
+        if (pthread_cond_timedwait(&gate.cond, &gate.mutex, &deadline) != 0)
+            break;
+    }
+    bool worker_entered = gate.entered;
+    struct cli_stream *pending = cli_find(&c.state, file_id, false);
+    bool file_pending = pending == NULL || !pending->end_stream;
+    gate.released = true;
+    pthread_cond_broadcast(&gate.cond);
+    pthread_mutex_unlock(&gate.mutex);
+    bool file_done = h2_wait_stream(&c, file_id, false);
+    struct cli_stream *body = cli_find(&c.state, file_id, false);
+    CF_CHECK(worker_entered);
+    CF_CHECK(sibling_done);
+    CF_CHECK(file_pending);
+    CF_CHECK(file_done && body != NULL && body->status == 200 &&
+             body->received == 10 && memcmp(body->data, "file-bytes", 10) == 0);
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_cond_destroy(&gate.cond);
+    pthread_mutex_destroy(&gate.mutex);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}
+
+CF_TEST(h2_truncated_file_resets_committed_stream_and_keeps_session_usable) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    CF_REQUIRE(fwrite("short", 1, 5, file) == 5);
+    CF_REQUIRE(fflush(file) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t id = h2c_get(&c, "/file", NULL, 0);
+    bool reset = h2_wait_stream(&c, id, true);
+    struct cli_stream *reply = cli_find(&c.state, id, false);
+    CF_CHECK(reset && reply != NULL && reply->rst &&
+             reply->status == 200 && reply->received == 0);
+    int32_t next = h2c_get(&c, "/after-file-error", NULL, 0);
+    CF_CHECK(h2_wait_stream(&c, next, false));
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}
+
+CF_TEST(h2_reset_during_file_read_discards_stale_body) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    CF_REQUIRE(fwrite("file-bytes", 1, 10, file) == 10);
+    CF_REQUIRE(fflush(file) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct file_gate gate = {0};
+    pthread_mutex_init(&gate.mutex, NULL);
+    pthread_cond_init(&gate.cond, NULL);
+    pthread_mutex_lock(&t->loop->file_worker.mutex);
+    t->loop->file_worker.read_at = gated_read;
+    t->loop->file_worker.read_user = &gate;
+    pthread_mutex_unlock(&t->loop->file_worker.mutex);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t id = h2c_get(&c, "/file", NULL, 0);
+    int32_t sibling = h2c_get(&c, "/while-file-held", NULL, 0);
+    bool sibling_done = h2_wait_stream(&c, sibling, false);
+    CF_CHECK(sibling_done);
+    CF_CHECK(nghttp2_submit_rst_stream(c.sess, NGHTTP2_FLAG_NONE, id,
+                                      NGHTTP2_CANCEL) == 0);
+    int32_t after = h2c_get(&c, "/after-file-reset", NULL, 0);
+    bool reset_processed = h2_wait_stream(&c, after, false);
+    pthread_mutex_lock(&gate.mutex);
+    bool entered = gate.entered;
+    gate.released = true;
+    pthread_cond_broadcast(&gate.cond);
+    pthread_mutex_unlock(&gate.mutex);
+    int32_t last = h2c_get(&c, "/after-worker-return", NULL, 0);
+    CF_CHECK(h2_wait_stream(&c, last, false));
+    CF_CHECK(reset_processed && entered);
+    h2client_stop(&c);
+    cf_http_counters cnt;
+    tloop_stop(t, &cnt);
+    CF_CHECK(cnt.stale_completions >= 1);
+    pthread_cond_destroy(&gate.cond);
+    pthread_mutex_destroy(&gate.mutex);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}
+
+CF_TEST(h2_file_stream_exceeds_whole_body_cap_with_bounded_chunks) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    const size_t length = 16 * 1024 * 1024;
+    CF_REQUIRE(ftruncate(fileno(file), (off_t)length) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    st.file_length = length;
+    st.output_budget = 256 * 1024;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t id = h2c_get(&c, "/file", NULL, 0);
+    int64_t deadline = now_ms() + TLS_LOOP_DEADLINE_MS;
+    struct cli_stream *reply = NULL;
+    while (now_ms() < deadline) {
+        if (h2pump_once(&c, deadline) != 0) break;
+        reply = cli_find(&c.state, id, false);
+        if (reply != NULL && (reply->end_stream || reply->rst)) break;
+    }
+    CF_CHECK(reply != NULL && reply->status == 200 && reply->end_stream &&
+             !reply->rst && reply->received == length && !reply->nonzero &&
+             reply->content_length == length);
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}
+
+CF_TEST(h2_file_waits_for_flow_credit_without_stalling_other_connections) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    const size_t length = 256 * 1024;
+    CF_REQUIRE(ftruncate(fileno(file), (off_t)length) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    st.file_length = length;
+    st.output_budget = 256 * 1024;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct file_gate gate = {0};
+    gate.released = true;
+    pthread_mutex_init(&gate.mutex, NULL);
+    pthread_cond_init(&gate.cond, NULL);
+    pthread_mutex_lock(&t->loop->file_worker.mutex);
+    t->loop->file_worker.read_at = gated_read;
+    t->loop->file_worker.read_user = &gate;
+    pthread_mutex_unlock(&t->loop->file_worker.mutex);
+    struct h2client c, sibling;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    nghttp2_settings_entry setting = {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 0};
+    CF_REQUIRE(nghttp2_submit_settings(c.sess, NGHTTP2_FLAG_NONE, &setting, 1) == 0);
+    int32_t id = h2c_get(&c, "/file", NULL, 0);
+    int64_t deadline = now_ms() + 2000;
+    struct cli_stream *reply = NULL;
+    while (now_ms() < deadline) {
+        if (h2pump_once(&c, deadline) != 0) break;
+        reply = cli_find(&c.state, id, false);
+        if (reply != NULL && reply->status == 200) break;
+    }
+    CF_CHECK(reply != NULL && reply->status == 200 && reply->received == 0 &&
+             !reply->end_stream);
+    CF_REQUIRE(h2client_start(&sibling, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t other = h2c_get(&sibling, "/beside-stalled-file", NULL, 0);
+    bool responsive = h2_wait_stream(&sibling, other, false);
+    pthread_mutex_lock(&gate.mutex);
+    bool no_read_before_credit = !gate.entered;
+    pthread_mutex_unlock(&gate.mutex);
+    CF_CHECK(responsive && no_read_before_credit);
+    CF_CHECK(nghttp2_submit_window_update(c.sess, NGHTTP2_FLAG_NONE, id,
+                                          (int32_t)length) == 0);
+    CF_CHECK(h2_wait_stream(&c, id, false));
+    reply = cli_find(&c.state, id, false);
+    CF_CHECK(reply != NULL && reply->received == length && !reply->nonzero);
+    pthread_mutex_lock(&gate.mutex);
+    CF_CHECK(gate.reads >= 4 && gate.largest_read <= CF_HTTP_FILE_CHUNK);
+    pthread_mutex_unlock(&gate.mutex);
+    h2client_stop(&sibling);
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_cond_destroy(&gate.cond);
+    pthread_mutex_destroy(&gate.mutex);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}
+
+CF_TEST(h2_file_head_preserves_length_without_worker_read) {
+    struct echo_state st = {0};
+    pthread_mutex_init(&st.mutex, NULL);
+    FILE *file = tmpfile();
+    CF_REQUIRE(file != NULL);
+    const size_t length = 16 * 1024 * 1024;
+    CF_REQUIRE(ftruncate(fileno(file), (off_t)length) == 0);
+    st.file_fd = fileno(file);
+    st.file_reply = true;
+    st.file_length = length;
+    st.output_budget = 256 * 1024;
+    struct tloop *t = tloop_start(&st);
+    CF_REQUIRE(t != NULL);
+    struct file_gate gate = {0};
+    gate.released = true;
+    pthread_mutex_init(&gate.mutex, NULL);
+    pthread_cond_init(&gate.cond, NULL);
+    pthread_mutex_lock(&t->loop->file_worker.mutex);
+    t->loop->file_worker.read_at = gated_read;
+    t->loop->file_worker.read_user = &gate;
+    pthread_mutex_unlock(&t->loop->file_worker.mutex);
+    struct h2client c;
+    CF_REQUIRE(h2client_start(&c, t->port, kAlpnH2, sizeof kAlpnH2));
+    int32_t id = h2c_request(&c, "/file", NULL, 0, true);
+    CF_CHECK(h2_wait_stream(&c, id, false));
+    struct cli_stream *reply = cli_find(&c.state, id, false);
+    CF_CHECK(reply != NULL && reply->end_stream && reply->received == 0 &&
+             reply->content_length == length);
+    pthread_mutex_lock(&gate.mutex);
+    CF_CHECK(gate.reads == 0);
+    pthread_mutex_unlock(&gate.mutex);
+    h2client_stop(&c);
+    tloop_stop(t, NULL);
+    pthread_cond_destroy(&gate.cond);
+    pthread_mutex_destroy(&gate.mutex);
+    pthread_mutex_destroy(&st.mutex);
+    fclose(file);
+}

@@ -10,8 +10,8 @@
  *     image/png inline, Cache-Control, weak ETag), the small variant for
  *     size=small, 304 on a matching If-None-Match, and 200 with no ETag
  *     when no account exists;
- *   - show with an attached logo is 500 (S02's processed_variant plus the
- *     S03 media workers have not landed; never a raw storage path);
+ *   - a variable logo uses the production processor; missing source is404;
+ *     nonvariable attachments use the stock fallback;
  *   - destroy removes the attachment (302, purge event) and is a no-op
  *     redirect without one; administrator-only; unauthenticated redirect;
  *     missing account is 500.
@@ -435,7 +435,7 @@ CF_TEST(accounts_logos_show_without_account_has_no_etag) {
     env_close(&env);
 }
 
-CF_TEST(accounts_logos_show_with_attachment_is_500) {
+CF_TEST(accounts_logos_show_missing_logo_source_is_404) {
     logos_env env;
     CF_REQUIRE(env_open(&env, true));
     seed_account(env.scratch.db);
@@ -445,12 +445,26 @@ CF_TEST(accounts_logos_show_with_attachment_is_500) {
     cf_response resp;
     prepare_show(&req, NULL, NULL);
     CF_REQUIRE(run_request(&env, &req, &resp));
-    /* The variant transform needs the S03 media workers: loud failure, no
-     * raw storage path, and the attachment row is untouched. */
-    CF_CHECK(resp.status == 500);
+    /* Missing stored source is explicit; attachment remains intact. */
+    CF_CHECK(resp.status == 404);
     CF_CHECK(count_sql(env.scratch.db,
                        "SELECT count(*) FROM active_storage_attachments WHERE "
                        "record_type='Account' AND name='logo'") == 1);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+CF_TEST(accounts_logos_nonvariable_attachment_uses_stock_icon) {
+    logos_env env;
+    CF_REQUIRE(env_open(&env, true));
+    seed_account(env.scratch.db);
+    seed_blob_attachment(env.scratch.db);
+    exec_sql(env.scratch.db, "UPDATE active_storage_blobs SET content_type='text/plain'");
+    cf_request req;
+    cf_response resp;
+    prepare_show(&req, NULL, NULL);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
     cf_response_dispose(&resp);
     env_close(&env);
 }

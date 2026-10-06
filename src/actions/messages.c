@@ -50,14 +50,10 @@
  *   attached (the S02 card's signed-reference arm; the pinned Rust port
  *   treats a plain string as Invalid, so the classifier's SIGNED state is the
  *   documented superset, existence checked here). `process_attachment` on
- *   create analyzes the blob in place (Null analyzer: metadata
- *   `{"identified":true,"analyzed":true}` plus the attachment-record touch,
- *   re-reading the message) and for image/video/audio content fails loudly
- *   with CF_INTERNAL at the S03 boundary after the commit (the reference
- *   runs the pinned tools there; the port never approximates a transform).
- *   On update the analysis is asynchronous in the reference (AnalyzeJob);
- *   this port runs the tool-free Null analyzer synchronously and leaves
- *   media blobs to S03's job.
+ *   create analyzes the blob through bounded tools and processes the thumb
+ *   or video preview before rendering. Metadata and attachment-record
+ *   touches commit after analysis. On update tool-based analysis is queued
+ *   after commit; the tool-free Null analyzer completes inline.
  *
  * Reported dependencies (docs/devel/evidence/A-messages.md):
  *  1. `c.app().broadcasts` is app.h's cf_app_cable accessor (landed by the
@@ -82,6 +78,7 @@
 #include "richtext.h"
 #include "storage/active_storage.h"
 #include "storage/storage.h"
+#include "storage/media.h"
 #include "views.h"
 #include "views/internal.h"
 
@@ -1127,10 +1124,8 @@ cf_err msg_signed_attachment(cf_ctx *ctx, int64_t blob_id,
 }
 
 /* `analyze_attachment` + `touch_attachment_records` for the tool-free Null
- * analyzer: the metadata update and the per-Message touch run in one writer
- * transaction, exactly like the reference's reader/writer pair. Image, video
- * and audio content types return CF_INTERNAL (S03's pinned tools; never an
- * approximated analysis). */
+ * analyzer: metadata extraction uses the bounded S03 subprocess path off
+ * the writer, then metadata and per-Message touches commit together. */
 struct msg_analyze_write {
     int64_t blob_id;
     cf_str metadata; /* borrowed */
@@ -1158,28 +1153,9 @@ static cf_err msg_analyze_write_cb(cf_tx *tx, void *arg) {
     return rc;
 }
 
-static cf_str msg_str_span_of(cf_optional_str value) {
-    if (!value.present) return (cf_str){(char *)"", 0};
-    return value.value;
-}
-
 cf_err msg_analyze_blob(cf_ctx *ctx, const cf_blob *blob) {
-    cf_span content_type = {NULL, 0};
-    if (blob->content_type.present) {
-        content_type = (cf_span){
-            (const unsigned char *)blob->content_type.value.ptr,
-            blob->content_type.value.len};
-    }
-    /* A NULL/absent metadata column reads as the empty object (the model's
-     * `unwrap_or_else(Json::object)`), so `{}` is the merge base. */
-    cf_str metadata = msg_str_span_of(blob->metadata);
     cf_builder analyzed = {0};
-    cf_err rc = cf_active_analyze_metadata(
-        content_type,
-        metadata.len != 0 ? (cf_span){(const unsigned char *)metadata.ptr,
-                                      metadata.len}
-                          : (cf_span){(const unsigned char *)"{}", 2},
-        &analyzed);
+    cf_err rc = cf_media_analyze_blob(ctx->app, blob, &analyzed);
     if (rc != CF_OK) return rc;
     struct msg_analyze_write write;
     memset(&write, 0, sizeof write);
@@ -1190,6 +1166,8 @@ cf_err msg_analyze_blob(cf_ctx *ctx, const cf_blob *blob) {
     return rc;
 }
 
+/* Message#process_attachment synchronously analyzes and warms the source
+ * representation before rendering: video webp preview, otherwise thumb. */
 /* `@room.messages.create_with_attachment!(attributes)` inside one writer
  * transaction (the rich-text body and the FTS/room effects are the model's,
  * spec 02 D02/D-C09). The staged upload's blob row is inserted in the same
@@ -1289,9 +1267,7 @@ static cf_err msg_create_message(cf_ctx *ctx, const cf_user *user,
     }
     if (rc == CF_OK && (has_staged || has_signed)) {
         const cf_blob *attached = has_staged ? &write.blob : &signed_blob;
-        /* process_attachment's synchronous analyze arm; media analyzers are
-         * the S03 boundary (the reference runs the pinned tools here). */
-        rc = msg_analyze_blob(ctx, attached);
+        rc = cf_media_process_attachment(ctx, attached);
     }
     if (rc == CF_OK) {
         if (has_staged || has_signed) {
@@ -1428,14 +1404,21 @@ static cf_err msg_update_message(cf_ctx *ctx, const cf_message *message,
         if (rc != CF_OK) rc = CF_INTERNAL;
     }
     if (rc == CF_OK && (has_staged || has_signed)) {
-        /* The reference queues ActiveStorage::AnalyzeJob for a fresh blob;
-         * with no async media path in this phase the tool-free Null analyzer
-         * runs here, and media blobs stay for S03 (the response does not
-         * depend on the job). Already-analyzed blobs are skipped. */
+        /* Queue tool-based analysis after commit; null analysis has no
+         * subprocess and can complete inline. Queue refusal is a logged
+         * best-effort drop and never rewrites the committed mutation. */
         const cf_blob *attached = has_staged ? &write.blob : &signed_blob;
         if (!msg_blob_is_analyzed(attached)) {
-            rc = msg_analyze_blob(ctx, attached);
-            if (rc == CF_INTERNAL) rc = CF_OK; /* S03's deferred job */
+            cf_span ct = attached->content_type.present
+                ? (cf_span){(const unsigned char *)attached->content_type.value.ptr,attached->content_type.value.len}
+                : (cf_span){0};
+            if (cf_media_analyzer_for_content_type(ct) == CF_MEDIA_ANALYZER_NULL) {
+                rc = msg_analyze_blob(ctx, attached);
+            } else {
+                cf_err queued = cf_app_enqueue_media(ctx->app,attached->id,
+                    (cf_span){(const unsigned char *)"analyze",7},(cf_span){0});
+                if (queued != CF_OK) fprintf(stderr,"campfire: message analysis job dropped (%s)\n",cf_err_name(queued));
+            }
         }
     }
     if (rc == CF_OK) {

@@ -1,5 +1,16 @@
 /* src/storage/media.c — S03 exact media operations. See media.h. */
 #include "storage/media.h"
+#include "models/active_storage.h"
+#include "db/writer.h"
+#include "models/message.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
+#include "app.h"
+#include "config.h"
+#include <yyjson.h>
+#include <math.h>
+#include <limits.h>
+#include <ctype.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -558,6 +569,343 @@ bool cf_media_pinned_available(char *reason, size_t cap) {
         media_reason(reason, cap, detail);
         return false;
     }
-    media_reason(reason, cap, "pinned media tools observed");
+    text[0] = '\0';
+    if (media_version_probe(CF_PROC_VIPS_ADAPTER, "--version", text, sizeof text) != CF_OK ||
+        strstr(text, CF_MEDIA_VIPS_VERSION) == NULL) {
+        snprintf(detail, sizeof detail, "BLOCKED: cf-vips adapter %s not observed (need %s)",
+                 text[0] != '\0' ? text : "absent", CF_MEDIA_VIPS_VERSION);
+        detail[strcspn(detail, "\r\n")] = '\0';
+        media_reason(reason, cap, detail);
+        return false;
+    }
+    media_reason(reason, cap, "pinned media tools and adapter observed");
     return true;
+}
+
+/* Production metadata extraction (storage/src/analyze.rs). */
+static yyjson_val *media_field(yyjson_val *obj, const char *name) {
+    yyjson_val *v = yyjson_obj_get(obj, name);
+    return v != NULL && !yyjson_is_null(v) ? v : NULL;
+}
+
+static yyjson_val *media_stream(yyjson_val *probe, const char *kind) {
+    yyjson_val *streams = yyjson_obj_get(probe, "streams");
+    size_t i, n;
+    yyjson_val *s;
+    yyjson_arr_foreach(streams, i, n, s) {
+        yyjson_val *v = yyjson_obj_get(s, "codec_type");
+        if (yyjson_is_str(v) && strcmp(yyjson_get_str(v), kind) == 0) return s;
+    }
+    return NULL;
+}
+
+static cf_err media_number(yyjson_val *v, bool integer, double *real, int64_t *whole) {
+    double f;
+    if (yyjson_is_num(v)) {
+        f = yyjson_get_num(v);
+        if (integer && yyjson_is_sint(v)) {
+            *whole = yyjson_get_sint(v);
+            return CF_OK;
+        }
+        if (integer && yyjson_is_uint(v)) {
+            uint64_t u = yyjson_get_uint(v);
+            if (u > INT64_MAX) return CF_INVALID;
+            *whole = (int64_t)u;
+            return CF_OK;
+        }
+    } else if (yyjson_is_str(v)) {
+        const char *s = yyjson_get_str(v);
+        size_t len = yyjson_get_len(v);
+        if (strlen(s) != len) return CF_INVALID;
+        while (isspace((unsigned char)*s)) s++;
+        if (*s == '\0') return CF_INVALID;
+        char *end = NULL;
+        errno = 0;
+        if (integer) {
+            long long value = strtoll(s, &end, 10);
+            if (end == s || errno == ERANGE) return CF_INVALID;
+            while (isspace((unsigned char)*end)) end++;
+            if (*end != '\0') return CF_INVALID;
+            *whole = (int64_t)value;
+            return CF_OK;
+        }
+        f = strtod(s, &end);
+        if (end == s || errno == ERANGE) return CF_INVALID;
+        while (isspace((unsigned char)*end)) end++;
+        if (*end != '\0') return CF_INVALID;
+    } else {
+        return CF_INVALID;
+    }
+    if (!isfinite(f)) return CF_INVALID;
+    if (integer) {
+        /* Conversion beyond signed range must not invoke undefined behavior. */
+        if (f >= 9223372036854775808.0 || f < -9223372036854775808.0) return CF_INVALID;
+        *whole = (int64_t)f;
+    } else {
+        *real = f;
+    }
+    return CF_OK;
+}
+
+static cf_err media_metadata_put(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                        const char *name, yyjson_mut_val *value) {
+    yyjson_mut_val *key = yyjson_mut_strcpy(doc, name);
+    return key != NULL && value != NULL && yyjson_mut_obj_put(root, key, value)
+               ? CF_OK : CF_NOMEM;
+}
+
+static cf_err media_put_number(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                               const char *name, yyjson_val *source, bool integer) {
+    if (source == NULL) return CF_OK;
+    double real = 0;
+    int64_t whole = 0;
+    cf_err rc = media_number(source, integer, &real, &whole);
+    if (rc != CF_OK) return rc;
+    return media_metadata_put(doc, root, name, integer ? yyjson_mut_sint(doc, whole)
+                                             : yyjson_mut_real(doc, real));
+}
+
+cf_err cf_media_probe_metadata(cf_media_analyzer analyzer, cf_span probe_json,
+                               cf_span metadata_json, cf_builder *out) {
+    if (out == NULL || probe_json.ptr == NULL || metadata_json.ptr == NULL) return CF_INVALID;
+    yyjson_doc *probe = yyjson_read((const char *)probe_json.ptr, probe_json.len, 0);
+    yyjson_doc *base = yyjson_read((const char *)metadata_json.ptr, metadata_json.len, 0);
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    cf_err rc = CF_INVALID;
+    if (probe == NULL || base == NULL || !yyjson_is_obj(yyjson_doc_get_root(probe)) ||
+        !yyjson_is_obj(yyjson_doc_get_root(base))) goto done;
+    if (doc == NULL) { rc = CF_NOMEM; goto done; }
+    yyjson_mut_val *root = yyjson_val_mut_copy(doc, yyjson_doc_get_root(base));
+    if (root == NULL) { rc = CF_NOMEM; goto done; }
+    yyjson_mut_doc_set_root(doc, root);
+    yyjson_val *p = yyjson_doc_get_root(probe);
+    yyjson_val *audio = media_stream(p, "audio");
+    yyjson_val *video = media_stream(p, "video");
+    rc = CF_OK;
+    if (analyzer == CF_MEDIA_ANALYZER_AUDIO) {
+        rc = media_put_number(doc, root, "duration", media_field(audio,"duration"), false);
+        if (rc == CF_OK) rc = media_put_number(doc,root,"bit_rate",media_field(audio,"bit_rate"),true);
+        if (rc == CF_OK) rc = media_put_number(doc,root,"sample_rate",media_field(audio,"sample_rate"),true);
+        yyjson_val *tags = media_field(audio, "tags");
+        if (rc == CF_OK && tags != NULL) rc = media_metadata_put(doc,root,"tags",yyjson_val_mut_copy(doc,tags));
+    } else if (analyzer == CF_MEDIA_ANALYZER_VIDEO) {
+        yyjson_val *angle = yyjson_obj_get(yyjson_obj_get(video, "tags"), "rotate");
+        if (angle == NULL) {
+            yyjson_val *list = media_field(video, "side_data_list"), *v;
+            size_t i, n;
+            yyjson_arr_foreach(list, i, n, v) {
+                yyjson_val *type = yyjson_obj_get(v, "side_data_type");
+                if (yyjson_is_str(type) && strcmp(yyjson_get_str(type),"Display Matrix") == 0) {
+                    angle = media_field(v,"rotation"); break;
+                }
+            }
+        }
+        int64_t rotation = 0, numerator = 0, denominator = 0;
+        if (angle != NULL) rc = media_number(angle,true,NULL,&rotation);
+        yyjson_val *dar = media_field(video,"display_aspect_ratio");
+        bool ratio = false;
+        if (rc == CF_OK && dar != NULL) {
+            if (!yyjson_is_str(dar)) { rc = CF_INVALID; goto done; }
+            const char *s = yyjson_get_str(dar);
+            const char *colon = strchr(s, ':');
+            if (colon == NULL || strlen(s) != yyjson_get_len(dar)) { rc = CF_INVALID; goto done; }
+            char first[128], second[128];
+            size_t x = (size_t)(colon-s), y = strlen(colon+1);
+            if (x >= sizeof first || y >= sizeof second) { rc = CF_INVALID; goto done; }
+            memcpy(first,s,x); first[x]='\0'; memcpy(second,colon+1,y+1);
+            char *end = NULL;
+            errno=0; numerator=strtoll(first,&end,10);
+            while (isspace((unsigned char)*end)) end++;
+            if (end==first || *end!='\0' || errno==ERANGE) {rc=CF_INVALID;goto done;}
+            errno=0; denominator=strtoll(second,&end,10);
+            while (isspace((unsigned char)*end)) end++;
+            if (end==second || *end!='\0' || errno==ERANGE) {rc=CF_INVALID;goto done;}
+            ratio = numerator != 0;
+        }
+        yyjson_val *w = media_field(video,"width"), *h=media_field(video,"height");
+        double width=0,height=0;
+        bool have_w=w!=NULL,have_h=h!=NULL;
+        if (rc == CF_OK && have_w) rc=media_number(w,false,&width,NULL);
+        if (rc == CF_OK && have_h) rc=media_number(h,false,&height,NULL);
+        if (rc == CF_OK && have_w && ratio) {height=width*(double)denominator/(double)numerator;have_h=true;}
+        if (rc == CF_OK && ((have_w && !isfinite(width)) || (have_h && !isfinite(height)))) rc = CF_INVALID;
+        if (cf_media_angle_swaps_dimensions(rotation)) {
+            double f=width;width=height;height=f;
+            bool b=have_w;have_w=have_h;have_h=b;
+        }
+        if (rc == CF_OK && have_w) rc=media_metadata_put(doc,root,"width",yyjson_mut_real(doc,width));
+        if (rc == CF_OK && have_h) rc=media_metadata_put(doc,root,"height",yyjson_mut_real(doc,height));
+        yyjson_val *duration=media_field(video,"duration");
+        if (duration==NULL) duration=media_field(yyjson_obj_get(p,"format"),"duration");
+        if (rc == CF_OK) rc=media_put_number(doc,root,"duration",duration,false);
+        if (rc == CF_OK && angle!=NULL) rc=media_metadata_put(doc,root,"angle",yyjson_mut_sint(doc,rotation));
+        if (rc == CF_OK && ratio) {
+            yyjson_mut_val *pair=yyjson_mut_arr(doc);
+            if (pair==NULL || !yyjson_mut_arr_add_sint(doc,pair,numerator) ||
+                !yyjson_mut_arr_add_sint(doc,pair,denominator)) rc=CF_NOMEM;
+            else rc=media_metadata_put(doc,root,"display_aspect_ratio",pair);
+        }
+        if (rc == CF_OK) rc=media_metadata_put(doc,root,"audio",yyjson_mut_bool(doc,audio!=NULL && yyjson_obj_size(audio)>0));
+        if (rc == CF_OK) rc=media_metadata_put(doc,root,"video",yyjson_mut_bool(doc,video!=NULL && yyjson_obj_size(video)>0));
+    } else if (analyzer == CF_MEDIA_ANALYZER_IMAGE) {
+        /* The fixed libvips adapter returns exact dimensions and the
+         * reference EXIF string from its blocked-loader sequential image. */
+        yyjson_val *w=media_field(p,"width"), *h=media_field(p,"height");
+        yyjson_val *orientation=media_field(p,"exif_orientation");
+        if (orientation!=NULL && yyjson_is_str(orientation) &&
+            cf_media_exif_swaps_dimensions((cf_span){(const unsigned char *)yyjson_get_str(orientation),yyjson_get_len(orientation)})) {
+            yyjson_val *v=w;w=h;h=v;
+        }
+        if (w != NULL) rc=media_put_number(doc,root,"width",w,true);
+        if (rc == CF_OK && h != NULL) rc=media_put_number(doc,root,"height",h,true);
+    } else if (analyzer != CF_MEDIA_ANALYZER_NULL) {
+        rc=CF_INVALID;
+    }
+    if (rc == CF_OK) rc=media_metadata_put(doc,root,"analyzed",yyjson_mut_bool(doc,true));
+    if (rc == CF_OK) {
+        size_t len=0;
+        char *json=yyjson_mut_write(doc,0,&len);
+        if (json==NULL) rc=CF_NOMEM;
+        else {rc=cf_builder_append(out,(cf_span){(const unsigned char *)json,len});free(json);}
+    }
+done:
+    yyjson_mut_doc_free(doc);
+    yyjson_doc_free(base);
+    yyjson_doc_free(probe);
+    return rc;
+}
+
+cf_err cf_media_analyze_path(const char *input_path, cf_span content_type,
+                             cf_span metadata_json, cf_builder *out) {
+    if (out==NULL) return CF_INVALID;
+    cf_media_analyzer analyzer=cf_media_analyzer_for_content_type(content_type);
+    if (analyzer==CF_MEDIA_ANALYZER_NULL) {
+        return cf_media_probe_metadata(analyzer,((cf_span){(const unsigned char *)"{}",2}),metadata_json,out);
+    }
+    if (input_path==NULL || input_path[0]=='\0') return CF_INVALID;
+    cf_err rc=cf_media_slots_acquire();
+    if (rc!=CF_OK) return rc;
+    cf_media_argv argv;
+    cf_proc_opts opts;
+    cf_proc_result result={0};
+    if (analyzer==CF_MEDIA_ANALYZER_IMAGE) {
+        char *const args[]={"analyze",(char *)input_path,NULL};
+        opts=(cf_proc_opts){.exe=CF_PROC_VIPS_ADAPTER,.args=args,.stdin_fd=-1,
+            .stdout_fd=-1,.stderr_fd=-1,.stdout_limit=CF_MEDIA_METADATA_MAX_BYTES,
+            .timeout_ms=CF_MEDIA_VIPS_TIMEOUT_MS};
+        rc=cf_proc_run(&opts,&result);
+    } else {
+        rc=cf_media_ffprobe_argv(&argv,input_path);
+        if (rc==CF_OK) rc=cf_media_proc_opts(&opts,CF_PROC_FFPROBE,&argv,
+            CF_MEDIA_METADATA_MAX_BYTES,CF_MEDIA_FFPROBE_TIMEOUT_MS);
+        if (rc==CF_OK) rc=cf_proc_run(&opts,&result);
+    }
+    if (rc==CF_OK) rc=cf_media_check_result(&result);
+    if (rc==CF_OK && result.out!=NULL) rc=cf_media_probe_metadata(analyzer,cf_buf_span(result.out),metadata_json,out);
+    else if (rc==CF_OK) rc=CF_IO;
+    cf_proc_result_dispose(&result);
+    cf_media_slots_release();
+    return rc;
+}
+
+cf_err cf_media_analyze_blob(cf_app *app, const cf_blob *blob, cf_builder *out) {
+    if (app==NULL || blob==NULL || out==NULL) return CF_INVALID;
+    cf_span content_type=blob->content_type.present
+        ? (cf_span){(const unsigned char *)blob->content_type.value.ptr,blob->content_type.value.len}
+        : ((cf_span){(const unsigned char *)"",0});
+    cf_span metadata=blob->metadata.present
+        ? (cf_span){(const unsigned char *)blob->metadata.value.ptr,blob->metadata.value.len}
+        : ((cf_span){(const unsigned char *)"{}",2});
+    if (cf_media_analyzer_for_content_type(content_type)==CF_MEDIA_ANALYZER_NULL)
+        return cf_media_analyze_path(NULL,content_type,metadata,out);
+    const cf_config *cfg=cf_app_config(app);
+    if (cfg==NULL || cfg->storage_path==NULL) return CF_INVALID;
+    cf_storage *storage=NULL;
+    int input=-1,temp=-1;
+    char path[256]={0};
+    uint64_t size=0;
+    cf_err rc=cf_storage_open(cfg->storage_path,&storage);
+    if (rc==CF_OK) rc=cf_storage_open_read(storage,(cf_span){(const unsigned char *)blob->key.ptr,blob->key.len},&input,&size);
+    if (rc==CF_OK && (size>CF_STORAGE_IMPORT_MAX_BYTES)) rc=CF_LIMIT;
+    if (rc==CF_OK) rc=cf_media_temp_create("/tmp",".input",path,sizeof path,&temp);
+    size_t copied=0;
+    unsigned char buf[65536];
+    while (rc==CF_OK) {
+        ssize_t n=read(input,buf,sizeof buf);
+        if (n<0) {if(errno==EINTR)continue;rc=CF_IO;break;}
+        if (n==0) break;
+        if ((size_t)n>CF_STORAGE_IMPORT_MAX_BYTES-copied) {rc=CF_LIMIT;break;}
+        copied+=(size_t)n;
+        size_t off=0;
+        while (off<(size_t)n) {
+            ssize_t written=write(temp,buf+off,(size_t)n-off);
+            if (written<0 && errno==EINTR)continue;
+            if (written<=0) {rc=CF_IO;break;}
+            off+=(size_t)written;
+        }
+    }
+    if (temp>=0 && close(temp)!=0 && rc==CF_OK) rc=CF_IO;
+    if (input>=0) close(input);
+    cf_storage_close(storage);
+    if (rc==CF_OK) rc=cf_media_analyze_path(path,content_type,metadata,out);
+    if (path[0]!='\0') {
+        cf_err cleanup=cf_media_temp_cleanup(path);
+        if (rc==CF_OK) rc=cleanup;
+    }
+    return rc;
+}
+
+struct media_attach_update { int64_t id; cf_str metadata; };
+static cf_err media_attach_write(cf_tx *tx,void *arg) {
+    struct media_attach_update *w=arg;
+    cf_err rc=cf_blob_update_metadata(tx,w->id,w->metadata);
+    cf_attachment_vector records={0};
+    if(rc==CF_OK)rc=cf_attachment_records_for_blob(cf_tx_db(tx),w->id,&records);
+    for(size_t i=0;rc==CF_OK&&i<records.len;i++) {
+        cf_str type=records.items[i].record_type;
+        if(type.len!=7||memcmp(type.ptr,"Message",7)!=0)continue;
+        cf_message message={0};rc=cf_message_find(cf_tx_db(tx),records.items[i].record_id,&message);
+        if(rc==CF_OK)rc=cf_message_touch(tx,&message);
+        cf_message_dispose(&message);
+    }
+    cf_attachment_vector_dispose(&records);return rc;
+}
+static cf_err media_analyze_attached(cf_ctx *ctx,const cf_blob *blob) {
+    cf_builder b={0};cf_err rc=cf_media_analyze_blob(ctx->app,blob,&b);
+    struct media_attach_update w={blob->id,{(char*)b.ptr,b.len}};
+    if(rc==CF_OK)rc=cf_write(ctx->app,media_attach_write,&w);
+    cf_builder_dispose(&b);return rc;
+}
+cf_err cf_media_process_attachment(cf_ctx *ctx, const cf_blob *blob) {
+    cf_err rc = media_analyze_attached(ctx, blob);
+    if (rc != CF_OK) return rc;
+    cf_span ct = blob->content_type.present
+        ? (cf_span){(const unsigned char *)blob->content_type.value.ptr,blob->content_type.value.len}
+        : (cf_span){0};
+    bool video = ct.len >= 6 && memcmp(ct.ptr,"video/",6) == 0;
+    if (!video && !cf_active_content_type_variable(ct)) return CF_OK;
+    cf_active_ventries variation = {0};
+    cf_active_vval *value = NULL;
+    if (video) {
+        rc = cf_active_vstr((cf_span){(const unsigned char *)"webp",4},&value);
+        if (rc == CF_OK) rc = cf_active_ventries_push(&variation,
+            (cf_span){(const unsigned char *)"format",6},value);
+        if (rc != CF_OK) cf_active_vval_dispose(value);
+    } else {
+        rc = cf_active_varr(&value);
+        cf_active_vval *width = NULL, *height = NULL;
+        if (rc == CF_OK) rc = cf_active_vint(1200,&width);
+        if (rc == CF_OK) {rc=cf_active_varr_push(value,width);if(rc==CF_OK)width=NULL;}
+        if (rc == CF_OK) rc = cf_active_vint(800,&height);
+        if (rc == CF_OK) {rc=cf_active_varr_push(value,height);if(rc==CF_OK)height=NULL;}
+        if (rc == CF_OK) rc = cf_active_ventries_push(&variation,
+            (cf_span){(const unsigned char *)"resize_to_limit",15},value);
+        if (rc != CF_OK) cf_active_vval_dispose(value);
+        cf_active_vval_dispose(width);cf_active_vval_dispose(height);
+    }
+    cf_blob image = {0};
+    if (rc == CF_OK) rc = cf_active_processed_representation(ctx,blob,&variation,&image);
+    cf_blob_dispose(&image);
+    cf_active_ventries_dispose(&variation);
+    return rc;
 }

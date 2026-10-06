@@ -124,6 +124,7 @@ struct cf_http_chunk_req {
     unsigned char *data; /* worker-allocated */
     size_t len;          /* bytes read (0 on error) */
     int err;             /* 0, or errno/ENOMEM */
+    struct cf_h2_file_provider *h2_file; /* non-NULL: H2 DATA chunk */
 };
 
 struct cf_http_loop;
@@ -186,6 +187,8 @@ struct cf_http_conn {
     struct cf_front_tls_conn *tls;
     struct cf_front_h2_session *h2;
     void *h2obs;
+    unsigned char *h2_pending;
+    size_t h2_pending_len, h2_pending_off;
     bool tls_want_write;
     int swap_fd;
     /* P01: outstanding H2 stream tasks (multiplexed: more than one per
@@ -250,6 +253,9 @@ struct cf_http_file_worker {
     pthread_cond_t cond;
     struct cf_http_chunk_req *head, *tail;
     bool stop;
+    /* Optional worker-side read seam; NULL uses pread. Set under mutex. */
+    ssize_t (*read_at)(void *user, int fd, void *buf, size_t len, off_t offset);
+    void *read_user;
 };
 
 struct cf_http_loop {
@@ -397,6 +403,10 @@ void cf_http_loop_release_task(struct cf_http_loop *loop,
 void cf_http_conn_update_events(struct cf_http_conn *conn);
 /* Deadline check used by the loop and by tests (injected monotonic clock). */
 void cf_http_conn_check_deadline(struct cf_http_conn *conn, uint64_t now_ms);
+/* Observer lifetime diagnostic: true only while its protocol stream exists
+ * and its local half remains open (loop thread only). */
+bool cf_http_h2_observer_stream_open(struct cf_http_conn *conn, int32_t id);
+
 /* Reserve/release loop-wide input/output logical bytes. */
 bool cf_http_loop_reserve_input(struct cf_http_loop *loop, size_t bytes);
 void cf_http_loop_release_input(struct cf_http_loop *loop, size_t bytes);

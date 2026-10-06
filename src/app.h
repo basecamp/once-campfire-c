@@ -34,6 +34,14 @@ const cf_config *cf_app_config(const cf_app *app);
 void cf_app_set_cable(cf_app *app, cf_cable *cable);
 cf_cable *cf_app_cable(const cf_app *app);
 
+/* Borrowed jobs queue set during startup before serving. Media enqueue is
+ * nonblocking; CF_BUSY includes a missing queue (e.g. action unit fixtures).
+ * The caller logs a dropped post-commit analysis without changing a committed
+ * attachment result. Jobs must drain before application teardown. */
+void cf_app_set_jobs(cf_app *app, cf_jobs *jobs);
+cf_err cf_app_enqueue_media(cf_app *app, int64_t blob_id,
+                            cf_span task_type, cf_span variation);
+
 /* Start the serving path: create/validate the schema and start the single
  * writer (cf_writer_start), then open one read-only SQLite connection per
  * CF_READERS request worker on its own thread and queue them. Call before the

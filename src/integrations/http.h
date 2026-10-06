@@ -77,6 +77,7 @@ typedef struct {
     size_t max_bytes;        /* decoded body cap enforced in callbacks */
     size_t length_cap;       /* 0 = none; abort early when Content-Length exceeds this */
     const char *ca_path;     /* NULL = system default trust store */
+    size_t max_header_bytes; /* 0 = no additional cap; aggregate wire headers */
 } cf_http_config;
 
 typedef struct {
@@ -86,6 +87,7 @@ typedef struct {
 
 typedef struct {
     unsigned status;
+    char reason[128]; /* HTTP/1 status reason, empty when absent */
     cf_http_header *headers;
     size_t nheaders;
     unsigned char *body;

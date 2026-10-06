@@ -829,13 +829,34 @@ static cf_err push_touch_subscription(cf_db *db, int64_t id) {
     return rc;
 }
 
+/* Protected writes revalidate the actor after writer admission. */
+static cf_err push_require_active(cf_db *db, int64_t user_id) {
+    if (db == NULL) return CF_INTERNAL;
+    bool found = false;
+    cf_user actor = {0};
+    cf_err rc = cf_user_find_by_id(db, user_id, &found, &actor);
+    bool allowed = rc == CF_OK && found && cf_user_is_active(&actor);
+    cf_user_dispose(&actor);
+    return rc != CF_OK ? rc : allowed ? CF_OK : CF_FORBIDDEN;
+}
+
 typedef struct {
     int64_t id;
+    int64_t user_id;
 } push_touch_arg;
 
 static cf_err push_touch_cb(cf_tx *tx, void *arg) {
     push_touch_arg *touch = arg;
-    return push_touch_subscription(cf_tx_db(tx), touch->id);
+    cf_db *db = cf_tx_db(tx);
+    cf_err rc = push_require_active(db, touch->user_id);
+    if (rc != CF_OK) return rc;
+    cf_push_subscription fresh = {0};
+    rc = cf_push_subscription_find(db, touch->id, &fresh);
+    bool allowed = rc == CF_OK && fresh.user_id == touch->user_id;
+    cf_push_subscription_dispose(&fresh);
+    if (rc != CF_OK) return rc;
+    if (!allowed) return CF_FORBIDDEN;
+    return push_touch_subscription(db, touch->id);
 }
 
 /* `request.user_agent()`: the first readable User-Agent value, else absent
@@ -889,6 +910,8 @@ typedef struct {
 
 static cf_err push_create_cb(cf_tx *tx, void *arg) {
     push_create_arg *create = arg;
+    cf_err auth_rc = push_require_active(cf_tx_db(tx), create->input.user_id);
+    if (auth_rc != CF_OK) return auth_rc;
     cf_push_subscription created = {0};
     cf_err rc = cf_push_subscription_create(tx, &create->input, push_resolve,
                                             NULL, &created);
@@ -982,7 +1005,7 @@ cf_err cf_action_users_push_subscriptions_create(cf_ctx *ctx) {
         if (rc != CF_OK) return rc;
         if (!valid) return push_head(ctx, 422);
         /* `touch` in the writer (the reference touches on tx.conn()). */
-        push_touch_arg touch_arg = {existing_id};
+        push_touch_arg touch_arg = {existing_id, user_id};
         rc = cf_write(ctx->app, push_touch_cb, &touch_arg);
         if (rc != CF_OK) return rc;
         return push_head(ctx, 200);
@@ -1024,8 +1047,10 @@ static cf_err push_destroy_cb(cf_tx *tx, void *arg) {
     push_destroy_arg *destroy = arg;
     cf_db *db = cf_tx_db(tx);
     if (db == NULL) return CF_INTERNAL;
+    cf_err rc = push_require_active(db, destroy->user_id);
+    if (rc != CF_OK) return rc;
     cf_push_subscription subscription = {0};
-    cf_err rc = cf_push_subscription_find(db, destroy->id, &subscription);
+    rc = cf_push_subscription_find(db, destroy->id, &subscription);
     if (rc == CF_NOT_FOUND) return CF_OK;
     if (rc != CF_OK) {
         cf_push_subscription_dispose(&subscription);

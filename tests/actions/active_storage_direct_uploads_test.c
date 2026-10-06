@@ -290,6 +290,8 @@ static bool header_equals(cf_response *resp, cf_request *req,
 
 /* --- acceptance ------------------------------------------------------------ */
 
+#include "auth_write_race.h"
+
 CF_TEST(active_storage_direct_uploads_route_id_binds_the_action) {
     cf_test_routes_reset();
     CF_REQUIRE(cf_test_routes_add("POST",
@@ -538,4 +540,40 @@ CF_TEST(active_storage_direct_uploads_metadata_round_trip) {
     env_close(&env);
 }
 
+CF_TEST(active_storage_direct_uploads_rejects_queued_ban) {
+    const char *changes[] = {"UPDATE users SET status=2 WHERE id=1",
+                             "UPDATE users SET status=1 WHERE id=1"};
+    for (size_t i = 0; i < 2; i++) {
+        du_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_user(&env, 1);
+        char cookie[4096];
+        make_session_cookie(&env, cookie, sizeof cookie, "session-token-1", 1);
+        cf_request req;
+        cf_response resp;
+        du_headers headers = {.body =
+                                  "{\"blob\":{\"filename\":\"race.txt\",\"byte_"
+                                  "size\":1,\"checksum\":\"checksum\"}}",
+                              .cookie = cookie,
+                              .fetch_site = "same-origin"};
+        du_request(&req, &headers);
+        auth_write_race race;
+        CF_REQUIRE(
+            auth_race_begin(env.app, env.scratch.path, &race, changes[i]));
+        CF_REQUIRE(
+            auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status == 403);
+        sqlite3_stmt *stmt = NULL;
+        CF_REQUIRE(
+            sqlite3_prepare_v2(cf_db_handle(env.scratch.db),
+                               "SELECT count(*) FROM active_storage_blobs", -1,
+                               &stmt, NULL) == SQLITE_OK);
+        CF_REQUIRE(sqlite3_step(stmt) == SQLITE_ROW);
+        CF_CHECK(sqlite3_column_int(stmt, 0) == 0);
+        sqlite3_finalize(stmt);
+        cf_response_dispose(&resp);
+        env_close(&env);
+    }
+}
 CF_TEST_MAIN()

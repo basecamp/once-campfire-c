@@ -206,12 +206,13 @@ static bool pump(rig *r, int max_rounds) {
     return true;
 }
 
-static int32_t cli_get(rig *r, const char *path, const char *authority) {
+static int32_t cli_method(rig *r, const char *method, const char *path,
+                          const char *authority) {
     nghttp2_nv nva[4];
     nva[0].name = (uint8_t *)":method";
     nva[0].namelen = 7;
-    nva[0].value = (uint8_t *)"GET";
-    nva[0].valuelen = 3;
+    nva[0].value = (uint8_t *)method;
+    nva[0].valuelen = strlen(method);
     nva[0].flags = NGHTTP2_NV_FLAG_NONE;
     nva[1].name = (uint8_t *)":scheme";
     nva[1].namelen = 7;
@@ -229,6 +230,10 @@ static int32_t cli_get(rig *r, const char *path, const char *authority) {
     nva[3].valuelen = strlen(authority);
     nva[3].flags = NGHTTP2_NV_FLAG_NONE;
     return nghttp2_submit_request(r->cli, NULL, nva, 4, NULL, NULL);
+}
+
+static int32_t cli_get(rig *r, const char *path, const char *authority) {
+    return cli_method(r, "GET", path, authority);
 }
 
 /* ------------------------------------------------ pure header policy */
@@ -851,6 +856,145 @@ CF_TEST(revocation_with_outstanding_streams) {
     CF_REQUIRE(s != NULL);
     CF_CHECK(s->status == 200 && s->end_stream);
     rig_destroy(&r);
+}
+
+
+struct provider_state {
+    uint64_t length, offset;
+    bool ready;
+    unsigned closed;
+};
+
+static ssize_t deferred_provider_read(void *user, unsigned char *dst,
+                                     size_t max, uint32_t *flags) {
+    struct provider_state *p = user;
+    if (!p->ready) return NGHTTP2_ERR_DEFERRED;
+    size_t n = p->length - p->offset < max ? (size_t)(p->length - p->offset) : max;
+    if (n > 4096) n = 4096;
+    memset(dst, 'x', n);
+    p->offset += n;
+    p->ready = false;
+    if (p->offset == p->length) *flags |= NGHTTP2_DATA_FLAG_EOF;
+    return (ssize_t)n;
+}
+
+static void deferred_provider_close(void *user) {
+    ((struct provider_state *)user)->closed++;
+}
+
+CF_TEST(provider_deferred_chunks_exceed_copy_limit_and_close_once) {
+    rig r;
+    CF_REQUIRE(rig_create(&r, false));
+    int32_t id = cli_get(&r, "/file", "example.com");
+    CF_REQUIRE(pump(&r, 1000));
+    struct provider_state p = {.length = 16 * 1024 * 1024};
+    CF_REQUIRE(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 0, p.length, deferred_provider_read,
+        deferred_provider_close, &p) == CF_OK);
+    CF_REQUIRE(pump(&r, 1000));
+    cli_stream *st = cli_find(&r.state, id, false);
+    CF_REQUIRE(st != NULL);
+    CF_CHECK(st->status == 200 && !st->end_stream && st->received == 0);
+    CF_CHECK(strstr(st->hdrs, "content-length: 16777216\n") != NULL);
+    while (p.offset < p.length) {
+        p.ready = true;
+        CF_REQUIRE(cf_front_h2_resume_data(r.srv, id) == CF_OK);
+        CF_REQUIRE(pump(&r, 1000));
+        CF_CHECK(cf_front_h2_stream_queued(r.srv, id) == 0);
+    }
+    CF_CHECK(st->end_stream && st->received == p.length && !st->rst);
+    CF_CHECK(p.closed == 1);
+    rig_destroy(&r);
+    CF_CHECK(p.closed == 1);
+}
+
+CF_TEST(provider_reset_and_destroy_release_once) {
+    for (unsigned i = 0; i < 2; i++) {
+        rig r;
+        CF_REQUIRE(rig_create(&r, false));
+        int32_t id = cli_get(&r, "/file", "example.com");
+        CF_REQUIRE(pump(&r, 1000));
+        struct provider_state p = {.length = 16 * 1024 * 1024};
+        CF_REQUIRE(cf_front_h2_submit_response_provider(r.srv, id, 200,
+            NULL, NULL, NULL, NULL, 0, p.length, deferred_provider_read,
+            deferred_provider_close, &p) == CF_OK);
+        CF_REQUIRE(pump(&r, 1000));
+        if (i == 0) {
+            CF_REQUIRE(nghttp2_submit_rst_stream(r.cli, NGHTTP2_FLAG_NONE,
+                                                id, NGHTTP2_CANCEL) == 0);
+            CF_REQUIRE(pump(&r, 1000));
+            CF_CHECK(p.closed == 1);
+            CF_CHECK(cf_front_h2_resume_data(r.srv, id) == CF_NOT_FOUND);
+        }
+        rig_destroy(&r);
+        CF_CHECK(p.closed == 1);
+    }
+}
+
+CF_TEST(provider_headers_only_preserve_representation_length) {
+    rig r;
+    CF_REQUIRE(rig_create(&r, false));
+    int32_t id = cli_method(&r, "HEAD", "/head", "example.com");
+    CF_REQUIRE(pump(&r, 1000));
+    CF_REQUIRE(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 0, 16777216, NULL, NULL, NULL) == CF_OK);
+    CF_REQUIRE(pump(&r, 1000));
+    cli_stream *st = cli_find(&r.state, id, false);
+    CF_REQUIRE(st != NULL);
+    CF_CHECK(st->status == 200 && st->end_stream && st->received == 0);
+    CF_CHECK(strstr(st->hdrs, "content-length: 16777216\n") != NULL);
+    rig_destroy(&r);
+}
+
+
+CF_TEST(provider_submission_failure_keeps_caller_ownership) {
+    rig r;
+    CF_REQUIRE(rig_create(&r, false));
+    int32_t id = cli_get(&r, "/file", "example.com");
+    CF_REQUIRE(pump(&r, 1000));
+    struct provider_state p = {.length = 16 * 1024 * 1024};
+    CF_CHECK(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 129, p.length, deferred_provider_read,
+        deferred_provider_close, &p) == CF_LIMIT);
+    CF_CHECK(p.closed == 0);
+    CF_CHECK(!cf_front_h2_stream_committed(r.srv, id));
+    CF_REQUIRE(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 0, p.length, deferred_provider_read,
+        deferred_provider_close, &p) == CF_OK);
+    CF_CHECK(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 0, p.length, deferred_provider_read,
+        deferred_provider_close, &p) == CF_INVALID);
+    CF_CHECK(p.closed == 0);
+    rig_destroy(&r);
+    CF_CHECK(p.closed == 1);
+}
+
+CF_TEST(provider_flow_control_stalls_and_reset_releases_owner) {
+    rig r;
+    CF_REQUIRE(rig_create(&r, true));
+    int32_t id = cli_get(&r, "/file", "example.com");
+    CF_REQUIRE(pump(&r, 1000));
+    struct provider_state p = {.length = 16 * 1024 * 1024};
+    CF_REQUIRE(cf_front_h2_submit_response_provider(r.srv, id, 200,
+        NULL, NULL, NULL, NULL, 0, p.length, deferred_provider_read,
+        deferred_provider_close, &p) == CF_OK);
+    CF_REQUIRE(pump(&r, 1000));
+    for (unsigned i = 0; i < 16; i++) {
+        p.ready = true;
+        CF_REQUIRE(cf_front_h2_resume_data(r.srv, id) == CF_OK);
+        CF_REQUIRE(pump(&r, 1000));
+    }
+    CF_CHECK(p.offset == 65535);
+    CF_CHECK(cf_front_h2_flow_stalled(r.srv));
+    uint64_t before = p.offset;
+    CF_REQUIRE(pump(&r, 1000));
+    CF_CHECK(p.offset == before);
+    CF_REQUIRE(nghttp2_submit_rst_stream(r.cli, NGHTTP2_FLAG_NONE, id,
+                                        NGHTTP2_CANCEL) == 0);
+    CF_REQUIRE(pump(&r, 1000));
+    CF_CHECK(p.closed == 1);
+    rig_destroy(&r);
+    CF_CHECK(p.closed == 1);
 }
 
 CF_TEST_MAIN()

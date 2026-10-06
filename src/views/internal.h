@@ -122,6 +122,10 @@ cf_err cf_view_close_tag(cf_builder *out, const char *name);
 cf_err cf_view_image_tag(const cf_view_ctx *ctx, cf_span logical,
                          const cf_view_attrs *attrs, cf_builder *out);
 
+cf_err cf_view_involvement_button(const cf_view_ctx *ctx, int64_t room_id,
+                                   bool direct, cf_span param_key,
+                                   cf_span involvement, cf_builder *out);
+
 /* ------------------------------------------------------------ fragments */
 
 /* `account_logo_tag(ctx, style)` (helpers/users.rs). */

@@ -1,0 +1,74 @@
+{
+  "source_repo": "https://github.com/basecamp/once-campfire.git",
+  "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+  "license": "MIT",
+  "license_file": "tests/fixtures/media/MIT-LICENSE",
+  "note": "Source inputs for committed storage output vectors, copied byte-for-byte from the read-only Rails oracle.",
+  "entries": [
+    {
+      "fixture": "tests/fixtures/media/moon.jpg",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+      "source_path": "tmp/rails-ref/test/fixtures/files/moon.jpg",
+      "surface": "media",
+      "role": "fixture-data",
+      "bytes": 12794,
+      "sha256": "f95cac806ae17f0d59ad75e5d03d82a05019a65469e9e325baae898d46e7f1e5",
+      "source_sha256": "f95cac806ae17f0d59ad75e5d03d82a05019a65469e9e325baae898d46e7f1e5",
+      "license": "MIT",
+      "license_file": "tests/fixtures/media/MIT-LICENSE"
+    },
+    {
+      "fixture": "tests/fixtures/media/earth.png",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+      "source_path": "tmp/rails-ref/test/fixtures/files/earth.png",
+      "surface": "media",
+      "role": "fixture-data",
+      "bytes": 48537726,
+      "sha256": "185211d2d3ca1d46a583ed0ce424f94b31a7ee7f6d98ee4489fac186ae7b7680",
+      "source_sha256": "185211d2d3ca1d46a583ed0ce424f94b31a7ee7f6d98ee4489fac186ae7b7680",
+      "license": "MIT",
+      "license_file": "tests/fixtures/media/MIT-LICENSE"
+    },
+    {
+      "fixture": "tests/fixtures/media/black_hole.jpg",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+      "source_path": "tmp/rails-ref/test/fixtures/files/black_hole.jpg",
+      "surface": "media",
+      "role": "fixture-data",
+      "bytes": 505420,
+      "sha256": "c2bb690aae06d44635f525a8a5594e286e10a5fb547d116e1a7d38e3782e7a09",
+      "source_sha256": "c2bb690aae06d44635f525a8a5594e286e10a5fb547d116e1a7d38e3782e7a09",
+      "license": "MIT",
+      "license_file": "tests/fixtures/media/MIT-LICENSE"
+    },
+    {
+      "fixture": "tests/fixtures/media/alpha-centuri.mov",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+      "source_path": "tmp/rails-ref/test/fixtures/files/alpha-centuri.mov",
+      "surface": "media",
+      "role": "fixture-data",
+      "bytes": 3945267,
+      "sha256": "420726f9cdff7b48f6bb2d6c79af6ff69dfcc4d290a8376d1901be0de9c62286",
+      "source_sha256": "420726f9cdff7b48f6bb2d6c79af6ff69dfcc4d290a8376d1901be0de9c62286",
+      "license": "MIT",
+      "license_file": "tests/fixtures/media/MIT-LICENSE"
+    },
+    {
+      "fixture": "tests/fixtures/media/MIT-LICENSE",
+      "source_repo": "https://github.com/basecamp/once-campfire.git",
+      "source_revision": "254dd1d46f67f2bace6c79d77f0ac026ba4c9226",
+      "source_path": "tmp/rails-ref/MIT-LICENSE",
+      "surface": "media",
+      "role": "license",
+      "bytes": 1053,
+      "sha256": "fa0d1454375cbc7701bc13d916c3ae71e613b8ae718321641e678e09409393c4",
+      "source_sha256": "fa0d1454375cbc7701bc13d916c3ae71e613b8ae718321641e678e09409393c4",
+      "license": "MIT",
+      "license_file": "tests/fixtures/media/MIT-LICENSE"
+    }
+  ]
+}

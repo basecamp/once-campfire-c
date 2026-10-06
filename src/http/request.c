@@ -581,7 +581,8 @@ static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
 
     cf_http_upgrade_request req;
     memset(&req, 0, sizeof req);
-    req.fd = conn->fd;
+    req.fd = conn->fd >= 0 ? conn->fd : conn->swap_fd;
+    req.tls = conn->tls;
     req.loop_index = loop->cfg.loop_index;
     req.method = conn->method;
     req.target = (cf_span){hb + conn->off_target, conn->len_target};
@@ -635,6 +636,13 @@ static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
          * releases the slot. If the lease cannot be allocated, the old
          * no-reservation detach applies: the hook gets the fd with lease ==
          * NULL and owns its close. */
+        /* TLS parsing suppresses plaintext output by hiding fd. Restore it
+         * before admission and detach; the new owner receives the TLS object
+         * only once lifetime admission succeeds. */
+        if (conn->fd < 0 && conn->swap_fd >= 0) {
+            conn->fd = conn->swap_fd;
+            conn->swap_fd = -1;
+        }
         if (conn->fd >= 0 && conn->registered) {
             (void)epoll_ctl(loop->epfd, EPOLL_CTL_DEL, conn->fd, NULL);
             conn->registered = false;
@@ -653,6 +661,7 @@ static cf_http_upgrade_result run_upgrade_hook(struct cf_http_conn *conn) {
             conn->deadline_ms = 0;
             loop->outstanding_tasks++;
             lease = (cf_http_upgrade_lease *)task;
+            conn->tls = NULL;
         } else {
             free(task);
             /* No reservation is possible: the upgrade is refused (the

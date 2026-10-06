@@ -491,6 +491,8 @@ static void seed_fixture_push(cf_db *db) {
 
 /* --- acceptance ------------------------------------------------------------ */
 
+#include "auth_write_race.h"
+
 CF_TEST(users_push_subscriptions_route_ids_bind_the_actions) {
     cf_test_routes_reset();
     CF_REQUIRE(cf_test_routes_add("GET", "/users/:user_id/push_subscriptions",
@@ -1189,4 +1191,52 @@ CF_TEST(users_push_subscriptions_destroy_unauthenticated_redirects) {
     env_close(&env);
 }
 
+CF_TEST(users_push_subscriptions_rejects_queued_ban) {
+    for (int status = 1; status <= 2; status++) {
+        for (int arm = 0; arm < 4; arm++) {
+            push_env env;
+            CF_REQUIRE(env_open(&env));
+            seed_user(env.scratch.db, 1, "David");
+            seed_user(env.scratch.db, 2, "Other");
+            if (arm > 0)
+                seed_subscription(env.scratch.db, 20, 1, FCM_SEND, "p1", "a1",
+                                  "2020-01-01 00:00:00");
+            char cookie[4096];
+            make_session_cookie(env.config, env.scratch.db, cookie,
+                                sizeof cookie, "david-session", 1);
+            cf_request req;
+            cf_response resp;
+            push_request(&req, arm == 2 ? CF_DELETE : CF_POST,
+                         arm == 2 ? "/users/me/push_subscriptions/20"
+                                  : "/users/me/push_subscriptions",
+                         arm == 2 ? NULL
+                                  : "push_subscription[endpoint]=" FCM_SEND
+                                    "&push_subscription[p256dh_key]=p1&push_"
+                                    "subscription[auth_key]=a1",
+                         "application/x-www-form-urlencoded", "same-origin",
+                         cookie, NULL);
+            auth_write_race race;
+            CF_REQUIRE(auth_race_begin(
+                env.app, env.scratch.path, &race,
+                arm == 3
+                    ? "UPDATE push_subscriptions SET user_id=2 WHERE id=20"
+                    : status == 1 ? "UPDATE users SET status=1 WHERE id=1"
+                                  : "UPDATE users SET status=2 WHERE id=1"));
+            CF_REQUIRE(
+                auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+            auth_race_end(&race);
+            CF_CHECK(resp.status == 403);
+            CF_CHECK(count_rows(env.scratch.db,
+                                "SELECT count(*) FROM push_subscriptions") ==
+                     (arm == 0 ? 0 : 1));
+            if (arm > 0)
+                CF_CHECK(
+                    count_rows(env.scratch.db,
+                               "SELECT count(*) FROM push_subscriptions WHERE "
+                               "updated_at='2020-01-01 00:00:00'") == 1);
+            cf_response_dispose(&resp);
+            env_close(&env);
+        }
+    }
+}
 CF_TEST_MAIN()

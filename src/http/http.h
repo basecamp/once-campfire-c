@@ -108,6 +108,8 @@ void cf_http_upgrade_release(cf_http_upgrade_lease *lease);
 
 typedef struct {
     int fd;               /* nonblocking socket, borrowed unless TAKEN */
+    struct cf_front_tls_conn *tls; /* borrowed until TAKEN; then transferred
+                                   * to the upgrade owner, who destroys it */
     uint32_t loop_index;  /* the owning loop's cf_http_loop_config.loop_index */
     cf_method method;
     cf_span target, path, query, peer_ip;

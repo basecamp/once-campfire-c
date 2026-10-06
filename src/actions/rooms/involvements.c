@@ -72,6 +72,7 @@
 #include "models/user.h"
 #include "views.h"
 #include "views/internal.h"
+#include "views/internal.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -346,7 +347,7 @@ static cf_err involvement_param(cf_ctx *ctx, bool *present,
     return CF_OK;
 }
 
-/* ---- the InvolvementShow render (INTEGRATOR SHIM R1; see the header) ------ */
+/* ---- InvolvementShow render ------------------------------------------- */
 
 typedef struct {
     int64_t room_id;
@@ -373,14 +374,10 @@ static cf_err involvement_room_param_key(cf_room_type kind, cf_builder *out) {
     return rc;
 }
 
-/* The show.html template's turbo-frame shell byte for byte (frame id,
- * url-param, data attributes); the button slot carries a clearly marked
- * placeholder with the current involvement value until the
- * button_to_change_involvement helper lands in the views packet (R1). */
+/* Render the frame and the source helper's next-state PUT button. */
 static cf_err involvement_frame_content(const cf_view_ctx *ctx,
                                         const involvement_view *model,
                                         cf_builder *out) {
-    (void)ctx;
     cf_err rc = cf_builder_append(
         out, involvement_span("<turbo-frame data-controller=\"turbo-frame\" "
                               "data-action=\"notifications:ready@window-&gt;"
@@ -402,17 +399,14 @@ static cf_err involvement_frame_content(const cf_view_ctx *ctx,
         rc = cf_builder_append(
             out, (cf_span){(const unsigned char *)id, (size_t)n});
     }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, involvement_span("\">\n  "
-            "<!-- INTEGRATOR R1: button_to_change_involvement placeholder -->\n  "
-            "<button class=\"btn "));
-    }
-    if (rc == CF_OK) rc = cf_html_attr(out, model->involvement);
-    if (rc == CF_OK) rc = cf_builder_append(out, involvement_span("\" disabled>\n    "));
-    if (rc == CF_OK) rc = cf_html_text(out, model->involvement);
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, involvement_span("\n  </button>\n</turbo-frame>"));
-    }
+    if (rc == CF_OK) rc = cf_builder_append(out, involvement_span("\">\n  "));
+    cf_builder param_key = {0};
+    if (rc == CF_OK) rc = involvement_room_param_key(model->kind, &param_key);
+    if (rc == CF_OK) rc = cf_view_involvement_button(ctx, model->room_id,
+        model->kind == CF_ROOM_DIRECT, (cf_span){param_key.ptr, param_key.len},
+        model->involvement, out);
+    cf_builder_dispose(&param_key);
+    if (rc == CF_OK) rc = cf_builder_append(out, involvement_span("\n</turbo-frame>"));
     return rc;
 }
 
@@ -521,10 +515,32 @@ cf_err cf_action_rooms_involvements_show(cf_ctx *ctx) {
 typedef struct {
     cf_membership *membership;
     cf_optional_involvement involvement;
+    cf_optional_involvement previous;
 } involvements_update_write_arg;
 
 static cf_err involvements_update_write(cf_tx *tx, void *arg) {
     involvements_update_write_arg *write = arg;
+    cf_db *db = cf_tx_db(tx);
+    if (db == NULL) return CF_INTERNAL;
+    bool found = false;
+    cf_user actor = {0};
+    cf_err rc = cf_user_find_by_id(db, write->membership->user_id, &found,
+                                  &actor);
+    bool allowed = rc == CF_OK && found && cf_user_is_active(&actor);
+    cf_user_dispose(&actor);
+    if (rc != CF_OK) return rc;
+    if (!allowed) return CF_FORBIDDEN;
+    cf_membership fresh = {0};
+    rc = cf_membership_find_by_room_and_user(db, write->membership->room_id,
+                                            write->membership->user_id,
+                                            &found, &fresh);
+    if (rc != CF_OK || !found || fresh.id != write->membership->id) {
+        cf_membership_dispose(&fresh);
+        return rc != CF_OK ? rc : CF_FORBIDDEN;
+    }
+    write->previous = fresh.involvement;
+    cf_membership_dispose(write->membership);
+    *write->membership = fresh;
     return cf_membership_update_involvement(tx, write->membership,
                                            write->involvement);
 }
@@ -597,9 +613,6 @@ cf_err cf_action_rooms_involvements_update(cf_ctx *ctx) {
     /* `involvement_previously_was`: the value before the update (or nil,
      * whose later `nil.inquiry` is the reference's 500 — the broadcast maps
      * it to CF_INVALID after the write has committed). */
-    bool has_previous = membership.involvement.present;
-    cf_involvement previous = membership.involvement.value;
-
     involvements_update_write_arg write = {
         .membership = &membership,
         .involvement =
@@ -615,8 +628,9 @@ cf_err cf_action_rooms_involvements_update(cf_ctx *ctx) {
     /* broadcast_visibility_changes: render_shared_room's partials are the
      * production shared_room slot (the real _shared render since V02);
      * involvement_change with previous. */
-    rc = involvements_broadcast_change(ctx, &room, &membership, has_previous,
-                                       previous);
+    rc = involvements_broadcast_change(ctx, &room, &membership,
+                                       write.previous.present,
+                                       write.previous.value);
     int64_t room_id = room.id;
     cf_membership_dispose(&membership);
     cf_room_dispose(&room);

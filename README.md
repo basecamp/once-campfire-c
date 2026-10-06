@@ -1,9 +1,9 @@
 # Campfire in C
 
 A C implementation of [ONCE Campfire](https://github.com/basecamp/once-campfire).
-It keeps the existing SQLite database, storage layout and signed/encrypted
-cookies, so an existing install's data and sessions carry over without a
-migration.
+This is a greenfield implementation using SQLite, a filesystem storage layout
+and signed/encrypted cookies. Existing installations and schema upgrades are
+not supported.
 
 One `campfire` executable replaces Ruby, Puma, Redis, Resque and Thruster. The
 front speaks TLS (configured certificates) with ALPN and HTTP/2, the app
@@ -22,10 +22,23 @@ qrcodegen), and the same test suite also runs under
 Build the pinned dependencies once, then the app:
 
 ```sh
-make deps                 # fetch and build every pinned dependency
+make deps                 # fetch pinned sources and install Fil-C
+make deps-build           # build and probe the clang dependencies
 make                      # dev build -> build/dev/campfire
-make MODE=bench build-app # optimized build
+make MODE=bench build-app # optimized build (same dependency archives)
 ```
+
+Dependency recipes require clang, make, CMake, Perl, autoconf, automake,
+libtool, pkg-config and zlib development headers; fetch scripts also use Git,
+curl, unzip and Python 3. The recorded clang curl recipe links system zlib.
+For Fil-C, run `make deps-build MODE=filc` before `make MODE=filc build-app`.
+`deps-build` runs the committed build/probe recipes without downloading;
+ordinary application builds also never fetch.
+
+Image variants, video previews and full media acceptance also require the
+reference-pinned media tools and the fixed libvips adapter. See the
+[media build instructions](vendor/media/README.md) for the isolated tool
+build and the fixed executable paths to select when building the app/tests.
 
 Run it:
 
@@ -40,8 +53,8 @@ Configuration is read once from the environment (no reload). The settings
 include `HOST`/`PORT`, `DATABASE_PATH`, `STORAGE_PATH`, `PUBLIC_ORIGIN`,
 `SECRET_KEY_BASE`, `CF_LOOPS`/`CF_READERS`/`CF_REQUEST_SLOTS`,
 `CF_CACHE_BYTES` (body cache; 0 disables), `CF_CONNECTIONS_PER_LOOP`, the
-`CF_*_BYTES` budgets, the TLS certificate/key pair (`CF_TLS_CERT_FILE`,
-`CF_TLS_KEY_FILE`), and the VAPID key pair for Web Push. TLS uses configured
+`CF_*_BYTES` budgets, the TLS certificate/key pair (`TLS_CERT_FILE`,
+`TLS_KEY_FILE`), and the VAPID key pair for Web Push. TLS uses configured
 certificates; automatic certificate issuance (ACME) is out of scope.
 
 ## Performance
@@ -119,30 +132,36 @@ validation for every app.
 ### Notes on the comparison
 
 - The harness measures HTTP/1.1 plaintext and plain `ws://` for Cable on every
-  app; TLS and HTTP/2 are outside the measured path (the C front's HTTP/2
-  path does synchronous FILE reads and ignores trailers, and `/cable` over
-  TLS is not implemented — none of which the harness exercises). No
+  app; TLS and HTTP/2 are outside the measured path. The recorded candidate
+  predates the independent-review repairs for H2 request lifetime, budgets,
+  trailers, file workers and TLS Cable. No
   TLS/H2-vs-HTTP/1.1 comparison is implied by these numbers. The merged
   front shows no measurable regression on the measured path: `/up` is flat
   and cache-hit CPU per success is unchanged (24–25 µs/req).
-- Media rows are excluded: image/video variants and previews need the pinned
-  vips/ffmpeg tools, which are not installed in this environment; uploads,
-  attachments and downloads are exercised and pass.
-- The avatar endpoint serves generated initials/bot SVGs where the reference
-  serves a processed variant; that row is measured and must be read with the
-  representation difference in mind.
+- Media rows were excluded from these recorded runs; uploads, attachments and
+  downloads were exercised. The media repair now generates actual variants
+  and previews with the pinned tools described above, but has not been
+  benchmarked in this repair pass.
+- The recorded avatar endpoint served generated initials/bot SVGs where the
+  reference served a processed variant; read that row with the representation
+  difference in mind. The repaired variant path needs fresh measurements.
 - These numbers are not comparable to the upstream table's absolute values
   (different hardware and a differently loaded host); they are comparable
   *between the three apps measured here*, under the same conditions.
 
 ## Development
 
+Build the pinned media tools and export their four `CF_PROC_*_PATH` variables
+as described in [media setup](vendor/media/README.md) before the full suites.
+Use a fresh output tree when changing these compile-time paths. The strict
+media and HTTPS browser arms are enabled below:
+
 ```sh
-make test          # dev suite
-make sanitize      # ASan/UBSan/LSan suite
-make MODE=filc test# the suite under Fil-C
+CF_MEDIA_LIVE=1 make test          # dev suite
+CF_MEDIA_LIVE=1 make sanitize      # ASan/UBSan/LSan suite
+CF_MEDIA_LIVE=1 make MODE=filc test # the suite under Fil-C
 make tsan          # the threaded subset under TSan
-python3 tests/integration/run.py --all   # browser + wire acceptance cases
+CF_E2E_TLS=1 CF_E2E_MEDIA=1 python3 tests/integration/run.py --all
 ```
 
 The integration cases drive a real server and real browsers through

@@ -4,13 +4,12 @@
  * Reference symbols translated here (controller/model packets):
  *   - PushMessage: cf_message_find_by_id + cf_room_find_by_id re-reads, then
  *     cf_push_subscription_pushes_for (Room::MessagePusher recipient
- *     selection: everything + mentions) with a NULL richtext (no rich-text
- *     record means the reference's None). Delivery itself is I02's
- *     (not landed): proposed weak import cf_push_send below.
- *   - DeliverWebhook: cf_user_find_active_bot (revoked/deactivated bots are
- *     CF_NOT_FOUND) + cf_message_find_by_id + cf_user_webhook re-reads
- *     (User::deliver_webhook_later only enqueues for bots with a webhook).
- *     Posting is I01's (not landed): proposed weak import cf_webhook_post.
+ *     selection: everything + mentions) using the configured rich-text
+ *     pipeline. Delivery uses I02
+ *     through the configured real pinned-IP TLS exchange.
+ *   - DeliverWebhook: current bot, room membership, source message and
+ *     webhook checks; real I01 HTTP delivery, canonical replies, writer
+ *     revalidation, attachment processing and production broadcast.
  *   - RemoveBannedContent: the A-users-bans REMOVE_BANNED_CONTENT note (ban
  *     emits the event; unban does not restore). The model helper
  *     cf_user_remove_banned_content destroys unboundedly, so this handler
@@ -20,18 +19,11 @@
  *     touches rooms, as in the request path). Broadcasts use
  *     cf_broadcast_message_remove only. TODO: promote the bounded scan to a
  *     D01 model helper when the integrator next touches message queries.
- *   - PurgeBlob: cf_blob_find re-read, then S02's purge. TODO(S02): S02
- *     owns the reference recheck (active_storage_attachments by blob) and
- *     the in-transaction row delete; S01's cf_storage_delete runs only
- *     after that recheck, inside S02. Until S02 lands, a present blob is a
- *     recorded no-op: the handler deletes nothing.
- *   - Media: explicit storage-owned stub until S03 lands.
+ *   - PurgeBlob: recheck references and remove parent/derived metadata in
+ *     the writer, then delete owned files on this job worker. Referenced
+ *     descendants remain intact; I/O errors report failed cleanup.
+ *   - Media: bounded real analysis before committing metadata and touches.
  *
- * Proposed integrator-owned integration symbols (weak imports: NULL until
- * the owning packet lands, in which case the recorded-noop arm calls them):
- *   - I02: cf_push_send delivers one payload to one recipient list.
- *   - I01: cf_webhook_post posts one webhook for one message.
- *   - S02: cf_blob_purge_if_unreferenced rechecks references and purges.
  */
 #include "jobs/handlers.h"
 
@@ -41,35 +33,26 @@
 #include "db/db_internal.h"
 #include "db/writer.h"
 #include "jobs/jobs.h"
+#include "integrations/push_http.h"
+#include "integrations/webhook.h"
+#include "models/membership.h"
+#include "views.h"
+#include "integrations/host_resolve.h"
+#include "richtext.h"
 #include "models/active_storage.h"
 #include "models/message.h"
 #include "models/push_subscription.h"
 #include "models/room.h"
 #include "models/user.h"
 #include "models/webhook.h"
+#include "storage/media.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
 
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ---- proposed integration symbols (weak; integrator-owned) -------------- */
-
-/* I02 (not landed): deliver payload to nsubs subscriptions. */
-extern cf_err cf_push_send(const cf_push_payload *payload,
-                           const cf_push_subscription *subs,
-                           size_t nsubs) __attribute__((weak));
-
-/* I01 (not landed): post user_id's webhook for message_id. */
-extern cf_err cf_webhook_post(int64_t user_id,
-                              int64_t message_id) __attribute__((weak));
-
-/* S02 (not landed): recheck references for blob_id and, when unreferenced,
- * delete the row (and its S01 files) in one transaction. Sets *purged to
- * whether anything was deleted. CF_NOT_FOUND when the row is already gone.
- * TODO(S02): provide this symbol; see the file header. */
-extern cf_err cf_blob_purge_if_unreferenced(cf_app *app, int64_t blob_id,
-                                            bool *purged) __attribute__((weak));
 
 /* ---- own reader ---------------------------------------------------------- */
 
@@ -88,6 +71,70 @@ static cf_err jobs_reader_open(cf_jobs_handler_ctx *h, cf_db **out) {
     }
     if (path == NULL) return CF_INVALID;
     return cf_db_open(path, true, out);
+}
+
+struct jobs_push_invalidate {
+    const cf_push_subscription *sent;
+};
+
+static bool jobs_push_same_key(cf_optional_str a, cf_optional_str b) {
+    return a.present == b.present && (!a.present ||
+        (a.value.len == b.value.len &&
+         (a.value.len == 0 || memcmp(a.value.ptr,b.value.ptr,a.value.len) == 0)));
+}
+
+static cf_err jobs_push_invalidate_cb(cf_tx *tx, void *arg) {
+    const cf_push_subscription *sent = ((struct jobs_push_invalidate *)arg)->sent;
+    cf_push_subscription current = {0};
+    cf_err rc = cf_push_subscription_find(cf_tx_db(tx),sent->id,&current);
+    if (rc == CF_NOT_FOUND) return CF_OK;
+    if (rc == CF_OK && current.user_id == sent->user_id &&
+        jobs_push_same_key(current.endpoint,sent->endpoint) &&
+        jobs_push_same_key(current.p256dh_key,sent->p256dh_key) &&
+        jobs_push_same_key(current.auth_key,sent->auth_key)) {
+        rc = cf_push_subscription_destroy(tx,&current);
+    }
+    cf_push_subscription_dispose(&current);
+    return rc;
+}
+
+static cf_err jobs_push_deliver_list(cf_jobs_handler_ctx *h,
+    const cf_push_payload *payload, cf_push_subscription_vector *subscriptions,
+    const cf_push_vapid *vapid) {
+    cf_push_sort_by_id(subscriptions);
+    cf_err first_error = CF_OK;
+    for (size_t i=0;i<subscriptions->len;i++) {
+        cf_push_subscription *subscription = &subscriptions->items[i];
+        cf_db *db = NULL;
+        int64_t badge = 0;
+        cf_err rc = jobs_reader_open(h,&db);
+        if (rc == CF_OK) rc = cf_push_subscription_badge(db,subscription,&badge);
+        cf_db_close(db);
+        if (rc != CF_OK) {if(first_error==CF_OK)first_error=rc;continue;}
+        cf_push_delivery outcome = {0};
+        atomic_fetch_add_explicit(&h->push_attempted,1,memory_order_relaxed);
+        rc = cf_push_deliver(subscription,
+            payload->title.ptr != NULL ? payload->title.ptr : "",
+            payload->body.ptr != NULL ? payload->body.ptr : "",
+            payload->path.ptr != NULL ? payload->path.ptr : "",badge,vapid,
+            h->push_resolve != NULL ? h->push_resolve : cf_host_resolve_fn,
+            h->push_resolve_ctx,
+            h->push_exchange != NULL ? h->push_exchange : cf_push_http_exchange,
+            h->push_exchange_ctx,cf_now_us(h->app)/INT64_C(1000000),&outcome);
+        if (rc == CF_OK && outcome.invalidate) {
+            struct jobs_push_invalidate write = {.sent=subscription};
+            rc = cf_write(h->app,jobs_push_invalidate_cb,&write);
+        } else if (rc == CF_OK && outcome.kind != CF_PUSH_DELIVERY_OK) {
+            char line[256];
+            cf_push_format_log(&outcome,line,sizeof line);
+            fprintf(stderr,"campfire: push delivery failed: %s\n",line);
+            rc = CF_IO;
+        }
+        cf_push_delivery_dispose(&outcome);
+        if (rc != CF_OK && first_error == CF_OK) first_error = rc;
+        /* A failed recipient never suppresses independent remaining ones. */
+    }
+    return first_error;
 }
 
 /* ---- PushMessage (CF_JOB_PUSH_MESSAGE) ------------------------------------ */
@@ -128,7 +175,7 @@ cf_err cf_jobs_handle_push_message(void *ctx, const cf_job *job) {
         if (rc == CF_OK && !room_found) gone = true;
     }
     if (rc == CF_OK && !gone) {
-        rc = cf_push_subscription_pushes_for(db, NULL, &message,
+        rc = cf_push_subscription_pushes_for(db, cf_tx_rich_text(NULL), &message,
                                             cf_now_us(h->app), &payload,
                                             &everything, &mentions);
     }
@@ -161,24 +208,22 @@ cf_err cf_jobs_handle_push_message(void *ctx, const cf_job *job) {
         return CF_OK;
     }
 
-    /* I02 has not landed: recipients were selected through the model reads
-     * above; delivery is a recorded no-op until cf_push_send exists. */
-    if (cf_push_send == NULL) {
-        atomic_fetch_add_explicit(&h->push_noop_no_integration, 1,
-                                 memory_order_relaxed);
-        cf_push_payload_dispose(&payload);
-        cf_push_subscription_vector_dispose(&everything);
-        cf_push_subscription_vector_dispose(&mentions);
-        cf_room_dispose(&room);
-        cf_message_dispose(&message);
-        return CF_OK;
-    }
-    atomic_fetch_add_explicit(&h->push_attempted, 1, memory_order_relaxed);
-    if (everything.len != 0) {
-        rc = cf_push_send(&payload, everything.items, everything.len);
-    }
-    if (rc == CF_OK && mentions.len != 0) {
-        rc = cf_push_send(&payload, mentions.items, mentions.len);
+    /* No recipient is a normal empty delivery. Every present recipient uses
+     * the real configured VAPID pair and pinned-IP TLS transport by default. */
+    if (everything.len == 0 && mentions.len == 0) {
+        atomic_fetch_add_explicit(&h->push_noop_no_recipients,1,memory_order_relaxed);
+    } else {
+        cf_push_vapid vapid = {0};
+        cf_push_vapid_error detail = CF_PUSH_VAPID_OK;
+        rc = cf_push_vapid_from_config(cf_app_config(h->app),&vapid,&detail);
+        if (rc == CF_OK) {
+            rc = jobs_push_deliver_list(h,&payload,&everything,&vapid);
+            cf_err mention_rc = jobs_push_deliver_list(h,&payload,&mentions,&vapid);
+            if (rc == CF_OK) rc = mention_rc;
+        } else {
+            fprintf(stderr,"campfire: push disabled: %s\n",cf_push_vapid_error_name(detail));
+        }
+        cf_push_vapid_dispose(&vapid);
     }
     cf_push_payload_dispose(&payload);
     cf_push_subscription_vector_dispose(&everything);
@@ -190,84 +235,143 @@ cf_err cf_jobs_handle_push_message(void *ctx, const cf_job *job) {
 
 /* ---- DeliverWebhook (CF_JOB_DELIVER_WEBHOOK) ------------------------------- */
 
+/* Snapshot checks are repeated under the writer after HTTP/file staging. */
+static cf_err jobs_webhook_targets(cf_db *db, const cf_job *job,
+                                  cf_user *bot, cf_message *message,
+                                  cf_webhook *hook, bool *gone) {
+    *gone=false;
+    cf_err rc=cf_user_find_active_bot(db,job->user_id,bot);
+    if(rc==CF_NOT_FOUND){*gone=true;return CF_OK;}
+    bool found=false;
+    if(rc==CF_OK)rc=cf_message_find_by_id(db,job->message_id,&found,message);
+    if(rc==CF_OK&&!found){*gone=true;return CF_OK;}
+    if(rc==CF_OK)rc=cf_webhook_find_by_user(db,job->user_id,&found,hook);
+    if(rc==CF_OK&&(!found||!hook->url.present||hook->url.value.len==0)){*gone=true;return CF_OK;}
+    cf_room room={0};
+    if(rc==CF_OK)rc=cf_room_find_by_id(db,message->room_id,&found,&room);
+    cf_room_dispose(&room);
+    if(rc==CF_OK&&!found){*gone=true;return CF_OK;}
+    cf_membership membership={0};
+    if(rc==CF_OK)rc=cf_membership_find_by_room_and_user(db,message->room_id,bot->id,&found,&membership);
+    cf_membership_dispose(&membership);
+    if(rc==CF_OK&&!found)*gone=true;
+    return rc;
+}
+
+struct jobs_webhook_reply {
+    const cf_job *job;
+    const cf_message *source;
+    const cf_webhook *sent;
+    cf_optional_str body;
+    const cf_active_staged *staged;
+    cf_message reply;
+    cf_blob blob;
+    bool gone;
+};
+static cf_err jobs_webhook_reply_write(cf_tx *tx, void *arg) {
+    struct jobs_webhook_reply *w=arg;
+    cf_user bot={0};cf_message source={0};cf_webhook hook={0};
+    cf_err rc=jobs_webhook_targets(cf_tx_db(tx),w->job,&bot,&source,&hook,&w->gone);
+    if(rc==CF_OK&&!w->gone && (source.room_id!=w->source->room_id ||
+        source.creator_id!=w->source->creator_id || hook.id!=w->sent->id ||
+        !jobs_push_same_key(hook.url,w->sent->url)))w->gone=true;
+    cf_new_message input={.room_id=source.room_id,.creator_id=bot.id,.body=w->body};
+    if(rc==CF_OK&&!w->gone&&w->staged){
+        const cf_active_staged *s=w->staged;
+        cf_blob blob={.key=s->key,.filename=s->filename,.content_type=s->content_type,
+            .metadata={true,s->metadata},.service_name=s->service_name,
+            .byte_size=s->byte_size,.checksum={true,s->checksum}};
+        rc=cf_blob_create(tx,&blob,&w->blob);
+        input.attachment_blob_id=(cf_optional_i64){true,w->blob.id};
+    }
+    if(rc==CF_OK&&!w->gone)rc=cf_message_create(tx,&input,&w->reply);
+    cf_user_dispose(&bot);cf_message_dispose(&source);cf_webhook_dispose(&hook);
+    return rc;
+}
+
+static cf_err jobs_webhook_broadcast(cf_jobs_handler_ctx *h,cf_db *db,const cf_message *message){
+    if(h->cable==NULL)return CF_OK; /* Explicit context policy, e.g. unit jobs. */
+    cf_room room={0};cf_err rc=cf_room_find(db,message->room_id,&room);
+    cf_ctx ctx={.app=h->app,.reader=db};
+    cf_view_ctx view;cf_view_ctx_init(&view,&ctx,NULL);
+    cf_broadcast_views views={&ctx,&view};cf_broadcast_partials partials;
+    cf_broadcast_partials_views(&partials,&views);
+    if(rc==CF_OK)rc=cf_broadcast_message_create(db,h->cable,&room,message,&partials);
+    cf_room_dispose(&room);
+    if(rc==CF_BUSY){cf_cable_log("dropped broadcast","webhook reply");return CF_OK;}
+    return rc;
+}
+
 cf_err cf_jobs_handle_deliver_webhook(void *ctx, const cf_job *job) {
-    cf_jobs_handler_ctx *h = ctx;
-    if (h == NULL || job == NULL || job->kind != CF_JOB_DELIVER_WEBHOOK) {
-        return CF_INVALID;
+    cf_jobs_handler_ctx *h=ctx;
+    if(!h||!job||job->kind!=CF_JOB_DELIVER_WEBHOOK||job->user_id<=0||job->message_id<=0)return CF_INVALID;
+    cf_db *db=NULL;cf_err rc=jobs_reader_open(h,&db);if(rc!=CF_OK)return rc;
+    cf_user bot={0};cf_message message={0};cf_webhook hook={0};
+    cf_str payload={0},body={0};bool gone=false;
+    cf_webhook_delivery delivery={0};cf_storage *storage=NULL;cf_active_staged staged={0};
+    struct jobs_webhook_reply reply={.job=job,.source=&message,.sent=&hook};
+    rc=cf_read_begin(db);
+    if(rc!=CF_OK)goto done;
+    rc=jobs_webhook_targets(db,job,&bot,&message,&hook,&gone);
+    if(rc==CF_OK&&!gone){
+        cf_str key={0};rc=cf_user_bot_key(&bot,&key);
+        cf_builder path={0};char prefix[64],message_path[96];
+        int n=snprintf(prefix,sizeof prefix,"/rooms/%lld/",(long long)message.room_id);
+        if(rc==CF_OK)rc=cf_builder_append(&path,(cf_span){(const unsigned char*)prefix,(size_t)n});
+        if(rc==CF_OK)rc=cf_builder_append(&path,(cf_span){(const unsigned char*)key.ptr,key.len});
+        if(rc==CF_OK)rc=cf_builder_append(&path,(cf_span){(const unsigned char*)"/messages",9});
+        n=snprintf(message_path,sizeof message_path,"/rooms/%lld@%lld",(long long)message.room_id,(long long)message.id);
+        if(rc==CF_OK)rc=cf_webhook_payload(db,&hook,cf_tx_rich_text(NULL),&message,
+            (cf_str){(char*)path.ptr,path.len},(cf_str){message_path,(size_t)n},&payload);
+        cf_builder_dispose(&path);cf_str_dispose(&key);
     }
-    if (job->user_id <= 0 || job->message_id <= 0) return CF_INVALID;
-
-    cf_db *db = NULL;
-    cf_err rc = jobs_reader_open(h, &db);
-    if (rc != CF_OK) return rc;
-    rc = cf_read_begin(db);
-    if (rc != CF_OK) {
-        cf_db_close(db);
-        return rc;
-    }
-
-    /* Re-read the bot, the message and the webhook: a deleted or
-     * deactivated bot, a deleted message, or a removed/blanked webhook URL
-     * is a recorded no-op (never resurrected, never retried). */
-    cf_user bot = {0};
-    cf_message message = {0};
-    cf_webhook hook = {0};
-    bool gone = false;
-
-    rc = cf_user_find_active_bot(db, job->user_id, &bot);
-    if (rc == CF_NOT_FOUND) {
-        gone = true;
-        rc = CF_OK;
-    }
-    if (rc == CF_OK && !gone) {
-        bool message_found = false;
-        rc = cf_message_find_by_id(db, job->message_id, &message_found,
-                                   &message);
-        if (rc == CF_OK && !message_found) gone = true;
-    }
-    if (rc == CF_OK && !gone) {
-        bool hook_found = false;
-        rc = cf_webhook_find_by_user(db, job->user_id, &hook_found, &hook);
-        if (rc == CF_OK) {
-            if (!hook_found || !hook.url.present ||
-                hook.url.value.len == 0) {
-                gone = true;
-            }
+    {cf_err end=cf_read_end(db);if(rc==CF_OK)rc=end;}
+    if(rc!=CF_OK)goto done;
+    if(gone){atomic_fetch_add_explicit(&h->webhook_noop_gone,1,memory_order_relaxed);goto done;}
+    if(!h->app){rc=CF_INVALID;goto done;}
+    atomic_fetch_add_explicit(&h->webhook_attempted,1,memory_order_relaxed);
+    cf_webhook_config config;cf_webhook_default_config(&config);
+    cf_webhook_err error=cf_webhook_deliver(&config,hook.url.value.ptr,
+        (const unsigned char*)payload.ptr,payload.len,&delivery);
+    if(error!=CF_WEBHOOK_OK){rc=error==CF_WEBHOOK_NOMEM?CF_NOMEM:CF_IO;goto done;}
+    cf_ctx jobctx={.app=h->app,.reader=db};
+    if(delivery.timed_out || delivery.kind==CF_WEBHOOK_REPLY_TEXT){
+        char timeout[96];const char *text=delivery.text;
+        if(delivery.timed_out){snprintf(timeout,sizeof timeout,"Failed to respond within %u seconds",delivery.timeout_secs);text=timeout;}
+        size_t text_len=delivery.timed_out?strlen(text):delivery.text_len;
+        rc=cf_richtext_canonical_body(&jobctx,(cf_span){(const unsigned char*)text,text_len},&body);
+        reply.body=(cf_optional_str){true,body};
+    }else if(delivery.kind==CF_WEBHOOK_REPLY_ATTACHMENT){
+        rc=cf_storage_open(cf_app_config(h->app)->storage_path,&storage);
+        FILE *file=rc==CF_OK?tmpfile():NULL;
+        if(rc==CF_OK&&!file)rc=CF_IO;
+        if(rc==CF_OK && fwrite(delivery.data,1,delivery.data_len,file)!=delivery.data_len)rc=CF_IO;
+        if(rc==CF_OK && fflush(file)!=0)rc=CF_IO;
+        if(rc==CF_OK)rc=cf_active_stage_import(storage,fileno(file),
+            (cf_span){(const unsigned char*)delivery.filename,strlen(delivery.filename)},
+            (cf_span){(const unsigned char*)delivery.content_type,strlen(delivery.content_type)},true,CF_WEBHOOK_MAX_REPLY_SIZE,&staged);
+        if(file)fclose(file);
+        reply.staged=&staged;
+    }else goto done;
+    if(rc==CF_OK)rc=cf_write(h->app,jobs_webhook_reply_write,&reply);
+    if(rc!=CF_OK)goto done;
+    if(reply.gone){atomic_fetch_add_explicit(&h->webhook_noop_gone,1,memory_order_relaxed);goto done;}
+    if(reply.staged){
+        rc=cf_active_staged_commit(&staged);
+        if(rc==CF_OK)rc=cf_media_process_attachment(&jobctx,&reply.blob);
+        if(rc==CF_OK) {
+            int64_t id=reply.reply.id;cf_message_dispose(&reply.reply);
+            bool found=false;rc=cf_message_find_by_id(db,id,&found,&reply.reply);
+            if(rc==CF_OK&&!found)goto done;
         }
     }
-
-    cf_err end_rc = cf_read_end(db);
-    cf_db_close(db);
-    if (rc != CF_OK) {
-        cf_webhook_dispose(&hook);
-        cf_user_dispose(&bot);
-        cf_message_dispose(&message);
-        return rc;
-    }
-    if (end_rc != CF_OK) {
-        cf_webhook_dispose(&hook);
-        cf_user_dispose(&bot);
-        cf_message_dispose(&message);
-        return end_rc;
-    }
-    cf_webhook_dispose(&hook);
-    cf_user_dispose(&bot);
-    cf_message_dispose(&message);
-    if (gone) {
-        atomic_fetch_add_explicit(&h->webhook_noop_gone, 1,
-                                 memory_order_relaxed);
-        return CF_OK;
-    }
-
-    /* I01 has not landed: the active bot and message were re-read above;
-     * posting is a recorded no-op until cf_webhook_post exists. */
-    if (cf_webhook_post == NULL) {
-        atomic_fetch_add_explicit(&h->webhook_noop_no_integration, 1,
-                                 memory_order_relaxed);
-        return CF_OK;
-    }
-    atomic_fetch_add_explicit(&h->webhook_attempted, 1, memory_order_relaxed);
-    return cf_webhook_post(job->user_id, job->message_id);
+    if(rc==CF_OK)rc=jobs_webhook_broadcast(h,db,&reply.reply);
+done:
+    cf_active_staged_dispose(&staged);cf_storage_close(storage);
+    cf_webhook_delivery_dispose(&delivery);cf_str_dispose(&payload);cf_str_dispose(&body);
+    cf_message_dispose(&reply.reply);cf_blob_dispose(&reply.blob);
+    cf_user_dispose(&bot);cf_message_dispose(&message);cf_webhook_dispose(&hook);
+    cf_db_close(db);return rc;
 }
 
 /* ---- RemoveBannedContent (CF_JOB_REMOVE_BANNED_CONTENT) -------------------- */
@@ -526,81 +630,232 @@ cf_err cf_jobs_handle_remove_banned_content(void *ctx, const cf_job *job) {
 
 /* ---- PurgeBlob (CF_JOB_PURGE_BLOB) ----------------------------------------- */
 
-cf_err cf_jobs_handle_purge_blob(void *ctx, const cf_job *job) {
-    cf_jobs_handler_ctx *h = ctx;
-    if (h == NULL || job == NULL || job->kind != CF_JOB_PURGE_BLOB) {
-        return CF_INVALID;
-    }
-    if (job->blob_id <= 0) return CF_INVALID;
+typedef struct {
+    int64_t root_id;
+    int64_t *candidates;
+    size_t count, capacity;
+    cf_blob_vector deleted;
+} jobs_purge_arg;
 
-    cf_db *db = NULL;
-    cf_err rc = jobs_reader_open(h, &db);
-    if (rc != CF_OK) return rc;
-    rc = cf_read_begin(db);
-    if (rc != CF_OK) {
-        cf_db_close(db);
-        return rc;
+static cf_err jobs_purge_candidate(jobs_purge_arg *arg, int64_t id) {
+    /* A shared descendant may need a later recheck after another parent
+     * is removed. Already deleted candidates become harmless missing rows. */
+    if (arg->count == arg->capacity) {
+        size_t cap = arg->capacity ? arg->capacity * 2 : 8;
+        if (cap < arg->capacity || cap > SIZE_MAX / sizeof *arg->candidates)
+            return CF_NOMEM;
+        int64_t *items = realloc(arg->candidates, cap * sizeof *items);
+        if (items == NULL)
+            return CF_NOMEM;
+        arg->candidates = items;
+        arg->capacity = cap;
     }
-
-    /* A missing blob row is a recorded no-op (already purged or never
-     * attached): nothing is resurrected. */
-    cf_blob blob = {0};
-    rc = cf_blob_find(db, job->blob_id, &blob);
-    bool gone = rc == CF_NOT_FOUND;
-    if (gone) rc = CF_OK;
-
-    cf_err end_rc = cf_read_end(db);
-    cf_db_close(db);
-    if (rc != CF_OK) return rc;
-    if (end_rc != CF_OK) {
-        cf_blob_dispose(&blob);
-        return end_rc;
-    }
-    if (gone) {
-        atomic_fetch_add_explicit(&h->purge_noop_gone, 1,
-                                 memory_order_relaxed);
-        return CF_OK;
-    }
-    cf_blob_dispose(&blob);
-
-    /* TODO(S02): S02 owns the reference recheck and the in-transaction row
-     * delete (S01 file deletes run only after that recheck). Until
-     * cf_blob_purge_if_unreferenced exists, a present blob is a recorded
-     * no-op and nothing on disk is touched. */
-    if (cf_blob_purge_if_unreferenced == NULL) {
-        atomic_fetch_add_explicit(&h->purge_deferred_no_s02, 1,
-                                 memory_order_relaxed);
-        return CF_OK;
-    }
-    bool purged = false;
-    rc = cf_blob_purge_if_unreferenced(h->app, job->blob_id, &purged);
-    if (rc == CF_NOT_FOUND) {
-        atomic_fetch_add_explicit(&h->purge_noop_gone, 1,
-                                 memory_order_relaxed);
-        return CF_OK;
-    }
-    if (rc != CF_OK) return rc;
-    if (purged) {
-        atomic_fetch_add_explicit(&h->purge_deleted, 1, memory_order_relaxed);
-    } else {
-        atomic_fetch_add_explicit(&h->purge_noop_gone, 1,
-                                 memory_order_relaxed);
-    }
+    arg->candidates[arg->count++] = id;
     return CF_OK;
 }
 
-/* ---- Media (CF_JOB_MEDIA): explicit storage-owned stub --------------------- */
+static cf_err jobs_purge_sql(cf_db *db, const char *sql, int64_t id,
+                             jobs_purge_arg *children) {
+    sqlite3_stmt *stmt = NULL;
+    int step = sqlite3_prepare_v2(cf_db_handle(db), sql, -1, &stmt, NULL);
+    cf_err rc = cf_db_err(step);
+    if (rc == CF_OK)
+        rc = cf_db_err(sqlite3_bind_int64(stmt, 1, id));
+    while (rc == CF_OK && (step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (children != NULL)
+            rc = jobs_purge_candidate(children, sqlite3_column_int64(stmt, 0));
+    }
+    if (rc == CF_OK && step != SQLITE_DONE)
+        rc = cf_db_err(step);
+    int final_rc = sqlite3_finalize(stmt);
+    return rc != CF_OK ? rc : cf_db_err(final_rc);
+}
+
+static cf_err jobs_purge_write(cf_tx *tx, void *opaque) {
+    jobs_purge_arg *arg = opaque;
+    cf_db *db = cf_tx_db(tx);
+    if (db == NULL)
+        return CF_INTERNAL;
+    cf_err rc = jobs_purge_candidate(arg, arg->root_id);
+    for (size_t i = 0; rc == CF_OK && i < arg->count; i++) {
+        cf_blob blob = {0};
+        rc = cf_blob_find(db, arg->candidates[i], &blob);
+        if (rc == CF_NOT_FOUND) {
+            rc = CF_OK;
+            continue;
+        }
+        if (rc != CF_OK) {
+            cf_blob_dispose(&blob);
+            break;
+        }
+        cf_attachment_vector refs = {0};
+        rc = cf_attachment_records_for_blob(db, blob.id, &refs);
+        bool unreferenced = rc == CF_OK && cf_active_purge_proceed(refs.len);
+        cf_attachment_vector_dispose(&refs);
+        if (rc != CF_OK || !unreferenced) {
+            cf_blob_dispose(&blob);
+            continue;
+        }
+        if (!cf_storage_key_valid(
+                (cf_span){(unsigned char *)blob.key.ptr, blob.key.len})) {
+            cf_blob_dispose(&blob);
+            return CF_INVALID;
+        }
+        if (arg->deleted.len == arg->deleted.cap) {
+            size_t cap = arg->deleted.cap ? arg->deleted.cap * 2 : 8;
+            if (cap < arg->deleted.cap || cap > SIZE_MAX / sizeof(cf_blob)) {
+                cf_blob_dispose(&blob);
+                return CF_NOMEM;
+            }
+            cf_blob *items = realloc(arg->deleted.items, cap * sizeof *items);
+            if (items == NULL) {
+                cf_blob_dispose(&blob);
+                return CF_NOMEM;
+            }
+            arg->deleted.items = items;
+            arg->deleted.cap = cap;
+        }
+        /* Derived images are separate blobs. Remove only the parent's
+         * ownership edges, then recheck every child before deleting it. */
+        const char *owned =
+            "SELECT blob_id FROM active_storage_attachments WHERE "
+            "(record_type='ActiveStorage::Blob' AND record_id=?1) OR "
+            "(record_type='ActiveStorage::VariantRecord' AND record_id IN "
+            "(SELECT id FROM active_storage_variant_records WHERE blob_id=?1))";
+        rc = jobs_purge_sql(db, owned, blob.id, arg);
+        if (rc == CF_OK)
+            rc = jobs_purge_sql(
+                db,
+                "DELETE FROM active_storage_attachments WHERE "
+                "(record_type='ActiveStorage::Blob' AND record_id=?1) OR "
+                "(record_type='ActiveStorage::VariantRecord' AND record_id IN "
+                "(SELECT id FROM active_storage_variant_records WHERE "
+                "blob_id=?1))",
+                blob.id, NULL);
+        if (rc == CF_OK)
+            rc = jobs_purge_sql(
+                db,
+                "DELETE FROM active_storage_variant_records WHERE blob_id=?1",
+                blob.id, NULL);
+        if (rc == CF_OK)
+            rc = jobs_purge_sql(db,
+                                "DELETE FROM active_storage_blobs WHERE id=?1",
+                                blob.id, NULL);
+        if (rc == CF_OK)
+            arg->deleted.items[arg->deleted.len++] = blob;
+        else
+            cf_blob_dispose(&blob);
+    }
+    return rc;
+}
+
+cf_err cf_jobs_handle_purge_blob(void *ctx, const cf_job *job) {
+    cf_jobs_handler_ctx *h = ctx;
+    if (h == NULL || job == NULL || job->kind != CF_JOB_PURGE_BLOB ||
+        job->blob_id <= 0)
+        return CF_INVALID;
+    if (h->app == NULL)
+        return CF_INTERNAL;
+    const cf_config *config = cf_app_config(h->app);
+    if (config == NULL || config->storage_path == NULL)
+        return CF_INTERNAL;
+    cf_storage *storage = NULL;
+    cf_err rc = cf_storage_open(config->storage_path, &storage);
+    if (rc != CF_OK)
+        return rc;
+    jobs_purge_arg arg = {.root_id = job->blob_id};
+    rc = cf_write(h->app, jobs_purge_write, &arg);
+    if (rc == CF_OK && arg.deleted.len == 0)
+        atomic_fetch_add_explicit(&h->purge_noop_gone, 1, memory_order_relaxed);
+    if (rc == CF_OK) {
+        /* File I/O runs on this job worker after the metadata transaction
+         * commits. Continue cleanup after one failure, but report it.
+         * Jobs have no retry: a filesystem failure can retain orphan files;
+         * the metadata remains deleted to prevent unsafe reattachment. */
+        for (size_t i = 0; i < arg.deleted.len; i++) {
+            cf_blob *blob = &arg.deleted.items[i];
+            bool image = blob->content_type.present &&
+                         blob->content_type.value.len >= 6 &&
+                         memcmp(blob->content_type.value.ptr, "image/", 6) == 0;
+            cf_err file_rc = cf_active_purge_files(
+                storage,
+                (cf_span){(unsigned char *)blob->key.ptr, blob->key.len},
+                image);
+            if (file_rc != CF_OK && rc == CF_OK)
+                rc = file_rc;
+        }
+        if (rc == CF_OK && arg.deleted.len > 0)
+            atomic_fetch_add_explicit(&h->purge_deleted, 1,
+                                      memory_order_relaxed);
+    }
+    cf_blob_vector_dispose(&arg.deleted);
+    free(arg.candidates);
+    cf_storage_close(storage);
+    return rc;
+}
+
+/* ---- Media analysis (CF_JOB_MEDIA) -------------------------------------- */
+
+struct jobs_media_write {
+    int64_t blob_id;
+    cf_str metadata;
+    bool gone;
+};
+
+static cf_err jobs_media_write_cb(cf_tx *tx, void *arg) {
+    struct jobs_media_write *write = arg;
+    cf_blob current = {0};
+    cf_err rc = cf_blob_find(cf_tx_db(tx), write->blob_id, &current);
+    if (rc == CF_NOT_FOUND) {write->gone = true;return CF_OK;}
+    cf_blob_dispose(&current);
+    if (rc != CF_OK) return rc;
+    rc = cf_blob_update_metadata(tx, write->blob_id, write->metadata);
+    /* Analyze attachment touches the current attached records, never stale
+     * request objects. This is the message analyzer's source behavior. */
+    cf_attachment_vector records = {0};
+    if (rc == CF_OK) rc = cf_attachment_records_for_blob(cf_tx_db(tx), write->blob_id, &records);
+    for (size_t i = 0; rc == CF_OK && i < records.len; i++) {
+        cf_attachment *record = &records.items[i];
+        if (record->record_type.len != 7 || memcmp(record->record_type.ptr,"Message",7) != 0) continue;
+        cf_message message = {0};
+        rc = cf_message_find(cf_tx_db(tx), record->record_id, &message);
+        if (rc == CF_NOT_FOUND) rc = CF_OK;
+        else if (rc == CF_OK) rc = cf_message_touch(tx,&message);
+        cf_message_dispose(&message);
+    }
+    cf_attachment_vector_dispose(&records);
+    return rc;
+}
 
 cf_err cf_jobs_handle_media(void *ctx, const cf_job *job) {
     cf_jobs_handler_ctx *h = ctx;
-    if (h == NULL || job == NULL || job->kind != CF_JOB_MEDIA) {
-        return CF_INVALID;
+    if (h == NULL || job == NULL || job->kind != CF_JOB_MEDIA ||
+        job->blob_id <= 0 || job->task_type == NULL ||
+        strcmp(job->task_type,"analyze") != 0) return CF_INVALID;
+    cf_db *db = NULL;
+    cf_blob blob = {0};
+    cf_err rc = jobs_reader_open(h,&db);
+    if (rc == CF_OK) rc = cf_blob_find(db,job->blob_id,&blob);
+    cf_db_close(db);
+    if (rc == CF_NOT_FOUND) {
+        atomic_fetch_add_explicit(&h->media_noop,1,memory_order_relaxed);
+        return CF_OK;
     }
-    /* S03 owns the real analyze/transform worker (task_type/variation are
-     * borrowed queue-owned strings for the call only). Until S03 lands,
-     * every media job is a recorded no-op. */
-    atomic_fetch_add_explicit(&h->media_noop, 1, memory_order_relaxed);
-    return CF_OK;
+    if (rc != CF_OK) return rc;
+    cf_builder metadata = {0};
+    /* Subprocess wait happens before cf_write; no writer or read transaction
+     * is held while one of the four media slots is occupied. */
+    rc = cf_media_analyze_blob(h->app,&blob,&metadata);
+    cf_blob_dispose(&blob);
+    if (rc == CF_OK) {
+        struct jobs_media_write write = {.blob_id=job->blob_id,
+            .metadata={(char *)metadata.ptr,metadata.len}};
+        rc = cf_write(h->app,jobs_media_write_cb,&write);
+        if (rc == CF_OK && write.gone)
+            atomic_fetch_add_explicit(&h->media_noop,1,memory_order_relaxed);
+    }
+    cf_builder_dispose(&metadata);
+    return rc;
 }
 
 /* ---- registration ---------------------------------------------------------- */
@@ -609,6 +864,7 @@ cf_err cf_jobs_register_default_handlers(cf_jobs *jobs,
                                          cf_jobs_handler_ctx *ctx) {
     if (jobs == NULL || ctx == NULL) return CF_INVALID;
     ctx->jobs = jobs;
+    if (ctx->app != NULL) cf_app_set_jobs(ctx->app, jobs);
     static const struct {
         cf_job_kind kind;
         cf_job_handler_fn fn;

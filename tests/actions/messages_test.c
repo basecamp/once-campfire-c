@@ -2172,11 +2172,10 @@ CF_TEST(messages_attachment_over_cap_is_400_and_leaves_nothing) {
     g_storage_override = NULL;
 }
 
-/* An image upload commits the rows, then the synchronous analyze arm stops at
- * the documented S03 boundary (no pinned vips): 500 with the message/blob/
- * attachment committed and the metadata unanalyzed, exactly the reference's
- * failure shape for an analyzer that raises. */
-CF_TEST(messages_attachment_image_stops_at_s03) {
+/* Corrupt image input is analyzed as an empty image metadata object (the
+ * reference ImageAnalyzer rescue), then its thumbnail transform fails. The
+ * committed attachment remains, with analyzed:true and no bogus variant. */
+CF_TEST(messages_attachment_corrupt_image_fails_transform) {
     char root[64];
     CF_REQUIRE(storage_root_make(root, sizeof root));
     msg_env env;
@@ -2214,7 +2213,57 @@ CF_TEST(messages_attachment_image_stops_at_s03) {
     CF_CHECK(one_text(env.scratch.db,
                       "SELECT metadata FROM active_storage_blobs", text,
                       sizeof text) &&
-             strcmp(text, "{\"identified\":true}") == 0);
+             strcmp(text, "{\"identified\":true,\"analyzed\":true}") == 0);
+
+    env_close(&env);
+    storage_root_remove(root);
+    g_storage_override = NULL;
+}
+
+CF_TEST(messages_attachment_image_generates_thumbnail) {
+    char root[64];
+    CF_REQUIRE(storage_root_make(root, sizeof root));
+    msg_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+    seed_room_for(env.scratch.db, 100, GOLDEN_DAVID, "Rooms::Closed");
+    char cookie[1024];
+    make_session_cookie(&env, GOLDEN_DAVID, cookie, sizeof cookie);
+
+    static const unsigned char png[] = {
+        0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0x0d,
+        0x49,0x48,0x44,0x52,0,0,0,1,0,0,0,1,8,2,0,0,0,0x90,0x77,0x53,0xde,
+        0,0,0,0x0c,0x49,0x44,0x41,0x54,8,0xd7,0x63,0xf8,0xcf,0xc0,0,
+        0,3,1,1,0,0x18,0xfb,0x8e,0xa3,0,0,0,0,0x49,0x45,0x4e,0x44,0xae,0x42,0x60,0x82};
+    struct mpbuf m;
+    mp_start(&m, "B");
+    mp_field(&m, "message[client_message_id]", "img-1");
+    mp_next(&m, "B");
+    mp_file(&m, "message[attachment]", "pic.png", "application/octet-stream",
+            (const char *)png, sizeof png);
+    mp_finish(&m, "B");
+    cf_request req;
+    cf_response resp;
+    req_multipart(&req, CF_POST, "/rooms/100/messages", &m, cookie,
+                  TURBO_ACCEPT);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    cf_response_dispose(&resp);
+    free(m.p);
+
+    CF_CHECK(count_rows(env.scratch.db, "SELECT count(*) FROM messages") == 1);
+    CF_CHECK(count_rows(env.scratch.db,
+                        "SELECT count(*) FROM active_storage_blobs") == 2);
+    CF_CHECK(count_rows(env.scratch.db,"SELECT count(*) FROM active_storage_variant_records") == 1);
+    char text[256];
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT content_type FROM active_storage_blobs", text,
+                      sizeof text) &&
+             strcmp(text, "image/png") == 0);
+    CF_CHECK(one_text(env.scratch.db,
+                      "SELECT metadata FROM active_storage_blobs ORDER BY id LIMIT 1", text,
+                      sizeof text) &&
+             strcmp(text, "{\"identified\":true,\"width\":1,\"height\":1,\"analyzed\":true}") == 0);
 
     env_close(&env);
     storage_root_remove(root);

@@ -77,6 +77,12 @@ static cf_err avatars_destroy_cb(cf_tx *tx, void *arg) {
     cf_db *db = cf_tx_db(tx);
     if (db == NULL) return CF_INTERNAL;
     bool found = false;
+    cf_user actor = {0};
+    cf_err auth_rc = cf_user_find_by_id(db, destroy->user_id, &found, &actor);
+    bool allowed = auth_rc == CF_OK && found && cf_user_is_active(&actor);
+    cf_user_dispose(&actor);
+    if (auth_rc != CF_OK) return auth_rc;
+    if (!allowed) return CF_FORBIDDEN;
     cf_attachment attachment = {0};
     cf_err rc = cf_attachment_find_for(
         db, (cf_str){(char *)"User", 4}, destroy->user_id,

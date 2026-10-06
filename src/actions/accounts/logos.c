@@ -18,9 +18,8 @@
  *
  * Callback order, cache headers, size selection and row effects are the
  * reference's. Logo URLs stay signed/cached through S02: an attached logo
- * needs the S03 media transform (processed_variant), so show fails loudly
- * with CF_INTERNAL whenever an attachment exists — never a raw storage path
- * and never a stubbed transform. The stock fallback resolves through the
+ * uses the bounded production representation processor. Nonvariable
+ * attachments fall back to the stock icon. The stock fallback resolves through the
  * landed asset manifest (cf_views_asset_path) to the pinned bytes.
  *
  * ETag note (D-C03 allows differing validator values): the reference
@@ -40,8 +39,7 @@
  *        cf_action_accounts_logos_show},
  *       {39, CF_DELETE, "/account/logo(.:format)", ...,
  *        cf_action_accounts_logos_destroy},
- *  2. S02/S03: processed logo variants (show with an attachment is
- *     CF_INTERNAL until then); model/presenter touch helper.
+ *  2. Model/presenter account touch helper.
  *
  * c_symbols: cf_action_accounts_logos_show,
  * cf_action_accounts_logos_destroy.
@@ -58,6 +56,8 @@
 #include "models/user.h"
 #include "routes.h"
 #include "views.h"
+#include "storage/active_storage.h"
+#include "storage/storage.h"
 
 #include <fcntl.h>
 #include <inttypes.h>
@@ -268,6 +268,33 @@ static cf_err logos_stock_file(bool small, int *out_fd, uint64_t *out_size) {
     return CF_OK;
 }
 
+static cf_err logos_variant_file(cf_ctx *ctx, const cf_blob *blob, bool small,
+                                  int *fd, uint64_t *size) {
+    cf_active_ventries variation = {0};
+    cf_active_vval *resize = NULL, *value = NULL;
+    cf_err rc = cf_active_varr(&resize);
+    if (rc == CF_OK) rc = cf_active_vint(small ? 192 : 512, &value);
+    if (rc == CF_OK) { rc = cf_active_varr_push(resize, value); if (rc != CF_OK) cf_active_vval_dispose(value); }
+    value = NULL;
+    if (rc == CF_OK) rc = cf_active_vint(small ? 192 : 512, &value);
+    if (rc == CF_OK) { rc = cf_active_varr_push(resize, value); if (rc != CF_OK) cf_active_vval_dispose(value); }
+    if (rc == CF_OK) { rc = cf_active_ventries_push(&variation, logos_span("resize_to_limit"), resize); if (rc == CF_OK) resize = NULL; }
+    cf_active_vval_dispose(resize);
+    value = NULL;
+    if (rc == CF_OK) rc = cf_active_vstr(logos_span("png"), &value);
+    if (rc == CF_OK) { rc = cf_active_ventries_push(&variation, logos_span("format"), value); if (rc != CF_OK) cf_active_vval_dispose(value); }
+    cf_blob image = {0};
+    if (rc == CF_OK) rc = cf_active_processed_representation(ctx, blob, &variation, &image);
+    cf_active_ventries_dispose(&variation);
+    cf_storage *storage = NULL;
+    const cf_config *config = cf_app_config(ctx->app);
+    if (rc == CF_OK) rc = cf_storage_open(config->storage_path, &storage);
+    if (rc == CF_OK) rc = cf_storage_open_read(storage, (cf_span){(unsigned char *)image.key.ptr, image.key.len}, fd, size);
+    cf_storage_close(storage);
+    cf_blob_dispose(&image);
+    return rc;
+}
+
 cf_err cf_action_accounts_logos_show(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
     /* `allow_unauthenticated_access only: :show`: the logo is the PWA icon.
@@ -323,26 +350,27 @@ cf_err cf_action_accounts_logos_show(cf_ctx *ctx) {
     bool small = logos_param_str(ctx, "size", &size) && size.len == 5 &&
                  memcmp(size.ptr, "small", 5) == 0;
 
-    /* The variant path needs S02's processed_variant plus the S03 media
-     * workers: fail loudly whenever an attachment exists, never a raw
-     * storage path or a stubbed transform. */
+    int fd = -1;
+    uint64_t size_bytes = 0;
+    bool have_variant = false;
     if (has_account) {
         bool found = false;
         cf_attachment attachment = {0};
+        cf_blob blob = {0};
         rc = cf_attachment_find_for(ctx->reader, logos_cstr("Account"),
                                     account.id, logos_cstr("logo"), &found,
                                     &attachment);
+        if (rc == CF_OK && found) rc = cf_attachment_blob(ctx->reader, &attachment, &blob);
         cf_attachment_dispose(&attachment);
-        cf_account_dispose(&account);
-        if (rc != CF_OK) return rc;
-        if (found) return CF_INTERNAL;
-    } else {
-        cf_account_dispose(&account);
+        if (rc == CF_OK && found && blob.content_type.present &&
+            cf_active_content_type_variable((cf_span){(unsigned char *)blob.content_type.value.ptr, blob.content_type.value.len})) {
+            rc = logos_variant_file(ctx, &blob, small, &fd, &size_bytes);
+            have_variant = rc == CF_OK;
+        }
+        cf_blob_dispose(&blob);
     }
-
-    int fd = -1;
-    uint64_t size_bytes = 0;
-    rc = logos_stock_file(small, &fd, &size_bytes);
+    cf_account_dispose(&account);
+    if (rc == CF_OK && !have_variant) rc = logos_stock_file(small, &fd, &size_bytes);
     if (rc != CF_OK) {
         if (fd >= 0) close(fd);
         return rc;

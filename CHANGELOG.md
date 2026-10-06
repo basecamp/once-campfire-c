@@ -5,6 +5,30 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-06 09:19 — Independent-review repairs
+
+- Revalidate current actor status, membership and ownership inside queued
+  mutation transactions, with deterministic ban/deactivation race coverage.
+- Repair HTTP/2 stream retirement, incremental input/output accounting and
+  trailers; stream file responses through bounded workers. Enable TLS/WSS
+  Cable with encrypted admission, delivery and revocation coverage.
+- Implement avatar/account-logo assignment and user/involvement controls,
+  real pinned media analysis/variants/previews, HTTPS push transport,
+  webhook replies and reference-safe blob purge. Deliver pinned media build
+  recipes, licenses, source provenance and eleven exact encoded-byte vectors.
+- Make the unfurl TLS test use committed fixtures; add `make deps-build`,
+  correct TLS configuration names and remove the unsupported existing-install
+  compatibility claim. No migrations or legacy compatibility were added.
+- Frozen-source isolated gates: dev, optimized, ASan/UBSan and Fil-C each
+  pass 1,670/1,670 registered cases plus four standalone checks; TSan passes
+  712/712 plus TLS reactor 19/19 and H2 policy 16/16, without diagnostics.
+  Actual HTTPS/WSS and strict-media browser cases pass 4/4.
+- Pending acceptance: granted browser push delivery (headless permission
+  denial), HEIC/AVIF encoded-byte vectors, and fresh release-image/performance
+  evidence. Purge filesystem failures follow the existing no-retry boundary
+  and can leave orphan files after metadata commits. Prior benchmark numbers
+  describe their recorded candidates, not these repairs.
+
 ## 2026-10-06 08:10 — B01 Fil-C arm: measurement tooling
 
 - **The pinned-harness adapter gains a second C app, `c-filc`**: the same

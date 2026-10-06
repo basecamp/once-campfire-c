@@ -33,6 +33,7 @@ import os
 import signal
 import socket
 import sqlite3
+import ssl
 import struct
 import subprocess
 import sys
@@ -372,6 +373,16 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _tls_test_context():
+    # The committed certificate names www.example.com; tests listen on
+    # loopback. Verify its pinned CA while disabling only hostname matching.
+    certs = REPO_ROOT / "tests/fixtures/crates/campfire/src/integrations/testdata/tls"
+    ctx = ssl.create_default_context(cafile=str(certs / "ca.pem"))
+    ctx.check_hostname = False
+    ctx.set_alpn_protocols(["http/1.1"])
+    return ctx
+
+
 class Server:
     """One campfire instance on a free port with its own scratch database."""
 
@@ -382,7 +393,9 @@ class Server:
         self.storage_path = self.data_dir / "files"
         self.log_path = scratch.path / "server.log"
         self.port = _free_port()
-        self.base_url = f"http://127.0.0.1:{self.port}"
+        self.tls = os.environ.get("CF_E2E_TLS") == "1"
+        scheme = "https" if self.tls else "http"
+        self.base_url = f"{scheme}://127.0.0.1:{self.port}"
         self.proc: subprocess.Popen | None = None
         # Case-specific configuration (e.g. VAPID keys for the push flow);
         # applied on top of the shared environment below.
@@ -403,6 +416,10 @@ class Server:
                 "DISABLE_SSL": "1",
             }
         )
+        if self.tls:
+            certs = REPO_ROOT / "tests/fixtures/crates/campfire/src/integrations/testdata/tls"
+            env.update(DISABLE_SSL="0", TLS_CERT_FILE=str(certs / "server.pem"),
+                       TLS_KEY_FILE=str(certs / "server.key"))
         env.update(self.extra_env)
         return env
 
@@ -431,7 +448,10 @@ class Server:
                     + self.log_tail()
                 )
             try:
-                with urllib.request.urlopen(self.base_url + "/up", timeout=1.0) as resp:
+                with urllib.request.urlopen(
+                    self.base_url + "/up", timeout=1.0,
+                    context=_tls_test_context() if self.tls else None,
+                ) as resp:
                     if resp.status == 200:
                         return
             except Exception:
@@ -787,8 +807,12 @@ def ws_probe(
     with the RFC 6455 header only.  Used by E2E-03 to replay a stale session
     cookie and to prove the valid-cookie control still receives a welcome.
     """
-    host, port = base_url.removeprefix("http://").removesuffix("/").split(":")
+    tls = base_url.startswith("https://")
+    scheme = "https" if tls else "http"
+    host, port = base_url.removeprefix(scheme + "://").removesuffix("/").split(":")
     sock = socket.create_connection((host, int(port)), timeout=timeout)
+    if tls:
+        sock = _tls_test_context().wrap_socket(sock, server_hostname=host)
     try:
         key = base64.b64encode(os.urandom(16)).decode()
         request = (
@@ -798,7 +822,7 @@ def ws_probe(
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n"
-            f"Origin: http://{host}:{port}\r\n"
+            f"Origin: {scheme}://{host}:{port}\r\n"
         )
         if cookie_header:
             request += f"Cookie: {cookie_header}\r\n"

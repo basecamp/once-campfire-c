@@ -1,0 +1,126 @@
+{
+  "original_elf_sha256": {
+    "opt/vips/bin/vips": "d93a65f768781008e67b8ea586b8e53d30117b6b2cf6791f9f125a25801a2724",
+    "opt/ffmpeg/bin/ffmpeg": "d71c1b5a2de5a1b87040b462e7e57d2fe65a8b4a821ac39a332009091cc2dbb5",
+    "opt/ffmpeg/bin/ffprobe": "3d3dd56f59c19c50529aa7a5f372e217177619e8c529073975f3b63ce1abdfcd",
+    "usr/local/bin/cf-vips": "3d6e9f3abbe27ee1218eb2a9cc7372b55d8289d68c3dcac112d35ec6b0a63fbb"
+  },
+  "versions": {
+    "vips": "vips-8.16.1\n",
+    "ffmpeg": "ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers\nbuilt with gcc 14 (Debian 14.2.0-19)\nconfiguration: --prefix=/opt/ffmpeg --extra-version=0+deb13u1 --toolchain=hardened --enable-shared --disable-static --disable-doc --disable-ffplay --disable-avdevice --disable-autodetect --disable-network --disable-hwaccels --disable-devices --enable-libdav1d --enable-zlib --enable-bzlib --enable-lzma --disable-encoders --enable-encoder=mjpeg --disable-muxers --enable-muxer=image2 --disable-protocols --enable-protocol='file,pipe' --disable-filters --enable-filter='buffer,buffersink,abuffer,abuffersink,format,aformat,null,anull,scale,aresample' --enable-filter='select,loop,trim,transpose,hflip,vflip,rotate,crop'\nlibavutil      59. 39.100 / 59. 39.100\nlibavcodec     61. 19.101 / 61. 19.101\nlibavformat    61.  7.103 / 61.  7.103\nlibavfilter    10.  5.100 / 10.  5.100\nlibswscale      8.  3.100 /  8.  3.100\nlibswresample   5.  3.100 /  5.  3.100\n",
+    "ffprobe": "ffprobe version 7.1.5-0+deb13u1 Copyright (c) 2007-2026 the FFmpeg developers\nbuilt with gcc 14 (Debian 14.2.0-19)\nconfiguration: --prefix=/opt/ffmpeg --extra-version=0+deb13u1 --toolchain=hardened --enable-shared --disable-static --disable-doc --disable-ffplay --disable-avdevice --disable-autodetect --disable-network --disable-hwaccels --disable-devices --enable-libdav1d --enable-zlib --enable-bzlib --enable-lzma --disable-encoders --enable-encoder=mjpeg --disable-muxers --enable-muxer=image2 --disable-protocols --enable-protocol='file,pipe' --disable-filters --enable-filter='buffer,buffersink,abuffer,abuffersink,format,aformat,null,anull,scale,aresample' --enable-filter='select,loop,trim,transpose,hflip,vflip,rotate,crop'\nlibavutil      59. 39.100 / 59. 39.100\nlibavcodec     61. 19.101 / 61. 19.101\nlibavformat    61.  7.103 / 61.  7.103\nlibavfilter    10.  5.100 / 10.  5.100\nlibswscale      8.  3.100 /  8.  3.100\nlibswresample   5.  3.100 /  5.  3.100\n",
+    "cf-vips": "vips-8.16.1\n"
+  },
+  "native_elf_sha256": {
+    "opt/vips/bin/vips": "89e6fc0cc9eefb12bb24b9eb1d5781079e85b1f1733d1976e6fa2b2a6fc1a814",
+    "opt/ffmpeg/bin/ffmpeg": "fff3cf281021dc903d42e9884d19e2d1d898ca1e258f2e1734a3d219c1b1c29e",
+    "opt/ffmpeg/bin/ffprobe": "8b922081c94d0ee1741f7ea549108b5ad548591e97ab600486596c3aa2fd34bf",
+    "usr/local/bin/cf-vips": "7a21afd4fad8a21cc1234bf9e60033a84d8e3c737e5e77a2674cf6cb4519ccf0"
+  },
+  "relocation": "patchelf interpreter/RPATH only; no shell wrappers or host installation",
+  "source_dsc": {
+    "vips": "60205e00d061b9d8072938e04899f2ca2fdac0513068e561d33f7c87fae1ae2e",
+    "ffmpeg": "9ed2ed34cbe7f056eeebbe9045c5e2d15e41b5b053fe7c8ba6979a0b6fb081ce"
+  },
+  "adapter_output_limit": "16MiB bounded saver target, not global RLIMIT_FSIZE",
+  "reference_build_spec": "tmp/rust-ref/Dockerfile at64f86353021145b63849fb1cd93adeb08f3b8dbb",
+  "build_spec": "vendor/media/Dockerfile",
+  "build_command": "vendor/media/build.sh /tmp/campfire-pinned-media-final",
+  "probe_command": "python3 tests/fixtures/tools/verify_media_vectors.py /tmp/campfire-pinned-media-final/rootfs",
+  "parity": {
+    "status": "PASS",
+    "vectors": [
+      {
+        "file": "alpha-centuri-preview_image.jpg",
+        "bytes": 11788,
+        "sha256": "57f272b82b06593ab72d04dc1c1108558c9981f271bf3574016c3bb55751d6e2"
+      },
+      {
+        "file": "moon-thumb.jpg",
+        "bytes": 13036,
+        "sha256": "e862029b2398043281a748f77485525f8ae3c3d951db21c0ce806f2488216246"
+      },
+      {
+        "file": "earth-thumb.png",
+        "bytes": 321370,
+        "sha256": "36439f1e5a8bd210f9162f9933e8ebeef6fe00658e5f7596dfa37ed2708265d0"
+      },
+      {
+        "file": "black_hole-thumb.jpg",
+        "bytes": 84296,
+        "sha256": "b83abe479559cd6ea61e5abc721de0c178be118a02580f4551ac99c3a2287527"
+      },
+      {
+        "file": "alpha-centuri-preview-webp.webp",
+        "bytes": 3326,
+        "sha256": "eae9cdc9dae94aa8042a3bef1ff142818e0d0883016bd599555cc13deea8eff4"
+      },
+      {
+        "file": "alpha-centuri-poster.webp",
+        "bytes": 4962,
+        "sha256": "e1229db9bf54715acfed155e4513ace66b3e961e74190d7ca3e04d79fffde87b"
+      },
+      {
+        "file": "alpha-centuri-poster-from-key.webp",
+        "bytes": 4962,
+        "sha256": "e1229db9bf54715acfed155e4513ace66b3e961e74190d7ca3e04d79fffde87b"
+      },
+      {
+        "file": "earth-avatar.webp",
+        "bytes": 9288,
+        "sha256": "0a46b9801e48695ec9a95aa6636e354bebf6d6db189ec43cc7804d6395921eae"
+      },
+      {
+        "file": "moon-avatar.webp",
+        "bytes": 3364,
+        "sha256": "03511ce37fe4c163e6af2b64238248fbfc7461241cb125c73f708ea1f4d170de"
+      },
+      {
+        "file": "black_hole-logo-large.png",
+        "bytes": 245127,
+        "sha256": "f3170eb79d6a06fe6bccd8dbf1aed7e6003ec9c4d283933eff800e7808d72603"
+      },
+      {
+        "file": "black_hole-logo-small.png",
+        "bytes": 38830,
+        "sha256": "cc9cf32cd452d0986689a660f4926278f84d6ca5025b104758f2bfbb12413572"
+      }
+    ],
+    "encoded_output_limit": {
+      "status": "PASS",
+      "maximum_bytes": 16777216,
+      "partial_bytes": 16770748,
+      "exit_code": 1
+    }
+  },
+  "platform": "Linuxx86_64; GCC14.2 Debiantrixie external subprocesses, notlinked app",
+  "licenses": {
+    "vips": "vendor/media/provenance/vips.copyright",
+    "ffmpeg": "vendor/media/provenance/ffmpeg.LICENSE.md"
+  },
+  "runtime_dependencies": "Recorded exact packages in vendor/media/provenance/debian-packages.txt; repositories not snapshot-pinned.",
+  "process_boundary": {
+    "pinned_case_count": 15,
+    "pinned_passed": 15,
+    "log": "/tmp/campfire-media-process-regression/pinned.log",
+    "buffered_stdout_regression": {
+      "before": "FAIL:cf_proc_run incorrectly returns success on final buffered drain with stdout_limit1",
+      "after": "PASS:CF_LIMIT and output_limit flag retained",
+      "scheduling": "LD_PRELOAD waitpid-WNOHANG delay to reproduce child completion between drain and reap; no production testhooks",
+      "logs": [
+        "/tmp/campfire-media-process-regression/before.log",
+        "/tmp/campfire-media-process-regression/after.log"
+      ]
+    }
+  },
+  "heif_native_export": "Use trustedstartup LIBHEIF_PLUGIN_PATH=<rootfs>/usr/lib/x86_64-linux-gnu/libheif/plugins; pluginELF RPATH relocatedtoo. Current11vectors donotqualifyHEIC/AVIF bytes.",
+  "filc_caller": {
+    "status": "PASS",
+    "version": "Fil-C 0.685",
+    "gate": "CF_MEDIA_LIVE=1 make test MODE=filc with fixed pinned executable paths",
+    "registered_cases": 1670,
+    "passed": 1670,
+    "failed": 0,
+    "process_boundary_cases": 15
+  }
+}

@@ -234,6 +234,8 @@ static bool head_contains(cf_response *resp, cf_request *req,
 
 /* --- acceptance ------------------------------------------------------------ */
 
+#include "auth_write_race.h"
+
 CF_TEST(users_avatars_destroy_route_id_binds_the_action) {
     cf_test_routes_reset();
     CF_REQUIRE(cf_test_routes_add("DELETE", "/users/:user_id/avatar", 54,
@@ -354,4 +356,35 @@ CF_TEST(users_avatars_destroy_cross_site_delete_is_422) {
     env_close(&env);
 }
 
+CF_TEST(users_avatars_destroy_rejects_queued_ban) {
+    const char *changes[] = {"UPDATE users SET status=2 WHERE id=1",
+                             "UPDATE users SET status=1 WHERE id=1"};
+    for (size_t i = 0; i < 2; i++) {
+        avatars_env env;
+        CF_REQUIRE(env_open(&env));
+        seed_user(env.scratch.db, 1, "David", "2020-01-01 00:00:00");
+        seed_blob_attachment(env.scratch.db, 50, 60, 1);
+        char cookie[4096];
+        make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                            "david-session", 1);
+        cf_request req;
+        cf_response resp;
+        avatar_request(&req, "/users/me/avatar", "same-origin", cookie);
+        auth_write_race race;
+        CF_REQUIRE(
+            auth_race_begin(env.app, env.scratch.path, &race, changes[i]));
+        CF_REQUIRE(
+            auth_race_request(env.app, env.scratch.db, &race, &req, &resp));
+        auth_race_end(&race);
+        CF_CHECK(resp.status == 403);
+        CF_CHECK(count_rows(env.scratch.db,
+                            "SELECT count(*) FROM active_storage_attachments "
+                            "WHERE record_id=1") == 1);
+        cf_writer_stats stats = {0};
+        CF_REQUIRE(cf_writer_stats_get(env.app, &stats) == CF_OK);
+        CF_CHECK(stats.best_effort_dropped[CF_EVENT_PURGE_BLOB] == 0);
+        cf_response_dispose(&resp);
+        env_close(&env);
+    }
+}
 CF_TEST_MAIN()

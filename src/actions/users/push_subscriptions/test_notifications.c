@@ -29,10 +29,9 @@
  *
  * Delivery runs on the request worker through I02's cf_push_deliver with
  * the model's guard semantics; the HTTP exchange itself is I01's
- * (cf_push_exchange_fn).  The weak cf_users_push_test_exchange seam
- * (handlers.c precedent) is the production hook: NULL until I01 wires
- * its helper, in which case the action fails loudly (never a pretend
- * redirect), and the action test provides the stub.  Endpoint resolution
+ * (cf_push_exchange_fn). Production uses cf_push_http_exchange; the weak
+ * cf_users_push_test_exchange seam is an optional deterministic test
+ * override. Endpoint resolution
  * reuses the push_subscriptions packet's resolver shape (own static
  * default + weak seam; see R2 there).
  *
@@ -51,6 +50,7 @@
 #include "config.h"
 #include "context.h"
 #include "integrations/push.h"
+#include "integrations/push_http.h"
 #include "models/membership.h"
 #include "models/push_subscription.h"
 #include "models/user.h"
@@ -389,8 +389,8 @@ static cf_optional_str test_notifications_resolve(void *arg, cf_str host) {
     return test_notifications_default_resolve(arg, host);
 }
 
-/* I01-owned exchange (not wired yet): NULL until the integrator links the
- * helper, exactly like J02's weak cf_push_send. */
+/* Optional deterministic exchange override used by controller tests. The
+ * default is always the concrete production cf_push_http_exchange. */
 extern cf_err cf_users_push_test_exchange(
     void *ctx, const cf_push_request *request, unsigned *out_status,
     char *reason_buf, size_t reason_cap,
@@ -465,11 +465,10 @@ cf_err cf_action_users_push_subscriptions_test_notifications_create(
         }
     }
 
-    /* The exchange hook is the delivery half of I02's seam: without it
-     * there is no delivery, and the action fails loudly. */
-    cf_push_exchange_fn exchange =
-        (cf_push_exchange_fn)cf_users_push_test_exchange;
-    if (rc == CF_OK && exchange == NULL) rc = CF_INTERNAL;
+    /* Test fixtures may override the existing exchange seam. Production
+     * always has the real bounded pinned-IP TLS exchange; no missing hook. */
+    cf_push_exchange_fn exchange = cf_users_push_test_exchange != NULL
+        ? cf_users_push_test_exchange : cf_push_http_exchange;
 
     /* `deliver_test_notification`: random UUID body, inline. */
     if (rc == CF_OK) {

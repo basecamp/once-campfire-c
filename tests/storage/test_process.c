@@ -3,19 +3,9 @@
  * output FD routing, concurrent pipe draining, stdout cap, retained/truncated
  * stderr, and timeout kill + reap with no surviving child.
  *
- * The pinned libvips 8.16.1 is absent on this host and stays F00-BLOCKED
- * (vendor/DEPS.json: no probe, not installed); the vips case asserts the
- * defined CF_NOT_FOUND behavior of the enum path, and the test checks ffmpeg
- * and ffprobe, which are installed, with their real binary names. The
- * installed ffmpeg/ffprobe are 9.0.2, NOT the pinned 7.1.5 artifacts
- * (DEPS.json media entries are BLOCKED); this suite therefore claims the S01
- * interface and lifecycle only, never media byte parity.
- *
- * Build (direct clang; the Makefile does not list src/storage yet):
- *   clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra
- *         -Werror -pthread -O1 -g -Isrc -Itests
- *         tests/storage/test_process.c src/storage/process.c
- *         src/core/{alloc,buffer,clock}.c -o build/s01/test_process
+ * Compile-time media paths may select isolated pinned tools prepared by
+ * vendor/media/build.sh. This suite verifies the process boundary; the strict
+ * media gate and verify_media_vectors.py establish version and byte parity.
  */
 #include "cf_test.h"
 
@@ -59,12 +49,14 @@ static void base_opts(cf_proc_opts *o, cf_proc_exe exe, char *const *args) {
 }
 
 CF_TEST(executable_table_is_fixed) {
-    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_FFMPEG), "/usr/bin/ffmpeg") == 0);
-    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_FFPROBE), "/usr/bin/ffprobe") == 0);
-    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_VIPS), "/usr/bin/vips") == 0);
+    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_FFMPEG), CF_PROC_FFMPEG_PATH) == 0);
+    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_FFPROBE), CF_PROC_FFPROBE_PATH) == 0);
+    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_VIPS), CF_PROC_VIPS_PATH) == 0);
     CF_CHECK(strcmp(cf_proc_executable_name(CF_PROC_FFMPEG), "ffmpeg") == 0);
     CF_CHECK(strcmp(cf_proc_executable_name(CF_PROC_FFPROBE), "ffprobe") == 0);
     CF_CHECK(strcmp(cf_proc_executable_name(CF_PROC_VIPS), "vips") == 0);
+    CF_CHECK(strcmp(cf_proc_executable_path(CF_PROC_VIPS_ADAPTER), CF_PROC_VIPS_ADAPTER_PATH) == 0);
+    CF_CHECK(strcmp(cf_proc_executable_name(CF_PROC_VIPS_ADAPTER), "cf-vips") == 0);
     CF_CHECK(cf_proc_executable_path((cf_proc_exe)99) == NULL);
     CF_CHECK(cf_proc_executable_name((cf_proc_exe)99) == NULL);
 }
@@ -155,7 +147,7 @@ CF_TEST(timeout_kills_group_and_reaps) {
     static char *const args[] = {
         "-hide_banner", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "16x16", "-r", "25",
-        "-i", "/dev/zero", "-f", "null", "-", NULL};
+        "-i", "/dev/zero", "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-y", "/dev/null", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     o.timeout_ms = 300;
@@ -180,7 +172,7 @@ CF_TEST(stdin_fd_is_routed) {
     static char *const args[] = {
         "-hide_banner", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "16x16", "-r", "25",
-        "-i", "pipe:0", "-f", "null", "-", NULL};
+        "-i", "pipe:0", "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-y", "/dev/null", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     o.stdin_fd = pipefd[0];
@@ -194,6 +186,22 @@ CF_TEST(stdin_fd_is_routed) {
     close(pipefd[1]);
 }
 
+/* A short version banner can already be buffered when waitpid reports exit.
+ * It must still fail the stdout budget, never become successful truncation. */
+CF_TEST(fast_exiting_child_output_limit_is_preserved) {
+    static char *const args[] = {"-version", NULL};
+    for (int attempt = 0; attempt < 32; attempt++) {
+        cf_proc_opts o;
+        base_opts(&o, CF_PROC_FFPROBE, args);
+        o.stdout_limit = 1;
+        cf_proc_result r;
+        CF_REQUIRE(cf_proc_run(&o, &r) == CF_LIMIT);
+        CF_CHECK(r.output_limit && !r.timed_out);
+        if (r.out) CF_CHECK(cf_buf_span(r.out).len <= 1);
+        cf_proc_result_dispose(&r);
+    }
+}
+
 CF_TEST(stdout_limit_kills_and_reaps) {
     const char *path = cf_proc_executable_path(CF_PROC_FFMPEG);
     CF_REQUIRE(binary_present(path));
@@ -201,7 +209,7 @@ CF_TEST(stdout_limit_kills_and_reaps) {
         "-hide_banner", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "64x64",
         "-i", "/dev/zero", "-frames:v", "1000",
-        "-pix_fmt", "rgb24", "-f", "rawvideo", "-", NULL};
+        "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     o.stdout_limit = 1024;
@@ -216,16 +224,16 @@ CF_TEST(stdout_limit_kills_and_reaps) {
     cf_proc_result_dispose(&r);
 }
 
-/* 122880 bytes of stdout is larger than any pipe buffer: the helper must drain
- * while the child runs, and the exact byte count proves no truncation. */
+/* Repeated JPEGs exceed a pipe buffer. Exact frame boundaries/content prove
+ * stdout is drained without loss, using only the reference-enabled encoder. */
 CF_TEST(stdout_drained_without_deadlock) {
     const char *path = cf_proc_executable_path(CF_PROC_FFMPEG);
     CF_REQUIRE(binary_present(path));
     static char *const args[] = {
         "-hide_banner", "-loglevel", "error",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "64x64",
-        "-i", "/dev/zero", "-frames:v", "10",
-        "-pix_fmt", "rgb24", "-f", "rawvideo", "-", NULL};
+        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "1024x1024",
+        "-i", "/dev/zero", "-frames:v", "20",
+        "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     o.stdout_limit = 1 << 20;
@@ -233,7 +241,19 @@ CF_TEST(stdout_drained_without_deadlock) {
     CF_REQUIRE(cf_proc_run(&o, &r) == CF_OK);
     CF_CHECK(r.exited_ok);
     CF_REQUIRE(r.out != NULL);
-    CF_CHECK(cf_buf_span(r.out).len == 122880); /* 10 * 64 * 64 * 3 */
+    cf_span bytes = cf_buf_span(r.out);
+    CF_REQUIRE(bytes.len > 65536 && bytes.ptr[0] == 0xff && bytes.ptr[1] == 0xd8);
+    size_t frame_bytes = 0;
+    for (size_t i = 2; i + 1 < bytes.len; i++) {
+        if (bytes.ptr[i] == 0xff && bytes.ptr[i + 1] == 0xd9) {
+            frame_bytes = i + 2;
+            break;
+        }
+    }
+    CF_REQUIRE(frame_bytes > 0);
+    CF_CHECK(bytes.len == frame_bytes * 20);
+    for (size_t i = 1; i < 20 && (i + 1) * frame_bytes <= bytes.len; i++)
+        CF_CHECK(memcmp(bytes.ptr, bytes.ptr + i * frame_bytes, frame_bytes) == 0);
     cf_proc_result_dispose(&r);
 }
 
@@ -245,7 +265,7 @@ CF_TEST(stderr_retained_prefix_and_truncation) {
     static char *const args[] = {
         "-hide_banner", "-loglevel", "trace",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "64x64",
-        "-i", "/dev/zero", "-frames:v", "400", "-f", "null", "-", NULL};
+        "-i", "/dev/zero", "-frames:v", "400", "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-y", "/dev/null", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     cf_proc_result r;
@@ -323,7 +343,7 @@ CF_TEST(timeout_cleans_caller_intermediate) {
     static char *const args[] = {
         "-hide_banner", "-loglevel", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", "16x16", "-r", "25",
-        "-i", "/dev/zero", "-f", "null", "-", NULL};
+        "-i", "/dev/zero", "-c:v", "mjpeg", "-q:v", "2", "-f", "image2", "-update", "1", "-", NULL};
     cf_proc_opts o;
     base_opts(&o, CF_PROC_FFMPEG, args);
     o.stdout_fd = out_fd; /* child holds the file's fd, not our descriptor */

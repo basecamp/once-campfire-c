@@ -24,9 +24,9 @@ Subflows, each driven through the app's real UI where it exists:
      reference `render_link` arm (filename span + signed Active Storage
      download anchor), not the image/video `.message__attachment` media
      arms, so the assertion matches both shapes.  The preview/variant rows
-     belong to S03/media (vips/ffmpeg absent by design) and are
-     documented-BLOCKED in docs/devel/evidence/V02-browser.md, never
-     skipped or faked.
+     are exercised with CF_E2E_MEDIA=1: real PNG thumbnail decoding in
+     both browsers and video poster bytes equal to the committed reference.
+     This strict arm requires a server built with the pinned tools.
 
   2. room access change.  A edits the original open room through the real
      room forms: switch to "only some access" (Rooms::Closed) and uncheck
@@ -52,7 +52,9 @@ Subflows, each driven through the app's real UI where it exists:
      agent-browser 0.38.2 exposes no permission control; a CDP
      Browser.grantPermissions grant was observed not to change
      Notification.permission in headless mode), so the case records that
-     precisely as BLOCKED and never fakes a subscription.
+     precisely as BLOCKED and never fakes a subscription. CF_E2E_PUSH=1
+     makes denied permission a failed prerequisite; on a supported browser
+     the real test button must deliver Campfire Test to the service worker.
 
   4. bot message flow.  A creates a bot through the real `/account/bots`
      pages, the room re-open in subflow 2 grants every active user
@@ -65,7 +67,9 @@ Subflows, each driven through the app's real UI where it exists:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import os
 import sys
 import time
@@ -190,11 +194,6 @@ def _upload_flow(a: h.Browser, b: h.Browser, server: h.Server, scratch,
             )
         time.sleep(0.5)
     _say(f"attachment {sample.name!r} rendered in A's message area")
-    _say(
-        "BLOCKED (documented) S03 preview/variant rows: the pinned "
-        "vips/ffmpeg tools are absent by design, so no image/video "
-        "preview or variant can be exercised (recorded in V02-browser.md)"
-    )
     h.poll(
         lambda: attachment_rendered(b),
         25,
@@ -214,6 +213,99 @@ def _upload_flow(a: h.Browser, b: h.Browser, server: h.Server, scratch,
         f"B to observe the caption {caption!r} live",
     )
     _say(f"caption {caption!r} delivered live to both browsers")
+
+
+def _media_upload_flow(a: h.Browser, b: h.Browser, server: h.Server,
+                       scratch, nonce: str) -> None:
+    """Strict optional media acceptance; never infer availability from /usr/bin.
+
+    CF_E2E_MEDIA=1 runs real composer uploads against the selected server
+    binary. Missing tools, failed previews or mismatched bytes are failures.
+    """
+    if os.environ.get("CF_E2E_MEDIA") != "1":
+        _say("BLOCKED media acceptance: require CF_E2E_MEDIA=1 with a server "
+             "built against the pinned tools; text attachment acceptance passed")
+        return
+    png = scratch.path / f"v02-e2e02-{nonce}-pixel.png"
+    # This exact valid one-pixel RGB PNG is also used by production unit tests.
+    png.write_bytes(bytes.fromhex(
+        "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+        "0000000c4944415408d763f8cfc000000301010018fb8ea30000000049454e44ae426082"))
+    video = scratch.path / f"v02-e2e02-{nonce}-video.mov"
+    fixture = h.REPO_ROOT / "tests/fixtures/media/alpha-centuri.mov"
+    expected_poster = h.REPO_ROOT / "tests/fixtures/vectors/storage/alpha-centuri-poster.webp"
+    if not fixture.is_file() or not expected_poster.is_file():
+        raise PrerequisiteMissing("committed video source and webp preview vectors are required")
+    shutil.copyfile(fixture, video)
+
+    def element_state(browser, sample, tag):
+        return browser.eval(
+            "(() => {const e = Array.from(document.querySelectorAll("
+            "'#message-area %s.message__attachment'))"
+            ".find(e => (e.getAttribute('src') || '').includes(%s));"
+            " if (!e) return null;"
+            " return {src:e.getAttribute('src'), poster:e.getAttribute('poster'),"
+            " complete:e.complete, width:e.naturalWidth,height:e.naturalHeight};})()"
+            % (tag,h.jstr(sample.name)))
+
+    def fetch_bytes(browser, url):
+        return browser.eval(
+            "fetch(%s).then(async r => {const b=await r.arrayBuffer();"
+            " const hash=await crypto.subtle.digest('SHA-256',b);"
+            " const decoded=await createImageBitmap(new Blob([b],{type:r.headers.get('content-type')}));"
+            " const width=decoded.width,height=decoded.height; decoded.close();"
+            " return {status:r.status,type:r.headers.get('content-type'),bytes:b.byteLength,width,height,"
+            " sha256:Array.from(new Uint8Array(hash)).map(x=>x.toString(16).padStart(2,'0')).join(''),"
+            " signature:Array.from(new Uint8Array(b).slice(0,12))};})"
+            % h.jstr(url))
+
+    for sample, tag in ((png,"img"),(video,"video")):
+        _open_room(a,server)
+        _open_room(b,server)
+        caption = f"v02-e2e02-{nonce}-{tag}-caption"
+        h.fill_editor(a,h.COMPOSER_EDITOR,caption)
+        a.run("upload","input[type=file]",str(sample))
+        h.poll(lambda: a.eval(
+            "document.querySelector('.composer__filelist')?.textContent.includes(%s)" % h.jstr(sample.name)),
+            15,f"composer to list {sample.name}")
+        a.click_ui(h.COMPOSER_SEND)
+        states = []
+        for browser in (a,b):
+            state = h.poll(lambda: element_state(browser,sample,tag),60,
+                           f"{browser.session} to render {sample.name} live")
+            if tag == "img":
+                # Native decoding must succeed in both browsers, not merely
+                # a DOM placeholder or a successful HTML response.
+                h.poll(lambda: ((v := element_state(browser,sample,tag)) and
+                       v.get("complete") and v.get("width") == 1 and v.get("height") == 1),
+                       30,f"{browser.session} to decode the PNG thumbnail")
+                url = state["src"]
+            else:
+                url = state.get("poster")
+                if not url:
+                    raise CaseFailure(f"video has no rendered poster: {state!r}")
+            if "/representations/" not in url:
+                raise CaseFailure(f"media preview bypassed representation processing: {url!r}")
+            fetched = fetch_bytes(browser,url)
+            if not isinstance(fetched,dict) or fetched.get("status") != 200 or fetched.get("bytes",0) <= 0:
+                raise CaseFailure(f"preview byte fetch failed: {fetched!r}")
+            if tag == "img":
+                if fetched.get("type") != "image/png" or fetched.get("signature",[])[:8] != [137,80,78,71,13,10,26,10]:
+                    raise CaseFailure(f"PNG variant has incorrect type or bytes: {fetched!r}")
+            else:
+                expected_hash = hashlib.sha256(expected_poster.read_bytes()).hexdigest()
+                if (fetched.get("type") != "image/webp" or fetched.get("sha256") != expected_hash
+                        or fetched.get("width") != 320 or fetched.get("height") != 180):
+                    raise CaseFailure(f"video poster differs from committed reference webp: {fetched!r}")
+            states.append(fetched)
+            h.poll(lambda: _contains(browser,caption),25,f"{browser.session} to receive media caption")
+        if states[0]["sha256"] != states[1]["sha256"]:
+            raise CaseFailure("browsers received different preview bytes")
+        rows = server.query("SELECT b.metadata FROM active_storage_blobs b JOIN active_storage_attachments a ON a.blob_id=b.id WHERE b.filename=? AND a.record_type='Message' AND a.name='attachment'",(sample.name,))
+        if len(rows) != 1 or not json.loads(rows[0][0]).get("analyzed"):
+            raise CaseFailure(f"uploaded media lacks persisted analysis metadata: {rows!r}")
+        _say(f"{sample.name!r}: actual {tag} preview and caption delivered to both browsers; "
+             f"fetched {states[0]['bytes']} preview bytes, sha256={states[0]['sha256']}")
 
 
 # ------------------------------------------------------------ room access
@@ -519,6 +611,10 @@ def _push_flow(a: h.Browser, server: h.Server, evidence: Path | None) -> None:
             raise CaseFailure(
                 f"a push subscription appeared without a subscription arm: {rows!r}"
             )
+        if os.environ.get("CF_E2E_PUSH") == "1":
+            raise PrerequisiteMissing(
+                "CF_E2E_PUSH=1 requires an actual granted browser subscription "
+                "and delivered notification; this browser denied notification permission")
         _say(
             "BLOCKED (documented) push subscribe arm: the granted path "
             "(pushManager.subscribe -> POST /users/me/push_subscriptions -> a "
@@ -569,12 +665,22 @@ def _push_flow(a: h.Browser, server: h.Server, evidence: Path | None) -> None:
         h.poll(
             lambda: a.eval(
                 "document.querySelectorAll('#push_subscriptions "
-                "form[action$=/test_notifications]').length"
+                "form[action$=\"/test_notifications\"]').length"
             ) == 1,
             15,
             "the recorded subscription row on the push page",
         )
         _say("push page lists the recorded subscription with its controls")
+        # This is the real POST control and the service worker's actual
+        # notification list. No synthetic showNotification or fake endpoint.
+        a.eval("navigator.serviceWorker.getRegistration(window.location.origin)"
+               ".then(r=>r.getNotifications()).then(ns=>{ns.forEach(n=>n.close());return ns.length})")
+        a.click_ui('#push_subscriptions form[action$="/test_notifications"] button[type="submit"]')
+        h.poll(lambda: a.eval(
+            "navigator.serviceWorker.getRegistration(window.location.origin)"
+            ".then(r=>r.getNotifications()).then(ns=>ns.some(n=>n.title==='Campfire Test'))"),
+            45,"actual Campfire Test notification delivered to the service worker")
+        _say("real test-notification button delivered Campfire Test to the service worker")
     else:
         listed = a.eval(
             "document.querySelectorAll('#push_subscriptions li').length"
@@ -716,7 +822,7 @@ def run() -> None:
             scratch,
             extra_env={
                 "VAPID_PUBLIC_KEY": VAPID_PUBLIC_KEY,
-                "VAPID_PRIVATE_KEY": "v02-e2e02-private",
+                "VAPID_PRIVATE_KEY": "qfXLHghuG1rSHZUVo9SscNRI-0EIHRbIrfeGCqbAwak=",
                 "VAPID_SUBJECT": "mailto:v02-e2e02@example.com",
             },
         )
@@ -746,6 +852,7 @@ def run() -> None:
             _say(f"seeded second user id={bob_id}; B signed in at {b.url()}")
 
             _upload_flow(a, b, server, scratch, nonce)
+            _media_upload_flow(a, b, server, scratch, nonce)
             # The bot must exist before the room is re-opened: the open-room
             # conversion grants every active user, the bot included.
             bot_name = _bots_create(a, server, nonce, evidence)

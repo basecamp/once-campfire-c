@@ -9,6 +9,7 @@
 #   make tsan            TSan run: threaded cases + app/config (never combined) -> build/tsan
 #   make deps            explicit dependency fetch/install scripts; ordinary
 #                        builds never fetch (01-foundation-http.md F00)
+#   make deps-build      build/probe fetched dependencies (MODE=filc for Fil-C)
 #   make clean           removes only this task's build outputs
 #
 # Strict flags apply to application code only; dependency archives are linked
@@ -78,7 +79,7 @@ JOBS_SRCS := src/jobs/queue.c src/jobs/handlers.c
 STORAGE_SRCS := src/storage/files.c src/storage/process.c \
 	src/storage/active_storage.c src/storage/media.c src/storage/marcel.c
 INTEGRATIONS_SRCS := src/integrations/http.c src/integrations/unfurl.c \
-	src/integrations/webhook.c src/integrations/push.c \
+	src/integrations/webhook.c src/integrations/push.c src/integrations/push_http.c \
 	src/integrations/host_resolve.c
 
 # P01 front (configured TLS + HTTP/2): non-blocking handshake/ALPN policy
@@ -261,8 +262,16 @@ STRICT_FLAGS := -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE \
 # default (IMPLEMENTATION-ROADMAP 2026-10-05 A01/A02 completion (e)).
 APP_VERSION ?= 0.1.0
 GIT_REVISION ?=
+CF_PROC_VIPS_PATH ?= /usr/bin/vips
+CF_PROC_FFMPEG_PATH ?= /usr/bin/ffmpeg
+CF_PROC_FFPROBE_PATH ?= /usr/bin/ffprobe
+CF_PROC_VIPS_ADAPTER_PATH ?= /usr/local/bin/cf-vips
 APP_CPPFLAGS := -Isrc -Itests -DCF_VIEWS_APP_VERSION='"$(APP_VERSION)"' \
 	-DCF_APP_VERSION='"$(APP_VERSION)"'
+APP_CPPFLAGS += -DCF_PROC_VIPS_PATH='"$(CF_PROC_VIPS_PATH)"' \
+	-DCF_PROC_FFMPEG_PATH='"$(CF_PROC_FFMPEG_PATH)"' \
+	-DCF_PROC_FFPROBE_PATH='"$(CF_PROC_FFPROBE_PATH)"' \
+	-DCF_PROC_VIPS_ADAPTER_PATH='"$(CF_PROC_VIPS_ADAPTER_PATH)"'
 ifneq ($(strip $(GIT_REVISION)),)
 APP_CPPFLAGS += -DCF_GIT_REVISION='"$(GIT_REVISION)"'
 endif
@@ -377,6 +386,7 @@ UNIT_TEST_SRCS := \
 	tests/integrations/test_unfurl.c \
 	tests/integrations/test_webhook.c \
 	tests/integrations/test_push.c \
+	tests/integrations/test_push_http.c \
 	tests/integrations/test_host_resolve.c \
 	tests/front/test_tls.c \
 	tests/front/test_h2.c \
@@ -565,7 +575,7 @@ else
 endif
 
 # ---------- top-level targets ----------------------------------------------
-.PHONY: all dev bench filc test sanitize tsan deps clean
+.PHONY: all dev bench filc test sanitize tsan deps deps-build clean
 .PHONY: build-app test-impl tsan-impl check-cc
 
 all: dev
@@ -610,6 +620,18 @@ deps:
 	done; \
 	echo "make deps: all pinned fetch/install scripts verified (idempotent)"
 
+# The recorded recipes build from fetched sources and run their dependency
+# probes. OpenSSL precedes curl; these targets never download sources.
+DEP_BUILD_NAMES := picohttpparser sqlite zlib-ng yyjson openssl libxcrypt gumbo qrcodegen nghttp2 curl
+DEP_BUILD_COMPILER := $(if $(filter filc,$(MODE)),filc,clang)
+DEPS_BUILD_SCRIPTS := $(foreach name,$(DEP_BUILD_NAMES),vendor/probes/scripts/$(name)-$(DEP_BUILD_COMPILER).sh)
+
+deps-build:
+	@set -e; for script in $(DEPS_BUILD_SCRIPTS); do \
+		echo "== $$script"; \
+		bash "$$script"; \
+	done
+
 # The vendor scripts declare Bash (some use ${BASH_SOURCE[0]}), so they are
 # never run through `sh`: executable scripts are executed directly so their
 # shebang decides the interpreter, and non-executable ones go through bash.
@@ -632,7 +654,7 @@ $(GUMBO_CLANG_LIB) $(GUMBO_FILC_LIB) $(ZLIB_CLANG_LIB) $(ZLIB_FILC_LIB) \
 $(CURL_CLANG_LIB) $(CURL_FILC_LIB) $(LIBSSL_CLANG_LIB) $(LIBSSL_FILC_LIB) \
 $(NGHTTP2_CLANG_LIB) $(NGHTTP2_FILC_LIB):
 	@echo "error: missing dependency artifact '$@'" >&2
-	@echo "       build it with the recorded F00 recipe in vendor/DEPS.json" >&2
+	@echo "       run make deps, then make deps-build MODE=$(MODE)" >&2
 	@echo "       (see vendor/README.md); ordinary builds never fetch." >&2
 	@exit 1
 

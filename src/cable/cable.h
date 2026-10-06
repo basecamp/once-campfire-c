@@ -250,6 +250,7 @@ void cf_cable_frame_release(cf_cable_frame *frame);
  * call only (the socket copies what the callback sees). */
 typedef struct {
     int fd;                     /* borrowed: the caller closes it */
+    struct cf_front_tls_conn *tls; /* optional, borrowed TLS transport */
     bool deflate;               /* permessage-deflate negotiated */
     const char *subprotocol;    /* negotiated, or NULL */
     const unsigned char *handshake; /* 101 response bytes, or NULL */
