@@ -58,6 +58,27 @@ typedef enum {
     CF_HTTP_STATE_CLOSED
 } cf_http_state;
 
+/* P01 front transport mode (loop.c owns the wiring; tls.c/h2.c own the
+ * policy). Plaintext keeps the H01 byte path exactly. A TLS-required loop
+ * wraps every accepted fd (cf_front_tls_conn) and drives the non-blocking
+ * handshake off readiness — never blocking. ALPN "h2" attaches an h2
+ * session (+ a loop-owned nghttp2 observer that materializes requests);
+ * ALPN "http/1.1" (or no ALPN) keeps the H01 parser path, with output
+ * flushed through TLS instead of the socket. */
+typedef enum {
+    CF_HTTP_TRANSPORT_PLAIN = 0,
+    CF_HTTP_TRANSPORT_TLS_HANDSHAKE,
+    CF_HTTP_TRANSPORT_TLS_H1,
+    CF_HTTP_TRANSPORT_TLS_H2
+} cf_http_transport;
+
+/* Forward declarations: the loop seam never includes front,
+ * OpenSSL or nghttp2 headers here (every H01 TU includes this header); loop.c includes
+ * front/tls.h, front/h2.h and <nghttp2/nghttp2.h> itself. */
+struct cf_front_tls_server;
+struct cf_front_tls_conn;
+struct cf_front_h2_session;
+
 typedef enum {
     CF_HTTP_DL_NONE = 0,
     CF_HTTP_DL_HEADER,
@@ -154,6 +175,24 @@ struct cf_http_conn {
     /* The task's response is serialized into pending output; conn_close
      * releases the task itself (no later completion will). */
     bool task_attached_to_output;
+    /* P01: per-connection TLS/H2 state. `tls` is the handshake/I/O object
+     * (fd ownership stays with the connection); `h2` is the policy session
+     * for TLS-H2 connections; `h2obs` is the loop-owned nghttp2 observer
+     * session that materializes requests (loop.c-private). `tls_want_write`
+     * records a TLS WANT_WRITE so epoll watches EPOLLOUT; `swap_fd` holds
+     * the real fd while output.c's plaintext flush is suppressed (its
+     * flush loop no-ops on fd < 0) so every byte leaves via TLS. */
+    cf_http_transport transport;
+    struct cf_front_tls_conn *tls;
+    struct cf_front_h2_session *h2;
+    void *h2obs;
+    bool tls_want_write;
+    int swap_fd;
+    /* P01: outstanding H2 stream tasks (multiplexed: more than one per
+     * connection, unlike pending_task). Each link is freed by the task's
+     * completion or by conn_close (which never frees the task itself: the
+     * worker's submit/abandon completion releases it, possibly stale). */
+    struct cf_h2_link *h2_tasks;
     /* What the pending output is: none, an interim 100-continue, or the one
      * final response of the current request. */
     enum { CF_HTTP_PENDING_NONE = 0, CF_HTTP_PENDING_INTERIM,
@@ -174,6 +213,14 @@ struct cf_http_conn {
     char peer_ip[64];
 };
 
+/* One link per outstanding H2 stream task (see conn.h2_tasks). */
+struct cf_h2_link {
+    struct cf_http_task *task;
+    int32_t stream_id;
+    uint64_t sequence;
+    struct cf_h2_link *next;
+};
+
 /* One admitted request: one allocation includes the completion link, so a
  * failing second allocation can never lose the completion (00-contracts.md). */
 struct cf_http_task {
@@ -185,6 +232,11 @@ struct cf_http_task {
     bool has_response;
     bool abandoned;       /* abandoned without a response */
     bool released;
+    /* P01: true for H2 stream tasks (tracked in conn->h2_tasks, routed back
+     * into h2 DATA on completion); h2_stream_id is the transport-private
+     * completion token alongside conn + sequence (cf_front_h2_key). */
+    bool is_h2;
+    int32_t h2_stream_id;
     size_t input_reserved; /* frozen request backing reservation */
     atomic_int submit_state; /* 0 admitted, 1 submitted/abandoned */
     struct cf_http_task *next; /* completion queue link */
@@ -236,6 +288,12 @@ struct cf_http_loop {
     size_t output_used;
 
     _Atomic bool stop_flag;
+
+    /* P01: loop-shared TLS server context (borrowed; main.c owns it and
+     * destroys it after the loops join, before app destroy). Non-NULL makes
+     * TLS mandatory: every accepted fd handshakes, never plaintext. Set via
+     * cf_http_loop_set_tls_server before run(); plaintext loops leave NULL. */
+    struct cf_front_tls_server *tls_server;
 
     cf_http_counters counters;
     uint64_t outstanding_tasks; /* admitted, not yet released */
@@ -354,5 +412,11 @@ struct cf_http_conn *cf_http_loop_find_conn(struct cf_http_loop *loop,
 /* Hand a chunk read to this loop's file worker. */
 void cf_http_file_worker_submit(struct cf_http_loop *loop,
                                 struct cf_http_chunk_req *req);
+
+/* P01: attach the loop-shared TLS server context (borrowed; NULL selects
+ * plaintext). Must be called after create and before run (the loop thread
+ * is the only other accessor). */
+void cf_http_loop_set_tls_server(struct cf_http_loop *loop,
+                                 struct cf_front_tls_server *server);
 
 #endif /* CF_HTTP_INTERNAL_H */
