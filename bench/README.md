@@ -16,6 +16,7 @@ it is not the primary and nothing here calls it.
 | `seed/import_seed.py` | imports the benchmark workload seed into a fresh C-schema database (stdlib only) |
 | `check/check_bodies.py` | BENCH-01 body validation against a locally started server (pinned preflight checks) |
 | `image/Dockerfile.c`, `image/entrypoint.sh` | production-image shape for the one-process C server |
+| `image/Dockerfile.filc` | production-image shape for the Fil-C (memory-safe) build; the runtime-lib rule is implemented by `run-c --filc` |
 | `run-c` | explicit invocation: builds, imports, patches a work copy, runs the harness |
 | `results/` | raw outputs, one directory per recorded revision (see `results/README.md`) |
 
@@ -43,7 +44,9 @@ data: no script here re-fetches or updates it.
 
 `docker` (running), `mise` with `rust@1.98.1` (the toolchain the pinned run
 script invokes), `python3`, `patch`, `sqlite3` (only for inspection), and a
-C build (`make bench`; `run-c` builds it if missing).
+C build (`make bench`; `run-c` builds it if missing).  The Fil-C arm
+(`--filc`) additionally needs the pinned Fil-C 0.685 toolchain outside the
+repository (`vendor/scripts/filc.sh`, idempotent) and its `make filc` build.
 
 ## Explicit invocation
 
@@ -102,6 +105,26 @@ connections (affected routes in both arms, capping per-connection throughput
 near 390 rps), and gzip negotiation being active only in the cache-enabled
 arm.  Details, raw numbers and reproduction commands:
 `docs/devel/evidence/B01b-prep.md`.
+
+### Fil-C arm (memory-safe build of the same sources)
+
+`--filc` adds a second C app, `c-filc`, built with the pinned Fil-C 0.685
+toolchain (`make filc`), so the two build flavors of identical sources
+interleave in one invocation; with no `--apps` it runs `--apps c,c-filc`:
+
+```sh
+# four-way published set: both C flavors, Rust and Rails, one interleaved run
+bench/run-c --filc --loops 4 --apps c,c-filc,rust,reference --reps 3 \
+  --cache-bytes 67108864 --out bench/results/<revision>-quad-cache
+```
+
+The Fil-C binary's ELF interpreter and RUNPATH are absolute paths into the
+pinned pizfix distribution, so `run-c --filc` recreates that directory tree
+under `bench/.work/filc-image/rootfs/` and `image/Dockerfile.filc` copies it
+to `/`; the unmodified binary (the sha256 `env.txt` records) runs with its
+own loader, libc and runtime in the container.  `env.txt` gains a
+`c-filc revision: ... binary sha256: ...` line identical in shape to the
+`c` line, and `bench/report` labels the column `C (Fil-C)`.
 
 ### Results tooling
 

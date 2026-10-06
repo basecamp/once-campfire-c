@@ -5,6 +5,34 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-06 08:10 — B01 Fil-C arm: measurement tooling
+
+- **The pinned-harness adapter gains a second C app, `c-filc`**: the same
+  sources built with the pinned Fil-C 0.685 toolchain (`make filc`) run as
+  their own arm, so both C build flavors interleave in one invocation
+  (`bench/run-c --filc --apps c,c-filc,rust,reference`).  Per-app identity
+  lines land in `env.txt` (`c-filc revision: … binary sha256: …`), and the
+  pinned report labels the column `C (Fil-C)`.  Post-patch file hashes are
+  updated in `bench/adapters/README.md`.
+- **`bench/image/Dockerfile.filc` + `run-c --filc`**: the Fil-C binary's
+  PT_INTERP and RUNPATH are absolute pizfix paths, so the image recreates
+  that directory tree (`rootfs/` in the build context) instead of copying
+  libraries to a new location — the unmodified, sha256-recorded binary runs.
+  (The first dry run reproduced the failure mode: exit 127,
+  `required file not found`, because the kernel resolves the literal `..`
+  segments and the intermediate `build/bin` was absent.)
+- **`bench/readme_tables.py`** emits the Fil-C columns (throughput, speed
+  ratios, a Fil-C latency block, size rows).  Size rows prefer a per-run
+  `image-sizes.json` (`du -shx /` inside each image): the Docker daemon moved
+  to the containerd image store between the 10-05 runs and this one, so its
+  `.Size` (the old "unpacked" column) reads differently for the same image
+  ids — the quad run re-baselines all four images from one measurement
+  moment.
+- Dry run (1 rep, filc only, uncached) green end to end: cold start 135 ms,
+  idle 31 MB, room 481 rps at 16 clients (≈4.2× below the bench build),
+  every response 200, pinned preflight pass.  The quad measurements and the
+  README tables land in a follow-up entry once the run completes.
+
 ## 2026-10-05 23:15 — P01 front, V02 completion and the final measurements
 
 - **P01 merged**: configured TLS, ALPN and the HTTP/2 front (`src/front/`),

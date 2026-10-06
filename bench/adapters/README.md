@@ -11,16 +11,19 @@ Post-patch SHA-256 (verify after regenerating the patch):
 
 | File | sha256 |
 | --- | --- |
-| `bench/run` | `acf863b35892cf67ac508b1df83d2a7d7529ff35a1ed8fedff2c36dbae29c7fc` |
+| `bench/run` | `7009f7b6b3e1d6ed4e769c0bf23e311b48add163ee09df31aaef512ae2e4ceba` |
 | `bench/validate.py` | `cd9b4a262d92ab3a125e6b2d60629693ec504f23cd6355f27f45c1eda758c0d5` |
-| `bench/report` | `e48adb4da2befe36f5ccacc28b81fdb0a976c19aa4bf655116ff42329b57b037` |
+| `bench/report` | `294ea697b6a962b9fe454cfad55f90842dfcfe9f2dfaff41fa6ae7825db88d44` |
 
 The patch changes no load generator, no workload, no timing constant, and no
 preflight assertion.  Its parts:
 
-1. **`bench/run`** adds the `c` app:
+1. **`bench/run`** adds the `c` app (and the `c-filc` Fil-C build flavor as a
+   second app of the same source — same image/env plumbing, own
+   `C_FILC_IMAGE` / `C_FILC_REVISION` / `C_FILC_BINARY_SHA256` and its own
+   env.txt line, so both build flavors can interleave in one invocation):
    * `C_IMAGE` / `C_REVISION` / `C_BINARY_SHA256` environment defaults;
-   * `image_for()` maps `c` to `C_IMAGE`;
+   * `image_for()` maps `c` to `C_IMAGE` and `c-filc` to `C_FILC_IMAGE`;
    * `SEED` becomes overridable (`SEED=${SEED:-...}`) so the imported seed
      (bench/seed/import_seed.py) is used instead of a Rust checkout's
      `parity/.seed/default`;
@@ -29,23 +32,24 @@ preflight assertion.  Its parts:
      run only for their own apps (the Rust checkout path does not exist on
      this host).  For upstream app selections the behavior is identical.
    * `env_args()` forwards `-e CF_CACHE_BYTES=$CF_CACHE_BYTES` and
-     `-e CF_LOOPS=$CF_LOOPS` for the `c` app (defaults 0 and 1; the flags
-     `--cache-bytes 67108864` and `--loops 4` select the benchmark arms), and
-     env.txt gains one
+     `-e CF_LOOPS=$CF_LOOPS` for the `c` and `c-filc` apps (defaults 0 and 1;
+     the flags `--cache-bytes 67108864` and `--loops 4` select the benchmark
+     arms), and env.txt gains one
      `c revision: ... binary sha256: ... cache_bytes: ... loops: ... image: ...`
-     line.
+     line per C flavor present.
 2. **`bench/validate.py`** makes the Elixir verification module
    (`bin/verify-parity`) a lazy import, needed only for the `digest` and
    `ledger` subcommands.  The preflight assertions (status 200, non-empty
    body, populated room/search, sidebar, avatar, CSS, `/up`, database count
    and integrity) are byte-identical to the pin.
-3. **`bench/report`** adds the `c` column/role mappings to the table
-   renderer.  With no `rust` column the advantage header reads
+3. **`bench/report`** adds the `c` and `c-filc` column/role mappings to the
+   table renderer (`C (Fil-C)` label, `campfire` process role for both).
+   With no `rust` column the advantage header reads
    `C advantage over ...`; medians and ranges are computed by pinned code.
 
-`--apps c` plus the pinned reporting flow is the only supported use; do not
-carry the patch upstream and do not add C-specific branches to workload or
-timing code.
+`--apps c` / `--apps c,c-filc` plus the pinned reporting flow is the only
+supported use; do not carry the patch upstream and do not add C-specific
+branches to workload or timing code.
 
 ## Applying manually
 

@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# Production-image shape for the Fil-C build of the C port (the same sources
+# compiled memory-safe; B01 Fil-C arm).  Same layout as Dockerfile.c, but the
+# Fil-C binary's ELF interpreter is an absolute path into the pinned pizfix
+# distribution (vendor/scripts/filc.sh, vendor/DEPS.json "filc" pin):
+#
+#   /home/<user>/.local/fil-c/0.685/filc-0.685-linux-x86_64/build/bin/../../pizfix/lib/ld-fil1-x86_64.so
+#
+# and its RUNPATH points at the same directory.  The literal ".." components
+# are resolved by the kernel (which requires the intermediate build/bin
+# directory to exist), so bench/run-c assembles that tree -- empty build/bin
+# plus the loader, libc and runtime (libpizlo/libyoloc) under pizfix/lib --
+# under rootfs/ in the build context, and this Dockerfile copies it to /.
+# The binary thus loads its own loader and libc unmodified: the recorded
+# binary sha256 is the one that runs.  (LD_LIBRARY_PATH cannot help: the
+# interpreter is fixed by PT_INTERP, resolved before any library search.)
+#
+# Build context: the small directory bench/run-c assembles under
+# bench/.work/filc-image/ (campfire, rootfs/<pizfix lib tree>, entrypoint.sh,
+# tests/fixtures/assets):
+#
+#   docker build -f bench/image/Dockerfile.filc -t campfire-c-filc:bench bench/.work/filc-image
+#
+# The binary is built on the host with `make filc`; BASE_IMAGE only provides
+# the shell for the entrypoint (the C runtime comes from the Fil-C
+# distribution).  Pin BASE_IMAGE by digest when recording measurements.
+
+ARG BASE_IMAGE=fedora:latest
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+COPY rootfs/ /
+COPY campfire /app/campfire
+COPY tests/fixtures/assets /app/tests/fixtures/assets
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod 0755 /app/campfire /app/entrypoint.sh
+
+# Same single-process shape as Dockerfile.c: HTTP_PORT is the public
+# listener, TARGET_PORT is accepted and ignored, and the harness runs with
+# --network host (EXPOSE is documentation only).
+EXPOSE 80
+ENTRYPOINT ["/app/entrypoint.sh"]

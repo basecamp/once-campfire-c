@@ -2,7 +2,7 @@
 # Run the pinned Elixir benchmark harness against the C port.
 #
 #   bench/run-c [bench/run options] [--build-image] [--rebuild-seed]
-#               [--cache-bytes N] [--loops N]
+#               [--cache-bytes N] [--loops N] [--filc]
 #
 # The pinned harness is vendored byte-for-byte under
 # bench/pinned/once-campfire-elixir/ (see bench/PINNED-MANIFEST.json).  It is
@@ -34,13 +34,26 @@
 #                     use `--loops 4` for comparable C arms.  Also recorded in
 #                     env.txt (`loops: N`).
 #
+# Fil-C arm (memory-safe build of the same sources):
+#   --filc            use the Fil-C build (`make filc`) as an additional
+#                     `c-filc` app (image campfire-c-filc:bench, built from
+#                     bench/image/Dockerfile.filc with the pinned pizfix
+#                     runtime libs).  With no --apps the run becomes
+#                     `--apps c,c-filc`, so the two build flavors interleave;
+#                     pass `--apps c,c-filc,rust,reference` for the four-way
+#                     set.  Identity is recorded in env.txt as its own
+#                     `c-filc revision: ...` line (C_FILC_REVISION /
+#                     C_FILC_BINARY_SHA256).
+#
 # Prerequisites: docker (running), mise with rust@1.98.1 (the harness pins its
 # load-generator toolchain), python3, patch.  The C binary is built with
-# `make bench`; the production image from bench/image/Dockerfile.c wraps it.
+# `make bench` (`make filc` for --filc); the production images from
+# bench/image/Dockerfile.c and Dockerfile.filc wrap them.
 #
 # Defaults, all overridable in the environment exactly as bench/run documents:
 #   SEED=$BENCH/seed/.seed/default      imported by bench/seed/import_seed.py
 #   C_IMAGE=campfire-c:bench            built from bench/image/Dockerfile.c
+#   C_FILC_IMAGE=campfire-c-filc:bench  built from bench/image/Dockerfile.filc (--filc)
 #   SERVER_CPUS=8-11 LOADGEN_CPUS=12-15 HTTP_SECS=8 HTTP_CONCS="1 16 64"
 #   CABLE_CLIENTS="100 500 1000" CABLE_TPUT_SECS=15 UPLOAD_REPS=5
 #
@@ -56,18 +69,22 @@ PATCH=$BENCH/adapters/c-app.patch
 WORK=$BENCH/.work/pinned
 SEED=${SEED:-$BENCH/seed/.seed/default}
 BINARY=$ROOT/build/bench/campfire
+FILC_BINARY=$ROOT/build/filc/campfire
 C_IMAGE=${C_IMAGE:-campfire-c:bench}
+C_FILC_IMAGE=${C_FILC_IMAGE:-campfire-c-filc:bench}
 BASE_IMAGE=${BASE_IMAGE:-fedora:latest}
 CF_CACHE_BYTES=${CF_CACHE_BYTES:-0}
 CF_LOOPS=${CF_LOOPS:-1}
 BUILD_IMAGE=0
 REBUILD_SEED=0
+WITH_FILC=0
 PASSTHROUGH=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --build-image) BUILD_IMAGE=1; shift ;;
     --rebuild-seed) REBUILD_SEED=1; shift ;;
+    --filc) WITH_FILC=1; shift ;;
     --cache-bytes)
       [ $# -ge 2 ] || { echo "run-c: --cache-bytes needs a value" >&2; exit 2; }
       case "$2" in
@@ -120,6 +137,41 @@ if [ "$BUILD_IMAGE" = 1 ] || ! docker image inspect "$C_IMAGE" >/dev/null 2>&1; 
     --build-arg "BASE_IMAGE=$BASE_IMAGE" "$CTX" >&2
 fi
 
+if [ "$WITH_FILC" = 1 ]; then
+  if [ ! -x "$FILC_BINARY" ]; then
+    log "building the Fil-C binary: make filc"
+    make -C "$ROOT" filc >&2
+  fi
+  if [ "$BUILD_IMAGE" = 1 ] || ! docker image inspect "$C_FILC_IMAGE" >/dev/null 2>&1; then
+    log "building the Fil-C production image $C_FILC_IMAGE (base $BASE_IMAGE)"
+    FILCC=$(sed -n 's/^FILC ?= //p' "$ROOT/Makefile" | head -1)
+    [ -n "$FILCC" ] || { echo "run-c: cannot read FILC from the Makefile" >&2; exit 1; }
+    FILC_PREFIX=$(cd "$(dirname "$FILCC")/../.." && pwd)
+    # The binary's PT_INTERP and RUNPATH are absolute paths into this
+    # directory; recreating it inside the image is what lets the unmodified
+    # binary (same sha256) run (see bench/image/Dockerfile.filc).
+    RUNTIME_DIR=$FILC_PREFIX/pizfix/lib
+    for lib in ld-fil1-x86_64.so libc.so libpizlo.so libyoloc.so; do
+      [ -f "$RUNTIME_DIR/$lib" ] || {
+        echo "run-c: missing $RUNTIME_DIR/$lib (run vendor/scripts/filc.sh)" >&2; exit 1; }
+    done
+    CTX=$BENCH/.work/filc-image
+    rm -rf "$CTX"
+    mkdir -p "$CTX/tests/fixtures" "$CTX/rootfs$RUNTIME_DIR"
+    # PT_INTERP is "<prefix>/build/bin/../../pizfix/lib/ld-fil1-x86_64.so":
+    # the kernel resolves the literal ".." components, so the intermediate
+    # build/bin must exist (empty is fine) for the loader to be found.
+    mkdir -p "$CTX/rootfs$FILC_PREFIX/build/bin"
+    cp "$FILC_BINARY" "$CTX/campfire"
+    cp "$RUNTIME_DIR/ld-fil1-x86_64.so" "$RUNTIME_DIR/libc.so" \
+       "$RUNTIME_DIR/libpizlo.so" "$RUNTIME_DIR/libyoloc.so" "$CTX/rootfs$RUNTIME_DIR/"
+    cp -a "$ROOT/tests/fixtures/assets" "$CTX/tests/fixtures/assets"
+    cp "$BENCH/image/entrypoint.sh" "$CTX/entrypoint.sh"
+    docker build -f "$BENCH/image/Dockerfile.filc" -t "$C_FILC_IMAGE" \
+      --build-arg "BASE_IMAGE=$BASE_IMAGE" "$CTX" >&2
+  fi
+fi
+
 # -- the patched working copy -------------------------------------------------
 
 log "preparing the pinned harness copy at $WORK"
@@ -143,6 +195,11 @@ else
 fi
 C_BINARY_SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
 export SEED C_IMAGE C_REVISION C_BINARY_SHA256
+if [ "$WITH_FILC" = 1 ]; then
+  C_FILC_REVISION=$C_REVISION
+  C_FILC_BINARY_SHA256=$(sha256sum "$FILC_BINARY" | awk '{print $1}')
+  export C_FILC_IMAGE C_FILC_REVISION C_FILC_BINARY_SHA256
+fi
 
 HAS_APPS=0
 HAS_OUT=0
@@ -152,7 +209,13 @@ for arg in "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"; do
 done
 
 ARGS=("${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}")
-[ "$HAS_APPS" = 1 ] || ARGS=(--apps c "${ARGS[@]+"${ARGS[@]}"}")
+if [ "$HAS_APPS" = 0 ]; then
+  if [ "$WITH_FILC" = 1 ]; then
+    ARGS=(--apps c,c-filc "${ARGS[@]+"${ARGS[@]}"}")
+  else
+    ARGS=(--apps c "${ARGS[@]+"${ARGS[@]}"}")
+  fi
+fi
 if [ "$HAS_OUT" = 0 ]; then
   ARGS=(--out "$BENCH/results/${C_REVISION}" "${ARGS[@]}")
 fi
@@ -184,4 +247,7 @@ avatar workload row must be read with this representation difference in mind.
 EOF
 
 log "c revision: $C_REVISION binary sha256: $C_BINARY_SHA256 cache_bytes: $CF_CACHE_BYTES loops: $CF_LOOPS"
+if [ "$WITH_FILC" = 1 ]; then
+  log "c-filc revision: $C_FILC_REVISION binary sha256: $C_FILC_BINARY_SHA256 (same cache_bytes/loops)"
+fi
 exec "$WORK/bench/run" "${ARGS[@]}"
