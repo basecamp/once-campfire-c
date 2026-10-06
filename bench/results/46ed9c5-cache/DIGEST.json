@@ -1,0 +1,126 @@
+{
+  "arm": "final-cache",
+  "binary_sha256": "2e3c17d1d0fdea9ccf6888be8311a6cc9bb1d459d93e3852da86700fcad0ab3a",
+  "cache_bytes": 67108864,
+  "cpu_steal_percent": 0.0,
+  "env": {
+    "c revision": "ec73dd1 binary sha256: 2e3c17d1d0fdea9ccf6888be8311a6cc9bb1d459d93e3852da86700fcad0ab3a cache_bytes: 67108864 loops: 4 image: campfire-c:bench",
+    "date": "2026-10-05T22:22:34-04:00",
+    "host": "7.1.0-0.rc7.260611g9716c086c8e8.50.fc45.x86_64, AMD Ryzen 9 9900X 12-Core Processor, 24 threads, 91GB",
+    "quiet wait": "LOAD_MAX=1.5 LOAD_WAIT_SECS=120",
+    "seed sha256": "a763014643b8e26d38f153e98647500e42ef2c305fdbaf24145fccdbcb9ae030  /home/msaraiva/dev/mark/Proj/Misc/once-campfire-c/bench/seed/.seed/default/db/production.sqlite3",
+    "server cpus": "8-11 (nproc 4); loadgen cpus: 12-15; network: host",
+    "workload": "suites=http HTTP_SECS=8 HTTP_CONCS=1 16 64 CABLE_CLIENTS=100 500 1000 CABLE_TPUT_SECS=15 CABLE_POSTERS=4 UPLOAD_REPS=5 REPS=3"
+  },
+  "gate_load1": [
+    3.94,
+    3.02,
+    4.4,
+    2.3,
+    3.41,
+    3.09,
+    4.15,
+    4.78,
+    2.2
+  ],
+  "gate_waits_seconds": [
+    120,
+    120,
+    120,
+    120,
+    120,
+    120,
+    120,
+    120,
+    120
+  ],
+  "image_id": "sha256:b8768e83a6deba61baf726fc0b74102c697bf7db5b3c2e5492c337314816a845",
+  "loops": 4,
+  "reps": [
+    {
+      "app": "c",
+      "cold_start_ms": 140,
+      "file": "c-1.json",
+      "load_end": "8.81 8.10 9.32 4/8508 2599856",
+      "load_start": "3.94 7.11 9.41 8/8631 2586229",
+      "rep": 1,
+      "valid": true
+    },
+    {
+      "app": "c",
+      "cold_start_ms": 133,
+      "file": "c-2.json",
+      "load_end": "6.75 6.55 6.75 5/8502 2673634",
+      "load_start": "3.09 5.17 6.42 3/8476 2660018",
+      "rep": 2,
+      "valid": true
+    },
+    {
+      "app": "c",
+      "cold_start_ms": 118,
+      "file": "c-3.json",
+      "load_end": "8.29 7.80 7.19 3/8537 2690192",
+      "load_start": "4.15 5.67 6.40 6/8525 2675999",
+      "rep": 3,
+      "valid": true
+    },
+    {
+      "app": "reference",
+      "cold_start_ms": 2691,
+      "file": "reference-1.json",
+      "load_end": "6.96 7.68 8.20 2/8550 2629262",
+      "load_start": "4.40 6.21 7.91 3/8489 2616639",
+      "rep": 1,
+      "valid": true
+    },
+    {
+      "app": "reference",
+      "cold_start_ms": 2310,
+      "file": "reference-2.json",
+      "load_end": "8.23 6.74 7.41 4/8625 2646184",
+      "load_start": "2.30 5.65 7.39 4/8485 2632036",
+      "rep": 2,
+      "valid": true
+    },
+    {
+      "app": "reference",
+      "cold_start_ms": 2398,
+      "file": "reference-3.json",
+      "load_end": "4.72 5.10 6.02 2/8535 2715567",
+      "load_start": "2.20 5.27 6.31 5/8441 2705624",
+      "rep": 3,
+      "valid": true
+    },
+    {
+      "app": "rust",
+      "cold_start_ms": 148,
+      "file": "rust-1.json",
+      "load_end": "9.02 7.65 8.56 3/8480 2615009",
+      "load_start": "3.02 6.17 8.46 2/8441 2601799",
+      "rep": 1,
+      "valid": true
+    },
+    {
+      "app": "rust",
+      "cold_start_ms": 176,
+      "file": "rust-2.json",
+      "load_end": "7.48 6.49 6.96 4/8464 2657936",
+      "load_start": "3.41 5.40 6.84 6/8469 2647979",
+      "rep": 2,
+      "valid": true
+    },
+    {
+      "app": "rust",
+      "cold_start_ms": 162,
+      "file": "rust-3.json",
+      "load_end": "7.74 7.12 6.97 3/8492 2703444",
+      "load_start": "4.78 6.59 6.81 4/8526 2693367",
+      "rep": 3,
+      "valid": true
+    }
+  ],
+  "reps_meeting_quiet_gate_1_5": 0,
+  "reps_total": 9,
+  "reps_valid": 9,
+  "revision": "ec73dd1 clean"
+}

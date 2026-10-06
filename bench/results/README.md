@@ -26,3 +26,21 @@ Every measurement row must be traceable to a code change: write the revision,
 the change (commit subject or a one-line description), and cache on/off in the
 directory or in the evidence note that links it.  Fil-C rows are independent
 and include their full runtime footprint.  Do not delete an unfavorable row.
+
+
+
+
+## Revision identifiers
+
+Directory names use the short revision of the measured tree; files kept as
+captured inside each directory (for example `env.txt`) may name the same tree
+by an earlier identifier. Mapping for the archived sets:
+
+| Identifier inside older files | Directory name |
+| --- | --- |
+| `ec73dd1` | `46ed9c5` |
+| `7a4c24e877c1` | `71f851e` |
+| `604f037c0e25` | `837aa9c` |
+| `84ee2ae` | `a0028eb` |
+| `25b9a3b` | `e63e4d3` |
+| `ed9e118` | `85b58ea` |

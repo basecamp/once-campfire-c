@@ -1,0 +1,40 @@
+{
+  "cache_off": "bench/results/ec73dd1-uncached",
+  "cache_on": "bench/results/ec73dd1-cache",
+  "valid_reps": {
+    "off": {
+      "c": [
+        1,
+        2,
+        3
+      ],
+      "reference": [
+        1,
+        2,
+        3
+      ],
+      "rust": [
+        1,
+        2,
+        3
+      ]
+    },
+    "on": {
+      "c": [
+        1,
+        2,
+        3
+      ],
+      "reference": [
+        1,
+        2,
+        3
+      ],
+      "rust": [
+        1,
+        2,
+        3
+      ]
+    }
+  }
+}
