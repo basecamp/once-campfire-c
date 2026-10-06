@@ -1,20 +1,22 @@
-"""E2E-01: two real browser contexts, setup/sign-in, live message, edit/delete.
+"""E2E-01: two real browser contexts, setup/sign-in, live message, edit/delete,
+search and logout.
 
-Acceptance (docs/devel/implementation/07-verification.md E2E-01), as scoped by
-the integrator's M2 ruling (roadmap "Contract changes", 2026-10-05): M2's
-browser acceptance covers the reachable M2 flow —
-
-    setup -> sign-in -> room -> text post -> live delivery -> edit/delete live
+Acceptance (docs/devel/implementation/07-verification.md E2E-01): "Two real
+browser contexts: setup/sign-in, message live update, edit/delete, search,
+logout".
 
 Browser A passes the real first-run form (pinned reference texts from
 tests/fixtures/crates/views/tests/golden/a/first_run.html) and posts a text
 message through the room composer.  Browser B is a second user signed in
 through the real sign-in form and must observe the message, then the edited
-text, then the removal live, without any reload.
+text, then the removal live, without any reload.  A then searches through the
+real search UI and must get a populated result for the message still in the
+room, and B logs out through the reference logout button on the profile page
+(GET /users/me/profile) and must land back on sign-in with the session dead.
 
-DEFERRED to M4/V02 with their packets (do not treat as an E2E-01 failure):
-`07-verification.md`'s row also names search and logout; both paths are
-dev-501 in this tree by design and are exercised by their packets later:
+History: V01 (2026-10-05) covered the ruled M2 scope only - setup -> sign-in ->
+room -> text post -> live delivery -> edit/delete live - because the search
+and profile/logout routes were dev-501 then:
 
   * search - the room's Search control opens `GET /searches`
     (`searches#index`, packet A-searches): `501 Not Implemented: route 146
@@ -23,20 +25,19 @@ dev-501 in this tree by design and are exercised by their packets later:
     (`users/profiles#show`, packet A-users-profiles): `501 Not Implemented:
     route 60 cf_action_users_profiles_show (/users/:user_id/profile(.:format))`.
 
-Nothing is skipped here: the case simply covers the ruled M2 scope.
-
-History: the earlier revision of this case (V01, 2026-10-05) also drove search
-and logout and, before the method-override repair, failed on the UI edit/delete
-steps because the reference forms submit `POST` plus a hidden `_method` field
-and the port never applied `cf_effective_method` before routing (404, frame
-"Content missing").  That defect is fixed in `src/context.c` (see
-docs/devel/evidence/method-override-wiring.md); the edit/delete steps below
-now pass and the search/logout steps were removed per the ruling.
+Both packets are landed now (the profile/push pages render through real
+presenters since commit ca26a08), so the integrator's V02 packet LIFTS the
+deferral: the search and logout steps are restored below and the case covers
+the complete E2E-01 row.  The earlier revision also failed on the UI
+edit/delete steps before the method-override repair (see
+docs/devel/evidence/method-override-wiring.md); those steps pass since that
+repair.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -240,6 +241,132 @@ def run() -> None:
             _say("B observed the message removed live")
             if evidence:
                 b.screenshot(evidence / "e2e01-04-b-removed.png")
+
+            # --- search through the real UI (V02: lifted deferral) ----------
+            # The room composer's Search control navigates to GET /searches
+            # (searches#index); its form posts `q` to /searches and redirects
+            # back with the query, where the reachable messages are searched.
+            a.open(server.base_url + ROOM)
+            a.click_ui('a.composer__context-btn[href="/searches"]')
+            a.wait_url("/searches", 20)
+            search_title = a.title()
+            if search_title != "Search":
+                raise CaseFailure(
+                    f"search page title: expected 'Search', observed {search_title!r}"
+                )
+            if not a.has("input#q[name=q]"):
+                raise CaseFailure("search page has no input#q search field")
+            a.fill("#q", first)
+            a.press("Enter")
+            # The search sanitizer rewrites punctuation to spaces, so the
+            # redirected query is "v01 e2e01 <nonce> first"; wait for the
+            # distinctive trailing token rather than the raw message text.
+            h.poll(
+                lambda: a.url() if ("q=" in a.url() and "first" in a.url()) else None,
+                20,
+                f"the search redirect after submitting {first!r}",
+            )
+            # A populated result: the one message still in the room (the
+            # edited/deleted one is gone) is found, and the count chip says 1.
+            h.poll(
+                lambda: first in (a.text("#search-results") or ""),
+                15,
+                f"the search results to contain {first!r}",
+            )
+            result_count = a.eval(
+                "document.querySelectorAll('#search-results .message').length"
+            )
+            if result_count != 1:
+                raise CaseFailure(
+                    f"search for {first!r} returned {result_count!r} message "
+                    "element(s), expected exactly 1"
+                )
+            chip = (a.text(".searches__query") or "").strip()
+            match = re.search(r"(\d+)\s*$", chip)
+            if match is None or match.group(1) != "1":
+                raise CaseFailure(
+                    f"search result-count chip: expected a trailing 1, observed "
+                    f"{chip!r}"
+                )
+            _say(
+                f"A searched {first!r} through /searches: one populated result, "
+                f"chip {chip!r} (live/edited message absent)"
+            )
+            if evidence:
+                a.screenshot(evidence / "e2e01-05-search-result.png")
+
+            # --- logout through the profile page (V02: lifted deferral) -----
+            # The reference logout form lives on GET /users/me/profile; reach
+            # it through the sidebar's account link, click the real button
+            # (sessions#logout unsubscribes web push, then submits DELETE
+            # /session), and verify the session is dead afterwards.
+            stale_cookie = b.cookie_header()
+            b.wait_js(
+                '!!document.querySelector(\'#sidebar a[href="/users/me/profile"]\')',
+                20,
+                "B's sidebar account link to the profile page",
+            )
+            b.click_ui('#sidebar a[href="/users/me/profile"]')
+            b.wait_url("/users/me/profile", 20)
+            profile_title = b.title()
+            if profile_title != h.SECOND_NAME:
+                raise CaseFailure(
+                    f"profile page title: expected {h.SECOND_NAME!r}, observed "
+                    f"{profile_title!r}"
+                )
+            if not b.has(
+                'form[action="/session"] '
+                'button[data-action^="sessions#logout"]'
+            ):
+                raise CaseFailure(
+                    "profile page does not carry the reference logout button"
+                )
+            b.click_ui(
+                'form[action="/session"] button[data-action^="sessions#logout"]'
+            )
+            b.wait_url("/session/new", 30)
+            if b.title() != h.SIGN_IN_TITLE:
+                raise CaseFailure(
+                    f"logout did not land on sign-in: {b.url()!r} "
+                    f"({b.title()!r})"
+                )
+            # The session is dead: the recorded row is gone, the stale cookie
+            # no longer reaches the room, and a /cable replay is refused.
+            rows = server.query(
+                "SELECT COUNT(*) FROM sessions WHERE user_id = "
+                "(SELECT id FROM users WHERE email_address = ?)",
+                (h.SECOND_EMAIL,),
+            )
+            if rows[0][0] != 0:
+                raise CaseFailure(
+                    "logout left the session row behind: "
+                    f"{rows[0][0]} row(s) for {h.SECOND_EMAIL}"
+                )
+            if "session_token" not in stale_cookie:
+                raise CaseFailure(
+                    f"could not read B's session cookie before logout: "
+                    f"{stale_cookie!r}"
+                )
+            b.open(server.base_url + ROOM)
+            if "/session/new" not in b.url() or b.title() != h.SIGN_IN_TITLE:
+                raise CaseFailure(
+                    "B's stale cookie still reached the room after logout: "
+                    f"{b.url()!r} ({b.title()!r})"
+                )
+            replay = h.ws_probe(server.base_url, stale_cookie)
+            payload = replay["frames"][0]["payload"] if replay["frames"] else ""
+            if '"unauthorized"' not in payload or '"welcome"' in payload:
+                raise CaseFailure(
+                    "the logged-out session cookie was not refused on /cable: "
+                    f"{replay!r}"
+                )
+            _say(
+                f"B logged out through the profile button -> /session/new "
+                f"({b.title()!r}); session row deleted, stale cookie redirects "
+                "to sign-in and the /cable replay is refused"
+            )
+            if evidence:
+                b.screenshot(evidence / "e2e01-06-logout-signin.png")
         except PrerequisiteMissing:
             raise
         except CaseFailure as exc:

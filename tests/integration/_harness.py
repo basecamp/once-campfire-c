@@ -375,7 +375,7 @@ def _free_port() -> int:
 class Server:
     """One campfire instance on a free port with its own scratch database."""
 
-    def __init__(self, scratch: Scratch):
+    def __init__(self, scratch: Scratch, extra_env: dict | None = None):
         self.scratch = scratch
         self.data_dir = scratch.path / "data"
         self.db_path = self.data_dir / "campfire.sqlite3"
@@ -384,6 +384,9 @@ class Server:
         self.port = _free_port()
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.proc: subprocess.Popen | None = None
+        # Case-specific configuration (e.g. VAPID keys for the push flow);
+        # applied on top of the shared environment below.
+        self.extra_env = dict(extra_env or {})
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -400,6 +403,7 @@ class Server:
                 "DISABLE_SSL": "1",
             }
         )
+        env.update(self.extra_env)
         return env
 
     def start(self) -> None:
