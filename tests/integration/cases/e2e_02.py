@@ -18,7 +18,7 @@ Subflows, each driven through the app's real UI where it exists:
      The composer's FileUploader posts the multipart `message[attachment]`
      to the room's messages route and inserts the rendered turbo-stream
      reply.  The attachment path is wired (H02 upload accessor + S02
-     staging, commit 43657aa), so the case requires the rendered attachment
+     staging, commit ce2bae4), so the case requires the rendered attachment
      in both browsers and FAILS on a 400 from the multipart XHR (that is a
      regression, not the old blocked state).  Text attachments render the
      reference `render_link` arm (filename span + signed Active Storage
@@ -179,7 +179,7 @@ def _upload_flow(a: h.Browser, b: h.Browser, server: h.Server, scratch,
         ):
             raise CaseFailure(
                 "multipart upload answered 400: the attachment path regressed "
-                "(H02/S02 wiring landed in 43657aa); message area reads "
+                "(H02/S02 wiring landed in ce2bae4); message area reads "
                 f"{(a.text('#message-area') or '')[-300:]!r}"
             )
         if time.monotonic() >= deadline:

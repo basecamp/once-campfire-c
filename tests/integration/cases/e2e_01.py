@@ -26,7 +26,7 @@ and profile/logout routes were dev-501 then:
     route 60 cf_action_users_profiles_show (/users/:user_id/profile(.:format))`.
 
 Both packets are landed now (the profile/push pages render through real
-presenters since commit ca26a08), so the integrator's V02 packet LIFTS the
+presenters since commit 2437246), so the integrator's V02 packet LIFTS the
 deferral: the search and logout steps are restored below and the case covers
 the complete E2E-01 row.  The earlier revision also failed on the UI
 edit/delete steps before the method-override repair (see

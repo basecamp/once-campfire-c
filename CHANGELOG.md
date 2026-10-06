@@ -5,7 +5,57 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
-## 2026-10-05 — V02 attachments: H02 upload accessor + S02 message attachment path
+## 2026-10-05 23:15 — P01 front, V02 completion and the final measurements
+
+- **P01 merged**: configured TLS, ALPN and the HTTP/2 front (`src/front/`),
+  serving-loop and `main.c` wiring, nghttp2/OpenSSL linkage, and two response
+  header accessors (`cf_response_header_count` / `cf_response_header_at`)
+  added identically to `src/cf.h` and `contracts/api.h`. Documented gaps
+  (outside the pinned harness's HTTP/1.1-plain path): synchronous H2 FILE
+  reads, no `/cable` over TLS, H2 trailers ignored.
+- **V02 completion**: profiles and push pages render through real presenters
+  (21:07–22:10); accounts/bots render shims replaced; per-recipient broadcast
+  partials and real room forms; browser acceptance at 3 cases / 3 passed with
+  E2E-01's deferred search + profile-logout steps restored and E2E-02 driving
+  room access change, the bot create→curl→live-post flow, the push UI and the
+  upload path. Message attachments are wired end to end (H02 upload accessor
+  + S02 staging/marcel): the composer's multipart upload now renders the
+  attachment in both browsers, with media transforms still the S03
+  tool-boundary block.
+- **Gate on the merged tree**: dev 1608/1608 (125 binaries), sanitize
+  1608/1608 with zero ASan output, Fil-C/bench/TSan green; the two
+  stack-use-after-scope view-span escapes and the QR SVG length bug fixed
+  along the way.
+- **README + MIT license**, structured like the other Campfire ports, with
+  the tables below.
+- **Final measurements** (pinned harness, 3 interleaved reps per arm, 16
+  clients; full provenance and raw outputs under
+  `bench/results/46ed9c5-{uncached,cache}/`):
+
+| Workload | Rails | Rust (cache on) | C (cache off) | C (cache on) |
+|---|---:|---:|---:|---:|
+| Room page | 234 | 31,741 | 1,995 | 104,523 |
+| Messages page | 438 | 29,021 | 2,465 | 128,748 |
+| Sidebar | 679 | 32,519 | 22,923 | 134,211 |
+| Search | 434 | 33,010 | 5,395 | 128,249 |
+| Post a message | 1,116 | 54,242 | 92,508 | 109,889 |
+| `/up` | 4,363 | 131,207 | 170,347 | 180,614 |
+
+  Body-cache gain 5.9–52× on the four admitted routes; cache-off C ahead of
+  Rails on every row (5.6–83×); cache-on C ahead of the Rust image on every
+  row (1.4–4.4×). Rust's row is its production cache configuration (the
+  pinned harness cannot disable it) — compare it with C (cache on), not with
+  C (cache off), which pairs with Rails. Cold start 133–150 ms, idle ~35–39 MiB, image 82 MiB
+  unpacked (Rails: 2,591 ms / 377 MiB / 342 MiB). Every rep was
+  load-caveated (shared host, 0/18 met the harness's quiet gate; steal
+  0.00%), all reps valid and preflight-passing; the merged P01 front shows
+  no measurable regression (flat `/up`, unchanged cache-hit CPU/success).
+- **Housekeeping**: commits carry subject-only messages — this changelog is
+  the detail store; the headings above are timestamped so commits and entries
+  correlate without version tags. Raw outputs live per revision under
+  `bench/results/`.
+
+## 2026-10-05 21:21 — V02 attachments: H02 upload accessor + S02 message attachment path
 
 - H02 multipart file parts are real uploads: each non-blank-filename part is
   spooled to a unique 0600 `RackMultipart*` temp file (unlinked; the params
@@ -43,7 +93,7 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   async analysis and the reference's 413-vs-400 oversize status remain
   S03/documented gaps.
 
-## 2026-10-05 — Phase 4 wiring: merge phase 3, bind all landed packets
+## 2026-10-05 18:08 — Phase 4 wiring: merge phase 3, bind all landed packets
 
 - Merged `master` (phase 3 K01/B01.initial + pulled-forward searches,
   sidebars, avatars-show) into `phase4`: no file overlap with wave
@@ -66,7 +116,7 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   CF_MEDIA_LIVE=1, with env save/restore so full-suite strict runs work.
 - Full dev suite green on the wired tree.
 
-## 2026-10-05 — Phase 4 wiring 2: views wave, storage controllers
+## 2026-10-05 19:32 — Phase 4 wiring 2: views wave, storage controllers
 
 - Makefile/test wiring for all eight views-wave packets; `actions.h`
   S02 declarations; routes 50/51/74/75 + 169-177 rebound — **zero
@@ -86,7 +136,7 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   switches, transfer-partial + model-header dedups, byte-exact
   `rqrcode.rs` port. Full dev suite green.
 
-## 2026-10-05 — Phase 4 wave 1: jobs, storage, integrations, first controllers
+## 2026-10-05 16:14 — Phase 4 wave 1: jobs, storage, integrations, first controllers
 
 Six packets implemented and unit-verified at dispatch level in the `phase4`
 worktree. New sources and tests are committed; shared wiring (`Makefile`
@@ -205,7 +255,7 @@ new objects are not yet linked into the app build.
   needs the sidebar `_shared` partial (404 after commit until A02 provides
   it); view/presenter symbols requested from the integrator as listed in
   the packet handoff; routes 91/93/94/95/149/150 binding pending.
-## 2026-10-05 — B01b repair: memoized PBKDF2 derived keys (perf-profile finding 1)
+## 2026-10-05 18:41 — B01b repair: memoized PBKDF2 derived keys (perf-profile finding 1)
 
 - `auth_pbkdf2_sha256` now memoizes derived keys per full secret + salt +
   length in a bounded (32-entry), mutex-guarded table (the pin's
@@ -228,7 +278,7 @@ new objects are not yet linked into the app build.
   src/auth and the marginal win after this fix is ~1-2 us/URL (render
   remainder 30.7 M Ir/req).
 
-## 2026-10-05 — Phase 3: body cache and first pinned comparison (K01, B01.initial)
+## 2026-10-05 17:31 — Phase 3: body cache and first pinned comparison (K01, B01.initial)
 
 ### K01 — complete-body cache with explicit keys/snapshot/version rules
 - **K01a**: `cf_gzip` (deterministic level 6, mtime 0, exact byte vectors) and
@@ -287,7 +337,7 @@ new objects are not yet linked into the app build.
 | post_message | 3,223 | 3,763 | 43,735 | 950 |
 | /up | 71,907 | 174,128 | 105,760 | 3,896 |
 
-- **Post-profile fix (commit `604f037`)**: the PBKDF2 finding above was fixed
+- **Post-profile fix (commit `837aa9c`)**: the PBKDF2 finding above was fixed
   and re-measured — see "B01b repair" for the fix details; the C-only A/B at
   loops=4 gives cached dynamic routes 7.3k -> 130-149k rps (room 17.9x,
   messages 19.6x, sidebar 20.4x, search 20.4x; avatar 42x, post 28x),
@@ -312,7 +362,7 @@ new objects are not yet linked into the app build.
   is a synthesis, and cable/upload/cold/slow/Fil-C rows are B01.final. No
   "fastest" claim: preliminary, provenance-complete dataset only.
 
-## 2026-10-05 — Phase 2c: remaining controllers, review repairs, A01/A02 completion
+## 2026-10-05 14:20 — Phase 2c: remaining controllers, review repairs, A01/A02 completion
 
 ### Controllers (routes rebound from the dev-501 placeholder)
 - **A-rooms** (96/97/101/104): show/index/destroy with reference bodies; the
@@ -421,7 +471,7 @@ new objects are not yet linked into the app build.
   Fil-C 868/868, TSan 287/287 (0 warnings), bench 868/868, V01 integration
   2/2. Evidence: docs/devel/IMPLEMENTATION-ROADMAP.md and docs/devel/evidence/.
 
-## 2026-10-05 — Phase 2b: views, Cable channels/revocation, first controllers (A02, C02, C03, A-welcome, A-first_runs, A-sessions)
+## 2026-10-05 07:17 — Phase 2b: views, Cable channels/revocation, first controllers (A02, C02, C03, A-welcome, A-first_runs, A-sessions)
 
 ### Verification (independent verifiers; every finding repaired and re-verified)
 - **A02**: rooms/messages verified CONFIRMED; the foundation verifier found cap
@@ -483,7 +533,7 @@ new objects are not yet linked into the app build.
   difference on edit-page render failure; asset byte-ranges deferred to V02;
   the channel subscription-id cast is queued for the channels fidelity pass.
 
-## 2026-10-05 — Phase 2a: rich text, Cable transport, jobs, storage (R02, C01, J01, S01)
+## 2026-10-05 04:26 — Phase 2a: rich text, Cable transport, jobs, storage (R02, C01, J01, S01)
 
 ### Verification (independent verifiers; every finding repaired and re-verified)
 - **R02**: corpus replay 658 × 4 fields + 54 web_url with zero mismatches and zero
@@ -541,7 +591,7 @@ new objects are not yet linked into the app build.
   libvips remains F00-BLOCKED and the installed ffmpeg is 9.0.2 rather than the
   pinned 7.1.5 (S03 prerequisite).
 
-## 2026-10-05 — Phase 1c: live server, auth, routes and assets (A00, A01, H03)
+## 2026-10-05 02:16 — Phase 1c: live server, auth, routes and assets (A00, A01, H03)
 
 **Phase 1 exit met**: HTTP-01..08, DB-01..03/06 core paths and the measured
 `/up` baseline are all satisfied; the server boots, serves, and drains cleanly.
@@ -603,7 +653,7 @@ new objects are not yet linked into the app build.
 - Asset byte-ranges deferred to V02 completeness; generic error bodies await
   A02 views; compression selection is K01; the rich-text bridge lands with R02.
 
-## 2026-10-05 — Phase 1b: HTTP transport, writer, model families (H01, D02, D01)
+## 2026-10-05 00:23 — Phase 1b: HTTP transport, writer, model families (H01, D02, D01)
 
 Phase status: **H01 DONE**, **D02 PARTIAL** (A00 start wiring + C03/J01 consumers land
 in Phase 1c), **D01 model bodies implemented** (PARTIAL only on the A01/R02
@@ -673,7 +723,7 @@ production boundaries), reference asset fixtures pinned and verified ahead of H0
   pipeline) lands with R02; the `/cable` upgrade seam is C01's prerequisite;
   F00 media probes remain BLOCKED for S03.
 
-## 2026-10-04 — Independent review repairs (Phase 0 reopenings + Phase 1a findings)
+## 2026-10-04 23:26 — Independent review repairs (Phase 0 reopenings + Phase 1a findings)
 
 All findings in `docs/devel/INDEPENDENT-REVIEW.md` are resolved and
 independently re-verified; on that evidence **M0 (reproducible foundation) is
@@ -703,7 +753,7 @@ re-claimed DONE**.
 - **Follow-up recorded** — relink Fil-C libcurl against the Fil-C zlib-ng
   archive and check content decoding before accepting I01.
 
-## 2026-10-04 — Phase 1a: foundation modules (F03, D01 core + headers, H02, R01)
+## 2026-10-04 22:36 — Phase 1a: foundation modules (F03, D01 core + headers, H02, R01)
 
 Phase status: **F03 DONE, F01 DONE** (Fil-C axis closed), **D01 IN_PROGRESS**
 (db-core + frozen headers done; model bodies next), **H02 PARTIAL** (multipart
@@ -773,7 +823,7 @@ review repairs above; media probes remain open for S03.
 - H02 multipart uploads await S01; D01 model bodies land in Phase 1b; F00
   media probes (libvips/ffmpeg) still BLOCKED for S03.
 
-## 2026-10-04 — Phase 0: reproducible foundation (F00, F01, F02)
+## 2026-10-04 21:51 — Phase 0: reproducible foundation (F00, F01, F02)
 
 Phase status: **F00 PARTIAL, F01 PARTIAL, F02 DONE**. No milestone (M0) claimed.
 Executed as a 13-agent swarm; every task independently verified by a separate
