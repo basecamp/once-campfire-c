@@ -81,6 +81,11 @@ INTEGRATIONS_SRCS := src/integrations/http.c src/integrations/unfurl.c \
 	src/integrations/webhook.c src/integrations/push.c \
 	src/integrations/host_resolve.c
 
+# P01 front (configured TLS + HTTP/2): non-blocking handshake/ALPN policy
+# (tls.c) and the nghttp2 session policy (h2.c). Both link into the
+# application library; the loop seam in src/http/loop.c owns the wiring.
+FRONT_SRCS := src/front/tls.c src/front/h2.c
+
 APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/config.c \
 	src/app.c \
@@ -177,7 +182,8 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	$(CABLE_SRCS) \
 	$(JOBS_SRCS) \
 	$(STORAGE_SRCS) \
-	$(INTEGRATIONS_SRCS)
+	$(INTEGRATIONS_SRCS) \
+	$(FRONT_SRCS)
 
 APP_SRCS := $(APP_LIB_SRCS) \
 	src/main.c
@@ -216,6 +222,15 @@ CURL_CLANG_INCLUDE := -Ivendor/build/curl-clang/install/include
 CURL_FILC_INCLUDE := -Ivendor/build/curl-filc/install/include
 LIBSSL_CLANG_LIB := vendor/build/openssl-clang/install/lib/libssl.a
 LIBSSL_FILC_LIB := vendor/build/openssl-filc/install/lib/libssl.a
+# nghttp2: P01 HTTP/2 framing/HPACK (static archives, library-only builds).
+# Headers are generated per build: the source tree
+# (vendor/src/nghttp2/lib/includes) AND the build tree
+# (vendor/build/nghttp2-<mode>/lib/includes, nghttp2.h version macros) must
+# both precede any system path — the system's 1.69.0 headers must never win.
+NGHTTP2_CLANG_LIB := vendor/build/nghttp2-clang/lib/libnghttp2.a
+NGHTTP2_FILC_LIB := vendor/build/nghttp2-filc/lib/libnghttp2.a
+NGHTTP2_CLANG_INCLUDE := -Ivendor/src/nghttp2/lib/includes -Ivendor/build/nghttp2-clang/lib/includes
+NGHTTP2_FILC_INCLUDE := -Ivendor/src/nghttp2/lib/includes -Ivendor/build/nghttp2-filc/lib/includes
 # qrcodegen: single-file upstream QR encoder for A-qr_code's cf_qr_code_svg
 # (src/views/qr_svg.c). Compiled per mode with upstream-only flags, like
 # picohttpparser below.
@@ -260,32 +275,32 @@ ifeq ($(MODE),dev)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE) $(NGHTTP2_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(NGHTTP2_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),bench)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O3 -flto
 	MODE_LDFLAGS := -flto
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE) $(NGHTTP2_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(NGHTTP2_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),filc)
 	MODE_CC := $(FILC)
 	MODE_CFLAGS := -O2
 	MODE_LDFLAGS :=
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-filc $(OPENSSL_FILC_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_FILC_INCLUDE) $(CURL_FILC_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB) $(LIBCRYPT_FILC_LIB) $(CURL_FILC_LIB) $(LIBSSL_FILC_LIB) $(OPENSSL_FILC_LIB) $(GUMBO_FILC_LIB) $(ZLIB_FILC_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-filc $(OPENSSL_FILC_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_FILC_INCLUDE) $(CURL_FILC_INCLUDE) $(NGHTTP2_FILC_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_FILC_LIB) $(YYJSON_FILC_LIB) $(LIBCRYPT_FILC_LIB) $(CURL_FILC_LIB) $(LIBSSL_FILC_LIB) $(OPENSSL_FILC_LIB) $(NGHTTP2_FILC_LIB) $(GUMBO_FILC_LIB) $(ZLIB_FILC_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),sanitize)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=address,undefined
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE) $(NGHTTP2_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(NGHTTP2_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else ifeq ($(MODE),tsan)
 	MODE_CC := $(CLANG)
 	MODE_CFLAGS := -O1 -g -fsanitize=thread -fno-omit-frame-pointer
 	MODE_LDFLAGS := -fsanitize=thread
-	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE)
-	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
+	MODE_DEP_INCLUDES := -Ivendor/build/libxcrypt-clang $(OPENSSL_CLANG_INCLUDE) $(GUMBO_INCLUDE) $(ZLIB_CLANG_INCLUDE) $(CURL_CLANG_INCLUDE) $(NGHTTP2_CLANG_INCLUDE)
+	MODE_DEP_LIBS = $(SQLITE_CLANG_LIB) $(YYJSON_CLANG_LIB) $(LIBCRYPT_CLANG_LIB) $(CURL_CLANG_LIB) $(LIBSSL_CLANG_LIB) $(OPENSSL_CLANG_LIB) $(NGHTTP2_CLANG_LIB) $(GUMBO_CLANG_LIB) $(ZLIB_CLANG_LIB) $(PICOHTTP_OBJ) $(QRCODEGEN_OBJ)
 else
 $(error unknown MODE '$(MODE)': use dev, bench, filc, sanitize or tsan)
 endif
@@ -363,6 +378,8 @@ UNIT_TEST_SRCS := \
 	tests/integrations/test_webhook.c \
 	tests/integrations/test_push.c \
 	tests/integrations/test_host_resolve.c \
+	tests/front/test_tls.c \
+	tests/front/test_h2.c \
 	tests/models/test_touch.c \
 	tests/models/account_test.c \
 	tests/models/active_storage_test.c \
@@ -391,6 +408,7 @@ TEST_AUX_OBJS := $(patsubst tests/%.c,$(MODE_OBJ)/tests/%.o,$(TEST_AUX_SRCS))
 # auxiliary translation unit (no CF_TEST_MAIN) plus the library.
 HTTP_TEST_SRCS := \
 	tests/http/test_http_loop.c \
+	tests/http/test_tls_loop.c \
 	tests/http/test_http_framing.c \
 	tests/http/test_http_limits.c \
 	tests/http/test_http_output.c \
@@ -611,7 +629,8 @@ build-app: $(BIN)
 $(SQLITE_CLANG_LIB) $(SQLITE_FILC_LIB) $(YYJSON_CLANG_LIB) $(YYJSON_FILC_LIB) \
 $(LIBCRYPT_CLANG_LIB) $(LIBCRYPT_FILC_LIB) $(OPENSSL_CLANG_LIB) $(OPENSSL_FILC_LIB) \
 $(GUMBO_CLANG_LIB) $(GUMBO_FILC_LIB) $(ZLIB_CLANG_LIB) $(ZLIB_FILC_LIB) \
-$(CURL_CLANG_LIB) $(CURL_FILC_LIB) $(LIBSSL_CLANG_LIB) $(LIBSSL_FILC_LIB):
+$(CURL_CLANG_LIB) $(CURL_FILC_LIB) $(LIBSSL_CLANG_LIB) $(LIBSSL_FILC_LIB) \
+$(NGHTTP2_CLANG_LIB) $(NGHTTP2_FILC_LIB):
 	@echo "error: missing dependency artifact '$@'" >&2
 	@echo "       build it with the recorded F00 recipe in vendor/DEPS.json" >&2
 	@echo "       (see vendor/README.md); ordinary builds never fetch." >&2

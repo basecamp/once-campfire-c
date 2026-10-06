@@ -7,7 +7,7 @@
   "license": "MIT (SPDX: MIT)",
   "license_file": "vendor/src/nghttp2/COPYING",
   "fetch_script": "vendor/scripts/nghttp2.sh",
-  "build_command": "cmake -S vendor/src/nghttp2 -B vendor/build/nghttp2-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF && cmake --build vendor/build/nghttp2-clang -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/nghttp2/lib/includes vendor/build/nghttp2-clang/probe.c vendor/build/nghttp2-clang/lib/libnghttp2.a -o vendor/build/nghttp2-clang/probe",
+  "build_command": "cmake -S vendor/src/nghttp2 -B vendor/build/nghttp2-clang -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Release -DENABLE_LIB_ONLY=ON -DBUILD_STATIC_LIBS=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DENABLE_WERROR=OFF && cmake --build vendor/build/nghttp2-clang -j$(nproc) && clang -std=c11 -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -Ivendor/src/nghttp2/lib/includes -Ivendor/build/nghttp2-clang/lib/includes vendor/build/nghttp2-clang/probe.c vendor/build/nghttp2-clang/lib/libnghttp2.a -o vendor/build/nghttp2-clang/probe",
   "artifacts": [
     {
       "path": "vendor/build/nghttp2-clang/lib/libnghttp2.a",

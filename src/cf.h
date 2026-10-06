@@ -87,6 +87,9 @@ void cf_request_destroy(cf_request *);
 void cf_response_init(cf_response *);
 void cf_response_dispose(cf_response *);
 cf_err cf_response_header(cf_response *, cf_span name, cf_span value);
+size_t cf_response_header_count(const cf_response *);
+bool cf_response_header_at(const cf_response *, size_t index, cf_span *name,
+                           cf_span *value); /* borrowed; false when OOB */
 cf_err cf_response_body(cf_response *, cf_buf *); /* retain; caller retains ownership */
 cf_err cf_response_file(cf_response *, int fd, uint64_t offset, uint64_t len);
 /* response_file takes fd only on OK. Sets kind; replaces/disposes prior body. */

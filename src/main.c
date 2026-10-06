@@ -23,7 +23,9 @@
 #include "db/writer.h"
 #include "cf.h"
 #include "config.h"
+#include "front/tls.h"
 #include "http/http.h"
+#include "http/http_internal.h" /* P01: cf_http_loop_set_tls_server */
 #include "integrations/http.h"
 #include "jobs/handlers.h"
 #include "jobs/jobs.h"
@@ -153,15 +155,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* TLS with configured certificate files is P01; DISABLE_SSL must stay 1
-     * until then (01-foundation-http.md D-C06). */
-    if (!config->disable_ssl) {
-        fprintf(stderr,
-                "campfire: startup failed: TLS serving is not implemented "
-                "until P01 (set DISABLE_SSL=1)\n");
-        cf_config_destroy(config);
-        return 1;
-    }
+    /* P01: DISABLE_SSL/TLS file validation lives in cf_config_parse
+     * (DISABLE_SSL=0 requires both TLS_CERT_FILE and TLS_KEY_FILE); the
+     * front server context is created after the listener, below. */
 
     /* Sanitized boot log: no secret, cookie, key or body values. */
     fprintf(stderr,
@@ -330,6 +326,30 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* P01: one loop-shared TLS server context when TLS is configured. Every
+     * loop thread borrows it; each accepted connection handshakes without
+     * blocking. Created after the listener so every later failure path
+     * funnels through `shutdown` below, which destroys it after the loops
+     * join and before app destroy (CORE-05 order preserved). */
+    cf_front_tls_server *tls_server = NULL;
+    if (!cfg->disable_ssl) {
+        char tls_err[256];
+        if (cf_front_tls_server_create(cfg->tls_cert_file, cfg->tls_key_file,
+                                       &tls_server, tls_err,
+                                       sizeof tls_err) != CF_OK) {
+            fprintf(stderr, "campfire: startup failed: TLS: %s\n",
+                    tls_err[0] != '\0' ? tls_err : "invalid configuration");
+            close(listen_fd);
+            cf_cable_server_destroy(cable_server);
+            cf_cable_destroy(cable);
+            cf_jobs_stop(jobs);
+            cf_jobs_destroy(jobs);
+            cf_app_stop(app);
+            cf_app_destroy(app);
+            return 1;
+        }
+    }
+
     size_t loop_count = cfg->loops;
     cf_http_loop **loops = calloc(loop_count, sizeof *loops);
     pthread_t *loop_threads = calloc(loop_count, sizeof *loop_threads);
@@ -370,6 +390,8 @@ int main(int argc, char **argv) {
             exit_code = 1;
             goto shutdown;
         }
+        /* P01: NULL on plaintext loops (no behavior change there). */
+        cf_http_loop_set_tls_server(loops[i], tls_server);
         loops_created++;
     }
     for (size_t i = 0; i < loop_count; i++) {
@@ -448,6 +470,13 @@ shutdown:
     cf_app_stop(app);
     for (size_t i = 0; i < loops_created; i++) {
         cf_http_loop_destroy(loops[i]);
+    }
+    /* P01: no loop thread can still touch the shared context (every TLS and
+     * H2 object died with its connection above); the app no longer needs
+     * it either. Destroyed before app destroy per the handoff contract. */
+    if (tls_server != NULL) {
+        cf_front_tls_server_destroy(tls_server);
+        tls_server = NULL;
     }
     close(listen_fd);
     free(loops);
