@@ -22,6 +22,14 @@
  *   - a logo upload arm is unreachable through dispatch today (H02 never
  *     builds an upload param node) and is reported, not faked.
  *
+ * V02 render: the Edit gate is gone.  The page renders through
+ * cf_presenter_accounts_edit and is compared with the golden/a
+ * account_edit_member/account_edit_admin fixtures the views suite uses (the
+ * fixture rows are seeded here; the parity SECRET_KEY_BASE and the capture
+ * instants in the rows reproduce the signed avatar paths), plus a Turbo-Frame
+ * structural case and a direct presenter case (partition order, title, avatar
+ * path, last-room link, next page).
+ *
  * cf.h and src/actions/actions.h are integrator-owned and do not yet declare
  * this packet's symbols, so the entry points are declared here; the
  * integrator's routes.c rebind needs the same declarations (c_symbols
@@ -38,28 +46,144 @@
 #include "db/db_testutil.h"
 #include "db/writer.h"
 #include "http/http_internal.h"
+#include "models/account.h"
+#include "models/user.h"
+#include "presenters/accounts.h"
+#include "views.h"
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "../views/support/golden.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <sqlite3.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "yyjson.h"
 
 cf_err cf_action_accounts_edit(cf_ctx *ctx);
 cf_err cf_action_accounts_update(cf_ctx *ctx);
 
 #define ORIGIN "http://campfire.test"
-#define HEX64 \
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+/* parity/.env.reference (reference-tools/views/a/golden.sh); the golden
+ * fixtures' signed avatar paths only reproduce with it. */
+#define GOLDEN_SECRET                                                        \
+    "5335c3b1ad35b4ad170c3413bd651ef3b6ed64e257261871a6de3f978cf3868ee"     \
+    "417a927040935fb30b0f7debdedb34a2a403e9f34b16cf594c917c2ecd4a995"
 #define VAPID_PUBLIC_KEY                                                     \
     "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8"  \
     "cTriz_qYBVicY02_VxTQ="
+/* render.rb's CHROME_MAC (the goldens' per-UA cases use it). */
+#define CHROME_MAC                                                            \
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "     \
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+
+/* tests/fixtures/crates/views/tests/golden/a/facts.json (fixture rows). */
+#define ACCOUNT_ID 873240054
+#define DAVID 127326141
+#define JASON 149087659
+#define BENDER 394959859
+#define KEVIN 712064548
+#define JZ 773523953
+#define EX_EMPLOYEE 773523954
+#define SPAM_HAM 773523955
+#define ANNA 773523956
+#define DESIGNERS 654632876
+#define DIRECT_KEVIN 699448325
 
 static cf_span SP(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
+}
+
+/* --- fixture-faithful asset root (users_profiles_test.c precedent) --------- */
+
+/* Stage a static root whose manifest is the pinned fixture root and whose
+ * importmap-tags.html is the facts' block, so the action renders the layout
+ * bytes the goldens were captured with. */
+static char g_assets_root[4096];
+
+static const char *golden_dir(void) {
+    const char *dir = getenv("CF_GOLDEN_DIR");
+    return dir != NULL && dir[0] != '\0'
+               ? dir
+               : "tests/fixtures/crates/views/tests/golden";
+}
+
+static bool copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    if (in == NULL) return false;
+    FILE *out = fopen(to, "wb");
+    if (out == NULL) {
+        fclose(in);
+        return false;
+    }
+    char buffer[8192];
+    size_t n;
+    bool ok = true;
+    while ((n = fread(buffer, 1, sizeof buffer, in)) != 0) {
+        if (fwrite(buffer, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    if (ferror(in)) ok = false;
+    fclose(in);
+    if (fclose(out) != 0) ok = false;
+    return ok;
+}
+
+static bool stage_assets_root(void) {
+    char tmpl[] = "/tmp/campfire-accounts-assets-XXXXXX";
+    if (mkdtemp(tmpl) == NULL) {
+        fprintf(stderr, "  assets: mkdtemp failed\n");
+        return false;
+    }
+    snprintf(g_assets_root, sizeof g_assets_root, "%s", tmpl);
+
+    char public_dir[4200], assets_dir[4300];
+    snprintf(public_dir, sizeof public_dir, "%s/public", g_assets_root);
+    snprintf(assets_dir, sizeof assets_dir, "%s/assets", public_dir);
+    if (mkdir(public_dir, 0700) != 0 || mkdir(assets_dir, 0700) != 0) {
+        fprintf(stderr, "  assets: mkdir failed: %s\n", strerror(errno));
+        return false;
+    }
+    char manifest_from[4200], manifest_to[4600];
+    snprintf(manifest_from, sizeof manifest_from,
+             "tests/fixtures/assets/public/assets/.manifest.json");
+    snprintf(manifest_to, sizeof manifest_to, "%s/.manifest.json", assets_dir);
+    if (!copy_file(manifest_from, manifest_to)) {
+        fprintf(stderr, "  assets: manifest copy failed\n");
+        return false;
+    }
+
+    char facts_path[4600];
+    snprintf(facts_path, sizeof facts_path, "%s/a/facts.json", golden_dir());
+    yyjson_doc *facts = yyjson_read_file(facts_path, 0, NULL, NULL);
+    if (facts == NULL) {
+        fprintf(stderr, "  assets: cannot read %s\n", facts_path);
+        return false;
+    }
+    const char *importmap =
+        yyjson_get_str(yyjson_obj_get(yyjson_doc_get_root(facts),
+                                      "importmap_tags"));
+    bool ok = importmap != NULL;
+    if (ok) {
+        char importmap_to[4600];
+        snprintf(importmap_to, sizeof importmap_to, "%s/importmap-tags.html",
+                 g_assets_root);
+        FILE *file = fopen(importmap_to, "wb");
+        ok = file != NULL &&
+             fwrite(importmap, 1, strlen(importmap), file) == strlen(importmap);
+        if (file != NULL && fclose(file) != 0) ok = false;
+    }
+    yyjson_doc_free(facts);
+    if (!ok) fprintf(stderr, "  assets: importmap staging failed\n");
+    return ok;
 }
 
 /* --- scratch app + started writer ------------------------------------------ */
@@ -84,11 +208,12 @@ static cf_err accounts_capture_purge(void *ctx, const cf_event *event) {
 }
 
 static bool env_open(accounts_env *env) {
+    if (g_assets_root[0] == '\0' && !stage_assets_root()) return false;
     memset(env, 0, sizeof *env);
     if (!cf_db_scratch_open(&env->scratch)) return false;
     cf_config_entry entries[4] = {
         {"PUBLIC_ORIGIN", ORIGIN},
-        {"SECRET_KEY_BASE", HEX64},
+        {"SECRET_KEY_BASE", GOLDEN_SECRET},
         {"VAPID_PUBLIC_KEY", VAPID_PUBLIC_KEY},
         {"DATABASE_PATH", env->scratch.path},
     };
@@ -96,6 +221,12 @@ static bool env_open(accounts_env *env) {
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
+        return false;
+    }
+    /* The staged root renders the layout with the fixtures' assets (the real
+     * views always render images; an unconfigured root fails the render). */
+    if (cf_views_assets_configure(g_assets_root) != CF_OK) {
+        fprintf(stderr, "  env_open: assets configure failed\n");
         return false;
     }
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
@@ -203,6 +334,110 @@ static void seed_blob_attachment(cf_db *db) {
              "'2026-01-02 03:04:05', 'logo', 1, 'Account')");
 }
 
+/* --- golden fixture rows (facts.json / the reference fixtures) ------------- */
+
+static void seed_fixture_account(cf_db *db) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO accounts (id, created_at, custom_styles, join_code, "
+             "name, settings, singleton_guard, updated_at) VALUES "
+             "(%d, '2026-09-26 13:00:20.000000', NULL, 'CRMu-l8Ge-KB9B', "
+             "'37signals', NULL, 0, '2026-09-26 13:00:20.000000')",
+             ACCOUNT_ID);
+    exec_sql(db, sql);
+}
+
+static void seed_fixture_user(cf_db *db, int64_t id, const char *name,
+                              const char *email, const char *bio, int role,
+                              int status, const char *updated_at) {
+    char sql[768];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO users (id, bio, created_at, email_address, name, "
+             "role, status, updated_at) VALUES (%lld, %s, "
+             "'2026-09-26 13:00:10.000000', %s, '%s', %d, %d, '%s')",
+             (long long)id, bio != NULL ? "?" : "NULL",
+             email != NULL ? "?" : "NULL", name, role, status, updated_at);
+    sqlite3 *handle = cf_db_handle(db);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(handle, sql, -1, &stmt, NULL) == SQLITE_OK);
+    int bind = 1;
+    if (bio != NULL) sqlite3_bind_text(stmt, bind++, bio, -1, SQLITE_TRANSIENT);
+    if (email != NULL) {
+        sqlite3_bind_text(stmt, bind++, email, -1, SQLITE_TRANSIENT);
+    }
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(step == SQLITE_DONE);
+}
+
+static void seed_fixture_room(cf_db *db, int64_t id, const char *name,
+                              const char *type, int64_t creator_id) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO rooms (id, created_at, creator_id, name, type, "
+             "updated_at) VALUES (%lld, '2026-09-26 12:00:00.000000', %lld, "
+             "%s, '%s', '2026-09-26 13:00:20.000000')",
+             (long long)id, (long long)creator_id,
+             name != NULL ? "?" : "NULL", type);
+    sqlite3 *handle = cf_db_handle(db);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(handle, sql, -1, &stmt, NULL) == SQLITE_OK);
+    if (name != NULL) sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(step == SQLITE_DONE);
+}
+
+static void seed_fixture_membership(cf_db *db, int64_t id, int64_t room_id,
+                                    int64_t user_id, const char *involvement) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO memberships (id, created_at, involvement, room_id, "
+             "unread_at, updated_at, user_id) VALUES (%lld, '2026-09-26 "
+             "12:00:00.000000', '%s', %lld, NULL, "
+             "'2026-09-26 12:00:00.000000', %lld)",
+             (long long)id, involvement, (long long)room_id,
+             (long long)user_id);
+    exec_sql(db, sql);
+}
+
+/* The facts.json rows the Edit goldens render: the account, every user (the
+ * roster lists all non-bot active users, plus banned users for an
+ * administrator) and the viewing user's original room. */
+static void seed_edit_fixture(cf_db *db) {
+    seed_fixture_account(db);
+    seed_fixture_user(db, DAVID, "David", "david@37signals.com", NULL, 1, 0,
+                      "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, JASON, "Jason", "jason@37signals.com", NULL, 1, 0,
+                      "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, BENDER, "Bender Bot", NULL, NULL, 2, 0,
+                      "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, KEVIN, "Kevin", "kevin@37signals.com", "Programmer",
+                      0, 0, "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, JZ, "JZ", "jz@37signals.com", "Designer", 0, 0,
+                      "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, EX_EMPLOYEE, "Ex Employee",
+                      "ex-deactivated-e892fe70-ae77-4cee-9fc0-0b7c37f5b417"
+                      "@37signals.com",
+                      NULL, 0, 1, "2026-09-26 13:00:20.000000");
+    seed_fixture_user(db, SPAM_HAM, "Spam Ham", "spam@example.com", NULL, 0,
+                      2, "2026-09-26 13:00:21.000000");
+    seed_fixture_user(db, ANNA, "Anna Bea Cole", "abc@example.com", NULL, 0,
+                      0, "2026-09-26 13:00:22.000000");
+}
+
+/* The viewer's original room: Kevin (member) -> direct-699448325, David
+ * (administrator) -> Designers. */
+static void seed_edit_viewer_room(cf_db *db, int64_t viewer_id) {
+    if (viewer_id == KEVIN) {
+        seed_fixture_room(db, DIRECT_KEVIN, NULL, "Rooms::Direct", KEVIN);
+        seed_fixture_membership(db, 900001, DIRECT_KEVIN, KEVIN, "everything");
+        return;
+    }
+    seed_fixture_room(db, DESIGNERS, "Designers", "Rooms::Closed", DAVID);
+    seed_fixture_membership(db, 900010, DESIGNERS, DAVID, "mentions");
+}
+
 /* "session_token=<wire>" with the Rack form-escaping a base64 value needs. */
 static void make_session_cookie(const cf_config *config, cf_db *db, char *out,
                                 size_t cap, const char *token,
@@ -269,6 +504,24 @@ static void prepare_form(cf_request *req, cf_method method, const char *path,
     }
 }
 
+/* The golden fixture request: the caller-owned session cookie plus
+ * render.rb's CHROME_MAC. */
+static void fixture_get(cf_request *req, const char *path, const char *cookie) {
+    cf_test_req_init(req);
+    req->path = SP(path);
+    req->target = SP(path);
+    CF_REQUIRE(cf_test_req_header(req, SP("Cookie"), SP(cookie)) == CF_OK);
+    CF_REQUIRE(cf_test_req_header(req, SP("User-Agent"), SP(CHROME_MAC)) ==
+               CF_OK);
+}
+
+/* The fixture viewer's session, built into the caller's buffer. */
+static void fixture_cookie(accounts_env *env, char *out, size_t cap,
+                           const char *token, int64_t viewer_id) {
+    make_session_cookie(env->config, env->scratch.db, out, cap, token,
+                        viewer_id);
+}
+
 static bool span_contains(cf_span span, const char *needle) {
     size_t len = strlen(needle);
     if (len == 0) return true;
@@ -309,6 +562,9 @@ CF_TEST(accounts_route_ids_bind_the_actions) {
     CF_CHECK(cf_route_action(47) == cf_action_accounts_update);
 }
 
+/* The real accounts::Edit render: the member branch shows the account name
+ * and invite, the roster partitions administrators first (LOWER(name) order
+ * within each side). */
 CF_TEST(accounts_edit_renders_account_and_partitioned_users) {
     accounts_env env;
     CF_REQUIRE(env_open(&env));
@@ -327,12 +583,33 @@ CF_TEST(accounts_edit_renders_account_and_partitioned_users) {
     CF_CHECK(head_contains(&resp, &req,
                            "Content-Type: text/html; charset=utf-8\r\n"));
     CF_CHECK(body_contains(&resp, "Campfire"));
-    CF_CHECK(body_contains(&resp, "ABCD-EFGH-IJKL"));
-    CF_CHECK(body_contains(&resp, "data-restrict=\"false\""));
-    CF_CHECK(body_contains(&resp, "data-group=\"administrators\""));
+    CF_CHECK(body_contains(&resp, "/join/ABCD-EFGH-IJKL"));
+    CF_CHECK(body_contains(&resp, "id=\"account_users\""));
     CF_CHECK(body_contains(&resp, "Ada Admin"));
-    CF_CHECK(body_contains(&resp, "data-group=\"members\""));
     CF_CHECK(body_contains(&resp, "Bob Member"));
+    /* Administrators render first, then members (search the roster only:
+     * the viewer's name appears earlier in the head meta tags). */
+    {
+        cf_span whole = cf_buf_span(resp.body);
+        cf_span body = whole;
+        const char *frame_at = "id=\"account_users\"";
+        for (size_t i = 0; i + 18 <= whole.len; i++) {
+            if (memcmp(whole.ptr + i, frame_at, 18) == 0) {
+                body = (cf_span){whole.ptr + i, whole.len - i};
+                break;
+            }
+        }
+        size_t ada = (size_t)-1, bob = (size_t)-1;
+        for (size_t i = 0; i + 10 <= body.len; i++) {
+            if (ada == (size_t)-1 && memcmp(body.ptr + i, "Ada Admin", 9) == 0) {
+                ada = i;
+            }
+            if (bob == (size_t)-1 && memcmp(body.ptr + i, "Bob Member", 10) == 0) {
+                bob = i;
+            }
+        }
+        CF_CHECK(ada != (size_t)-1 && bob != (size_t)-1 && ada < bob);
+    }
     /* Two users fit on one 500-page: no next-page loader. */
     CF_CHECK(!body_contains(&resp, "next_page_container\" src="));
     cf_response_dispose(&resp);
@@ -363,6 +640,7 @@ CF_TEST(accounts_edit_paginates_with_a_next_page_loader) {
     prepare_get(&req, "/account/edit", cookie);
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 200);
+    CF_CHECK(body_contains(&resp, "id=\"next_page_container\""));
     CF_CHECK(body_contains(&resp, "/account/users.turbo_stream?page=2"));
     cf_response_dispose(&resp);
     env_close(&env);
@@ -418,6 +696,169 @@ CF_TEST(accounts_edit_without_account_is_500) {
     prepare_get(&req, "/account/edit", cookie);
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 500);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* --- V02 golden renders ----------------------------------------------------- */
+
+/* The member page (Kevin) matches the golden/a account_edit_member fixture
+ * token-for-token: the fixture rows seeded, the parity SECRET_KEY_BASE for
+ * the signed avatar paths, the viewer's original room for the back link. */
+CF_TEST(accounts_edit_member_matches_the_golden) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_edit_fixture(env.scratch.db);
+    seed_edit_viewer_room(env.scratch.db, KEVIN);
+
+    char cookie[4096];
+    fixture_cookie(&env, cookie, sizeof cookie, "kevin-session", KEVIN);
+    cf_request req;
+    cf_response resp;
+    fixture_get(&req, "/account/edit", cookie);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(head_contains(&resp, &req,
+                           "Content-Type: text/html; charset=utf-8\r\n"));
+    /* The page layout carries the stylesheet preload links. */
+    CF_CHECK(head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("account_edit_member", (const char *)body.ptr, body.len);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* The administrator page (David) matches account_edit_admin: the logo and
+ * settings forms render, and the roster includes the banned user. */
+CF_TEST(accounts_edit_admin_matches_the_golden) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_edit_fixture(env.scratch.db);
+    seed_edit_viewer_room(env.scratch.db, DAVID);
+
+    char cookie[4096];
+    fixture_cookie(&env, cookie, sizeof cookie, "david-session", DAVID);
+    cf_request req;
+    cf_response resp;
+    fixture_get(&req, "/account/edit", cookie);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("account_edit_admin", (const char *)body.ptr, body.len);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* A Turbo-Frame request renders turbo-rails' frame layout (head + content,
+ * no title/nav) and carries no Link preload header. */
+CF_TEST(accounts_edit_turbo_frame_renders_the_frame_layout) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_edit_fixture(env.scratch.db);
+    seed_edit_viewer_room(env.scratch.db, KEVIN);
+
+    char cookie[4096];
+    fixture_cookie(&env, cookie, sizeof cookie, "kevin-session", KEVIN);
+    cf_request req;
+    cf_response resp;
+    fixture_get(&req, "/account/edit", cookie);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Turbo-Frame"), SP("account")) ==
+               CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(!head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    CF_CHECK(span_contains(body, "<html>"));
+    CF_CHECK(span_contains(body, "id=\"account_users\""));
+    CF_CHECK(span_contains(body, "Kevin"));
+    CF_CHECK(!span_contains(body, "<!DOCTYPE html>"));
+    CF_CHECK(!span_contains(body, "<title>"));
+    CF_CHECK(!span_contains(body, "<nav id=\"nav\""));
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* The presenter's mapping (direct, no dispatch): the member/administrator
+ * account_users filter, LOWER(name) partition order, User#title and the
+ * signed avatar path, and the viewer's original-room back link. */
+CF_TEST(accounts_edit_presenter_maps_the_edit_model) {
+    accounts_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_fixture_account(env.scratch.db);
+    seed_fixture_user(env.scratch.db, DAVID, "David", "david@37signals.com",
+                      NULL, 1, 0, "2026-09-26 13:00:20.000000");
+    seed_fixture_user(env.scratch.db, KEVIN, "Kevin", "kevin@37signals.com",
+                      "Programmer", 0, 0, "2026-09-26 13:00:20.000000");
+    seed_fixture_user(env.scratch.db, EX_EMPLOYEE, "Ex Employee", NULL, NULL,
+                      0, 1, "2026-09-26 13:00:20.000000");
+    seed_fixture_user(env.scratch.db, SPAM_HAM, "Spam Ham", "spam@example.com",
+                      NULL, 0, 2, "2026-09-26 13:00:21.000000");
+    seed_fixture_user(env.scratch.db, BENDER, "Bender Bot", NULL, NULL, 2, 0,
+                      "2026-09-26 13:00:20.000000");
+    seed_edit_viewer_room(env.scratch.db, KEVIN);
+
+    cf_request req;
+    cf_response resp;
+    cf_response_init(&resp);
+    prepare_get(&req, "/account/edit", NULL);
+    cf_ctx ctx;
+    CF_REQUIRE(cf_ctx_create(&ctx, env.app, env.scratch.db, &req, &resp) ==
+               CF_OK);
+
+    cf_account account = {0};
+    bool found = false;
+    CF_REQUIRE(cf_account_first(env.scratch.db, &found, &account) == CF_OK);
+    CF_REQUIRE(found);
+    bool user_found = false;
+    cf_user kevin = {0};
+    CF_REQUIRE(cf_user_find_by_id(env.scratch.db, KEVIN, &user_found, &kevin) ==
+               CF_OK);
+    CF_REQUIRE(user_found);
+
+    /* Member arm: active non-bots only (deactivated and banned drop), the
+     * administrators-first partition preserves LOWER(name) order. */
+    cf_view_accounts_edit_model model = {0};
+    CF_REQUIRE(cf_presenter_accounts_edit(&ctx, &account, &kevin, false,
+                                          &model) == CF_OK);
+    CF_CHECK(model.account_id == ACCOUNT_ID);
+    CF_CHECK(span_contains((cf_span){
+                  (const unsigned char *)model.join_code.ptr,
+                  model.join_code.len},
+              "CRMu-l8Ge-KB9B"));
+    CF_CHECK(!model.restrict_room_creation_to_administrators);
+    CF_CHECK(model.administrators.len == 1 && model.members.len == 1);
+    CF_CHECK(model.administrators.items[0].id == DAVID);
+    CF_CHECK(model.members.items[0].id == KEVIN);
+    /* User#title: name – bio (U+2013). */
+    CF_CHECK(span_contains((cf_span){
+                  (const unsigned char *)model.members.items[0].title.ptr,
+                  model.members.items[0].title.len},
+              "Kevin \xE2\x80\x93 Programmer"));
+    CF_CHECK(span_contains((cf_span){
+                  (const unsigned char *)model.members.items[0].avatar_path.ptr,
+                  model.members.items[0].avatar_path.len},
+              "/avatar?v=20260926130020"));
+    CF_CHECK(model.has_last_room_visited &&
+             model.last_room_visited_id == DIRECT_KEVIN);
+    CF_CHECK(!model.has_next_page);
+    cf_view_accounts_edit_model_dispose(&model);
+
+    /* Administrator arm: banned rows join the roster, bots never do; LOWER
+     * order puts Kevin before Spam Ham. */
+    memset(&model, 0, sizeof model);
+    CF_REQUIRE(cf_presenter_accounts_edit(&ctx, &account, &kevin, true,
+                                          &model) == CF_OK);
+    CF_CHECK(model.administrators.len == 1 && model.members.len == 2);
+    CF_CHECK(model.members.items[0].id == KEVIN);
+    CF_CHECK(model.members.items[1].id == SPAM_HAM);
+    cf_view_accounts_edit_model_dispose(&model);
+
+    cf_user_dispose(&kevin);
+    cf_account_dispose(&account);
+    cf_ctx_destroy(&ctx);
     cf_response_dispose(&resp);
     env_close(&env);
 }

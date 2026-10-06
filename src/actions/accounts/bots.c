@@ -67,21 +67,15 @@
  *  (messages.c documents the same restriction), so the Create arm is
  *  unreachable: a CF_PARAM_UPLOAD avatar is answered CF_INTERNAL like the
  *  Invalid arm rather than faked (see integrator request R-BOTS-AVATAR).
- *  The Delete arm deletes the attachment row and emits the reference
- *  after-commit PurgeBlob as a best-effort CF_EVENT_PURGE_BLOB (dropped and
- *  counted without a consumer, per the writer contract); the reference's
- *  `touch` of the user row on avatar destroy has no C model helper yet
- *  (R-BOTS-TOUCH), so updated_at is unchanged by an avatar delete.
+ *  The Delete arm deletes the attachment row, touches the user row through
+ *  D01's cf_touch_user_id (`belongs_to :record, touch: true`) and emits the
+ *  reference after-commit PurgeBlob as a best-effort CF_EVENT_PURGE_BLOB
+ *  (dropped and counted without a consumer, per the writer contract).
  *
- * Rendering (index/new/edit): A02 has not landed the accounts/bots views or
- * the presenters::accounts bot/bot_form presenters, which this packet may
- * not invent (exclusive ownership). Until the integrator lands them, the
- * static bots_render_* shims below answer 200 text/html with the same
- * status/content-type contract and the escaped bot name/key/url facts the
- * acceptance cases assert (integrator request R-BOTS-VIEWS). The edit shim
- * reads the webhook URL through cf_user_webhook_url, mirroring bot_form's
- * `webhook_url` field; bot rooms and the avatar URL need the unlanded
- * presenter/storage helpers and are omitted (R-BOTS-VIEWS).
+ * Render (A02/V02): the static shims are gone; index/new/edit render
+ * cf_view_accounts_bots_{index,new,edit}(_frame) from the V-B presenters
+ * (cf_presenter_bots_index / cf_presenter_bot_form) through Layout::load,
+ * page_or_frame, with the page layout's Link preload header.
  *
  * Row effects live in D01 (cf_user_create_bot/update_bot/deactivate,
  * cf_user_active_bots_ordered/find_active_bot). Like A-users-bans, every
@@ -98,15 +92,9 @@
  *   cf_action_accounts_bots_destroy (36).
  *
  * Integrator requests:
- *  - R-BOTS-VIEWS: land cf_view_accounts_bots_index/new/edit (+golden
- *    fixtures) and the presenters::accounts bot/bot_form presenters
- *    (bot_key "id-token", rooms without directs ordered, avatar blob URL);
- *    rebind these actions to render through them.
  *  - R-BOTS-AVATAR: land staged-upload avatar Create support for bots
  *    (S01/S02 Assignment::stage/assign/analyze_later equivalents); until
  *    then an upload avatar answers 500 without writing.
- *  - R-BOTS-TOUCH: land a user-row touch helper for the avatar-delete arm
- *    (presenters::accounts::touch equivalent).
  */
 #include "cf.h"
 
@@ -118,6 +106,7 @@
 #include "models/active_storage.h"
 #include "models/touch.h"
 #include "models/user.h"
+#include "presenters/bots.h"
 #include "views/internal.h" /* cf_views_integer_cast (ruby_compat::integer_cast) */
 
 #include <inttypes.h>
@@ -386,129 +375,76 @@ static cf_err bots_redirect_to_bots(cf_ctx *ctx) {
     return rc;
 }
 
-/* Freeze a rendered shim page: 200, text/html; charset=utf-8, no preload
- * Link header (the shims own no digested assets; first_runs.c
- * fr_page_response without the asset leg). Consumes the builder. */
-static cf_err bots_page_response(cf_ctx *ctx, cf_builder *body) {
+/* `c.is_turbo_frame_request()` (accounts.c/push_subscriptions.c convention):
+ * a non-blank `Turbo-Frame` header selects turbo-rails' frame layout. */
+static unsigned char bots_lower(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
+static bool bots_turbo_frame_request(const cf_request *request) {
+    if (request == NULL) return false;
+    cf_span value = {NULL, 0};
+    bool found = false;
+    for (size_t i = 0; i < request->header_count; i++) {
+        const cf_header *header = &request->headers[i];
+        if (header->name.len != 11) continue;
+        static const char name[] = "turbo-frame";
+        bool match = true;
+        for (size_t k = 0; k < 11; k++) {
+            if (bots_lower(header->name.ptr[k]) != (unsigned char)name[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            value = header->value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+    bool blank = true;
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
+    }
+    return !blank;
+}
+
+/* `Layout#page` appends the stylesheet preload links (`Link` header); the
+ * frame layout carries none. */
+static cf_err bots_link_header(cf_ctx *ctx) {
+    cf_builder links = {0};
+    cf_err rc = cf_views_preload_links(&links);
+    if (rc == CF_INVALID) return CF_OK;
+    if (rc == CF_OK && links.len != 0) {
+        rc = cf_response_header(ctx->response, bots_span("Link"),
+                                (cf_span){links.ptr, links.len});
+    }
+    cf_builder_dispose(&links);
+    return rc;
+}
+
+/* Freeze a rendered page into the response: status, HTML content type, and
+ * (page layout only) the preload header.  Consumes the builder. */
+static cf_err bots_page_response(cf_ctx *ctx, unsigned status,
+                                 cf_builder *body, bool frame) {
     cf_buf *buf = NULL;
     cf_err rc = cf_builder_freeze(body, &buf);
     if (rc != CF_OK) {
         cf_builder_dispose(body);
         return rc;
     }
-    ctx->response->status = 200;
+    ctx->response->status = status;
     rc = cf_response_body(ctx->response, buf);
     cf_buf_release(buf);
     if (rc != CF_OK) return rc;
-    return cf_response_header(ctx->response, bots_span("Content-Type"),
-                              bots_span("text/html; charset=utf-8"));
-}
-
-/* SHIM (R-BOTS-VIEWS): BotsIndex facts until A02 lands the template — the
- * page title plus one escaped row per bot (name and "id-token" key, the
- * fields the _bot partial renders for copying). */
-static cf_err bots_render_index(cf_ctx *ctx, const cf_user *bots,
-                                size_t count) {
-    cf_builder body = {0};
-    cf_err rc = cf_builder_append(
-        &body, bots_span("<!DOCTYPE html><html><head><title>Chat bots</title>"
-                         "</head><body><h1>Chat bots</h1><ul>"));
-    for (size_t i = 0; i < count && rc == CF_OK; i++) {
-        char id_text[32];
-        int n = snprintf(id_text, sizeof id_text, "%" PRId64, bots[i].id);
-        if (n < 0 || (size_t)n >= sizeof id_text) {
-            rc = CF_INTERNAL;
-            break;
-        }
-        rc = cf_builder_append(&body, bots_span("<li data-bot-id=\""));
-        if (rc == CF_OK) {
-            rc = cf_builder_append(
-                &body, (cf_span){(const unsigned char *)id_text,
-                                 (size_t)n});
-        }
-        if (rc == CF_OK) rc = cf_builder_append(&body, bots_span("\">"));
-        if (rc == CF_OK) {
-            rc = cf_html_text(
-                &body,
-                (cf_span){(const unsigned char *)bots[i].name.ptr,
-                          bots[i].name.len});
-        }
-        if (rc == CF_OK) {
-            cf_str key = {NULL, 0};
-            rc = cf_user_bot_key(&bots[i], &key);
-            if (rc == CF_OK) {
-                rc = cf_builder_append(&body, bots_span(" <code>"));
-                if (rc == CF_OK) {
-                    rc = cf_html_text(
-                        &body,
-                        (cf_span){(const unsigned char *)key.ptr, key.len});
-                }
-                if (rc == CF_OK) {
-                    rc = cf_builder_append(&body, bots_span("</code>"));
-                }
-                cf_str_dispose(&key);
-            }
-        }
-        if (rc == CF_OK) rc = cf_builder_append(&body, bots_span("</li>"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(&body, bots_span("</ul></body></html>"));
-    if (rc != CF_OK) {
-        cf_builder_dispose(&body);
-        return rc;
-    }
-    return bots_page_response(ctx, &body);
-}
-
-/* SHIM (R-BOTS-VIEWS): BotsNew/BotsEdit form facts until A02 lands the
- * template — the nested `user` fields bot_params permits. `bot` is NULL for
- * new; `webhook` is the bot_form webhook_url (absent for new). */
-static cf_err bots_render_form(cf_ctx *ctx, const cf_user *bot,
-                               const cf_optional_str *webhook, bool is_new) {
-    cf_builder body = {0};
-    cf_err rc = cf_builder_append(
-        &body,
-        bots_span("<!DOCTYPE html><html><head><title>"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            &body, is_new ? bots_span("New chat bot") : bots_span("Edit bot"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(&body, bots_span("</title></head><body><h1>"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            &body, is_new ? bots_span("New chat bot") : bots_span("Edit bot"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            &body, bots_span("</h1><form method=\"post\"><label>Name"
-                             "<input type=\"text\" name=\"user[name]\" value=\""));
-    }
-    if (rc == CF_OK && bot != NULL) {
-        rc = cf_html_attr(
-            &body,
-            (cf_span){(const unsigned char *)bot->name.ptr, bot->name.len});
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            &body, bots_span("\" /></label><label>Webhook URL"
-                             "<input type=\"url\" name=\"user[webhook_url]\" value=\""));
-    }
-    if (rc == CF_OK && webhook != NULL && webhook->present) {
-        rc = cf_html_attr(
-            &body, (cf_span){(const unsigned char *)webhook->value.ptr,
-                             webhook->value.len});
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            &body, bots_span("\" /></label><button type=\"submit\">Save"
-                             "</button></form></body></html>"));
-    }
-    if (rc != CF_OK) {
-        cf_builder_dispose(&body);
-        return rc;
-    }
-    return bots_page_response(ctx, &body);
+    rc = cf_response_header(ctx->response, bots_span("Content-Type"),
+                            bots_span("text/html; charset=utf-8"));
+    if (rc != CF_OK) return rc;
+    if (!frame) rc = bots_link_header(ctx);
+    return rc;
 }
 
 /* `c.respond_to(&[format::HTML])`. */
@@ -532,11 +468,32 @@ cf_err cf_action_accounts_bots_index(cf_ctx *ctx) {
     rc = bots_respond_html(ctx);
     if (rc != CF_OK) return rc;
 
-    cf_user_vector bots = {0, 0, 0};
-    rc = cf_user_active_bots_ordered(ctx->reader, &bots);
+    /* One read: active_bots_ordered, each mapped as `_bot` sees it. */
+    cf_view_accounts_bots_index_model model = {0};
+    rc = cf_presenter_bots_index(ctx, &model);
     if (rc != CF_OK) return rc;
-    rc = bots_render_index(ctx, bots.items, bots.len);
-    cf_user_vector_dispose(&bots);
+
+    cf_view_layout_model layout = {0};
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) {
+        cf_view_accounts_bots_index_model_dispose(&model);
+        return rc;
+    }
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+    bool frame = bots_turbo_frame_request(ctx->request);
+    cf_builder body = {0};
+    rc = frame ? cf_view_accounts_bots_index_frame(&view_ctx, &model, &body)
+               : cf_view_accounts_bots_index(&view_ctx, &model, &body);
+    if (rc == CF_OK) {
+        rc = bots_page_response(ctx, 200, &body, frame);
+    } else {
+        cf_builder_dispose(&body);
+    }
+
+    cf_view_layout_model_dispose(&layout);
+    cf_view_accounts_bots_index_model_dispose(&model);
     return rc;
 }
 
@@ -554,7 +511,32 @@ cf_err cf_action_accounts_bots_new(cf_ctx *ctx) {
     rc = bots_respond_html(ctx);
     if (rc != CF_OK) return rc;
 
-    return bots_render_form(ctx, NULL, NULL, true);
+    /* `BotForm::default()`: no read. */
+    cf_view_accounts_bots_new_model model;
+    memset(&model, 0, sizeof model);
+
+    cf_view_layout_model layout = {0};
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) {
+        cf_view_accounts_bots_new_model_dispose(&model);
+        return rc;
+    }
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+    bool frame = bots_turbo_frame_request(ctx->request);
+    cf_builder body = {0};
+    rc = frame ? cf_view_accounts_bots_new_frame(&view_ctx, &model, &body)
+               : cf_view_accounts_bots_new(&view_ctx, &model, &body);
+    if (rc == CF_OK) {
+        rc = bots_page_response(ctx, 200, &body, frame);
+    } else {
+        cf_builder_dispose(&body);
+    }
+
+    cf_view_layout_model_dispose(&layout);
+    cf_view_accounts_bots_new_model_dispose(&model);
+    return rc;
 }
 
 /* ---- create -------------------------------------------------------------- */
@@ -666,14 +648,32 @@ cf_err cf_action_accounts_bots_edit(cf_ctx *ctx) {
     }
     rc = bots_respond_html(ctx);
     if (rc == CF_OK) {
-        bool found = false;
-        cf_str url = {NULL, 0};
-        rc = cf_user_webhook_url(ctx->reader, &bot, &found, &url);
+        /* One read: name, webhook URL and the absolute blob redirect URL. */
+        cf_view_accounts_bots_edit_model model = {0};
+        model.bot_id = bot.id;
+        rc = cf_presenter_bot_form(ctx, &bot, &model.form);
         if (rc == CF_OK) {
-            cf_optional_str webhook = {found, url};
-            rc = bots_render_form(ctx, &bot, &webhook, false);
-            cf_str_dispose(&url);
+            cf_view_layout_model layout = {0};
+            rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+            if (rc == CF_OK) {
+                cf_view_ctx view_ctx;
+                cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+                bool frame = bots_turbo_frame_request(ctx->request);
+                cf_builder body = {0};
+                rc = frame
+                         ? cf_view_accounts_bots_edit_frame(&view_ctx, &model,
+                                                            &body)
+                         : cf_view_accounts_bots_edit(&view_ctx, &model, &body);
+                if (rc == CF_OK) {
+                    rc = bots_page_response(ctx, 200, &body, frame);
+                } else {
+                    cf_builder_dispose(&body);
+                }
+                cf_view_layout_model_dispose(&layout);
+            }
         }
+        cf_view_accounts_bots_edit_model_dispose(&model);
     }
     cf_user_dispose(&bot);
     return rc;

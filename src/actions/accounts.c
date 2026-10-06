@@ -27,24 +27,26 @@
  * route path.
  *
  * SHIMs (marked inline; integrator requests below):
- *  - page/arbitration: Page::number parsing reuses cf_views_integer_cast;
- *    absurd values clamp to 1_000_000_000 like the reference.
  *  - account_users for administrators is cf_user_all filtered in memory
  *    (status active/banned, role != bot, ASCII LOWER(name) order); the
  *    non-admin arm calls cf_user_active_ordered_without_bots directly.
- *    A D01 account_users query would replace the filter.
+ *    A D01 account_users query would replace the filter (now in
+ *    src/presenters/accounts.c with the Edit presenter; the same rows and
+ *    order as the reference SQL, so no rendered-output delta).
  *  - unknown settings keys are rejected with CF_INTERNAL before the write:
  *    the reference raises (500) while the C model reports CF_INVALID (400).
  *    Unknown keys are detected by field count because cf.h exposes no object
  *    key iterator (a second integrator request).
- *  - the Edit page body is a minimal deterministic render carrying the
- *    reference fields (name, join_code, restrict flag, administrator/member
- *    names, next_page); A02's accounts::Edit template replaces it.
  *  - logo Delete reuses the logos packet's destroy/touch/purge sequence
  *    (duplicated here because packets cannot share code through shared
  *    files); logo Upload returns CF_INTERNAL before the write (S02 staging
  *    has not landed) and a non-empty logo string returns CF_INTERNAL (the
  *    reference raises "expected attachable").
+ *
+ * Render (A02/V02): the Edit shim is gone; edit renders
+ * cf_view_accounts_edit(_frame) from cf_presenter_accounts_edit (account_users
+ * partition, user_summary, last-room link and the geared next page inside one
+ * read transaction) through Layout::load, page_or_frame.
  *
  * Integrator requests:
  *  1. Rebind src/routes.c rows 44 -> cf_action_accounts_edit,
@@ -52,7 +54,8 @@
  *       {44, CF_GET, "/account/edit(.:format)", ..., cf_action_accounts_edit},
  *       {46, CF_PATCH, "/account(.:format)", ..., cf_action_accounts_update},
  *       {47, CF_PUT, "/account(.:format)", ..., cf_action_accounts_update},
- *  2. D01/A02: account_users query + accounts::Edit view (shims above).
+ *  2. D01: an account_users query replacing the in-memory administrator
+ *     filter in src/presenters/accounts.c.
  *  3. Object key iterator for cf.h (settings unknown-key detection).
  *
  * c_symbols: cf_action_accounts_edit, cf_action_accounts_update.
@@ -69,8 +72,8 @@
 #include "models/account.h"
 #include "models/active_storage.h"
 #include "models/user.h"
+#include "presenters/accounts.h"
 #include "views.h"
-#include "views/internal.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -105,13 +108,6 @@ static void accounts_str_dispose(cf_str *value) {
     if (value == NULL) return;
     free(value->ptr);
     memset(value, 0, sizeof *value);
-}
-
-/* `c.param_str(key)`: Some only for a string param. */
-static bool accounts_param_str(cf_ctx *ctx, const char *name, cf_span *out) {
-    const cf_param *param = cf_ctx_param(ctx, accounts_span(name));
-    if (param == NULL || cf_param_type(param) != CF_PARAM_STRING) return false;
-    return cf_param_string(param, out) == CF_OK;
 }
 
 /* `c.is_turbo_frame_request()`: first Turbo-Frame header, visible-ASCII/HTAB
@@ -267,175 +263,9 @@ static cf_err accounts_page_response(cf_ctx *ctx, unsigned status,
     return rc;
 }
 
-/* ---- page arithmetic (geared_pagination, single 500 ratio) ---------------- */
+/* ---- edit ---------------------------------------------------------------- */
 
-#define ACCOUNTS_PER_PAGE INT64_C(500)
-#define ACCOUNTS_MAX_PAGE INT64_C(1000000000)
-
-static int64_t accounts_page_number(cf_ctx *ctx) {
-    cf_span text = {NULL, 0};
-    int64_t number = 0;
-    if (!accounts_param_str(ctx, "page", &text)) return 1;
-    if (!cf_views_integer_cast(text, &number)) return 1;
-    if (number < 1) return 1;
-    if (number > ACCOUNTS_MAX_PAGE) return ACCOUNTS_MAX_PAGE;
-    return number;
-}
-
-/* ---- account_users (presenters/accounts.rs) -------------------------------- */
-
-/* ASCII-only lowercase compare (SQLite LOWER is ASCII-only). */
-static int accounts_name_cmp(const cf_user *a, const cf_user *b) {
-    size_t i = 0;
-    for (;;) {
-        unsigned char ca = i < a->name.len ? (unsigned char)a->name.ptr[i] : 0;
-        unsigned char cb = i < b->name.len ? (unsigned char)b->name.ptr[i] : 0;
-        if (ca >= 'A' && ca <= 'Z') ca = (unsigned char)(ca - 'A' + 'a');
-        if (cb >= 'A' && cb <= 'Z') cb = (unsigned char)(cb - 'A' + 'a');
-        if (ca != cb) return ca < cb ? -1 : 1;
-        if (ca == 0) break;
-        i++;
-    }
-    if (a->id != b->id) return a->id < b->id ? -1 : 1;
-    return 0;
-}
-
-static int accounts_name_qsort(const void *pa, const void *pb) {
-    return accounts_name_cmp(pa, pb);
-}
-
-/* `presenters::accounts::account_users`: active+banned for administrators,
- * active only otherwise; without bots; ORDER BY LOWER(name). The
- * administrator arm filters cf_user_all in memory (SHIM: a D01 query). */
-static cf_err accounts_account_users(cf_ctx *ctx, bool can_admin,
-                                     cf_user_vector *out) {
-    memset(out, 0, sizeof *out);
-    if (!can_admin) {
-        return cf_user_active_ordered_without_bots(ctx->reader, out);
-    }
-    cf_user_vector all = {0};
-    cf_err rc = cf_user_all(ctx->reader, &all);
-    if (rc != CF_OK) return rc;
-    cf_user_vector kept = {0};
-    for (size_t i = 0; i < all.len && rc == CF_OK; i++) {
-        const cf_user *user = &all.items[i];
-        bool status_ok = user->status == CF_STATUS_ACTIVE ||
-                         user->status == CF_STATUS_BANNED;
-        if (!status_ok || user->role == CF_ROLE_BOT) continue;
-        if (kept.len == kept.cap) {
-            size_t cap = kept.cap == 0 ? 16 : kept.cap * 2;
-            if (cap < kept.cap) {
-                rc = CF_NOMEM;
-                break;
-            }
-            cf_user *items = realloc(kept.items, cap * sizeof *items);
-            if (items == NULL) {
-                rc = CF_NOMEM;
-                break;
-            }
-            kept.items = items;
-            kept.cap = cap;
-        }
-        kept.items[kept.len] = *user;
-        memset(&all.items[i], 0, sizeof all.items[i]);
-        kept.len++;
-    }
-    cf_user_vector_dispose(&all);
-    if (rc != CF_OK) {
-        cf_user_vector_dispose(&kept);
-        return rc;
-    }
-    qsort(kept.items, kept.len, sizeof *kept.items, accounts_name_qsort);
-    *out = kept;
-    return CF_OK;
-}
-
-/* ---- Edit render shim (A02 accounts::Edit replaces this) ------------------ */
-
-static cf_err accounts_emit_text(cf_builder *out, cf_span text) {
-    if (out->len > CF_VIEWS_MAX_OUTPUT) return CF_LIMIT;
-    return cf_html_text(out, text);
-}
-
-static cf_err accounts_render_edit(const cf_account *account,
-                                   bool restrict_creation, const cf_user *admins,
-                                   size_t admin_count, const cf_user *members,
-                                   size_t member_count,
-                                   const char *next_page, bool frame,
-                                   cf_builder *out) {
-    cf_err rc = CF_OK;
-    if (!frame) {
-        rc = cf_builder_append(out, accounts_span("<!DOCTYPE html><html><head><title>Account settings</title></head><body>"));
-        if (rc != CF_OK) return rc;
-    }
-    char idbuf[32];
-    int n = snprintf(idbuf, sizeof idbuf, "%" PRId64, account->id);
-    if (n < 0 || (size_t)n >= sizeof idbuf) return CF_INTERNAL;
-    rc = cf_builder_append(out, accounts_span("<section data-page=\"account-edit\" data-account-id=\""));
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span(idbuf));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, accounts_span("\" data-restrict=\""));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, accounts_span(restrict_creation ? "true" : "false"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("\">"));
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("<h1>"));
-    if (rc == CF_OK) {
-        rc = accounts_emit_text(out, (cf_span){(const unsigned char *)account->name.ptr,
-                                              account->name.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("</h1>"));
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("<div data-join-code=\""));
-    if (rc == CF_OK) {
-        rc = accounts_emit_text(out, (cf_span){(const unsigned char *)account->join_code.ptr,
-                                              account->join_code.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("\"></div>"));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, accounts_span("<ul data-group=\"administrators\">"));
-    }
-    for (size_t i = 0; i < admin_count && rc == CF_OK; i++) {
-        char ubuf[64];
-        n = snprintf(ubuf, sizeof ubuf, "<li data-user-id=\"%" PRId64 "\">",
-                     admins[i].id);
-        if (n < 0 || (size_t)n >= sizeof ubuf) return CF_INTERNAL;
-        rc = cf_builder_append(out, accounts_span(ubuf));
-        if (rc == CF_OK) {
-            rc = accounts_emit_text(out, (cf_span){(const unsigned char *)admins[i].name.ptr,
-                                                  admins[i].name.len});
-        }
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("</li>"));
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, accounts_span("</ul><ul data-group=\"members\">"));
-    }
-    for (size_t i = 0; i < member_count && rc == CF_OK; i++) {
-        char ubuf[64];
-        n = snprintf(ubuf, sizeof ubuf, "<li data-user-id=\"%" PRId64 "\">",
-                     members[i].id);
-        if (n < 0 || (size_t)n >= sizeof ubuf) return CF_INTERNAL;
-        rc = cf_builder_append(out, accounts_span(ubuf));
-        if (rc == CF_OK) {
-            rc = accounts_emit_text(out, (cf_span){(const unsigned char *)members[i].name.ptr,
-                                                  members[i].name.len});
-        }
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("</li>"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("</ul>"));
-    if (rc == CF_OK && next_page != NULL) {
-        rc = cf_builder_append(out, accounts_span("<turbo-frame id=\"next_page_container\" src=\"/account/users.turbo_stream?page="));
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_span(next_page));
-        if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("\"></turbo-frame>"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, accounts_span("</section>"));
-    if (rc == CF_OK && !frame) {
-        rc = cf_builder_append(out, accounts_span("</body></html>"));
-    }
-    if (out->len > CF_VIEWS_MAX_OUTPUT) return CF_LIMIT;
-    return rc;
-}
-
+/* `accounts#edit` (route 44): page_or_frame(OK, accounts::Edit). */
 cf_err cf_action_accounts_edit(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
     cf_before policy = {CF_AUTH_REQUIRED, true, true};
@@ -446,6 +276,7 @@ cf_err cf_action_accounts_edit(cf_ctx *ctx) {
     rc = accounts_current_account(ctx, &account);
     if (rc != CF_OK) return rc;
 
+    /* `c.respond_to(&[&format::HTML])` before the user lookup (source order). */
     const cf_format *offered[1] = {&cf_format_html};
     const cf_format *chosen = NULL;
     rc = cf_ctx_respond_to(ctx, offered, 1, &chosen);
@@ -454,6 +285,7 @@ cf_err cf_action_accounts_edit(cf_ctx *ctx) {
         return rc;
     }
 
+    /* `current_user(c).is_some_and(|user| user.can_administer(None, false))`. */
     bool can_admin = false;
     {
         bool found = false;
@@ -464,80 +296,46 @@ cf_err cf_action_accounts_edit(cf_ctx *ctx) {
                                                (cf_optional_i64){false, 0},
                                                false);
         }
+        if (rc != CF_OK) {
+            cf_user_dispose(&current);
+            cf_account_dispose(&account);
+            return rc;
+        }
+
+        /* One read: account_users partition (user_summary per row, signed
+         * avatar paths), the last-room link and the geared next page. */
+        cf_view_accounts_edit_model model = {0};
+        rc = cf_presenter_accounts_edit(ctx, &account, &current, can_admin,
+                                        &model);
         cf_user_dispose(&current);
         if (rc != CF_OK) {
             cf_account_dispose(&account);
             return rc;
         }
-    }
 
-    cf_user_vector users = {0};
-    rc = accounts_account_users(ctx, can_admin, &users);
-    if (rc != CF_OK) {
-        cf_account_dispose(&account);
-        return rc;
-    }
-
-    cf_account_settings settings = {0};
-    rc = cf_account_settings_of(&account, &settings);
-    bool restrict_creation = false;
-    if (rc == CF_OK) {
-        restrict_creation =
-            cf_account_settings_restrict_room_creation_to_administrators(
-                &settings);
-    }
-    cf_account_settings_dispose(&settings);
-    if (rc != CF_OK) {
-        cf_user_vector_dispose(&users);
-        cf_account_dispose(&account);
-        return rc;
-    }
-
-    /* Stable partition: administrators first (reference .partition). */
-    size_t admin_count = 0;
-    for (size_t i = 0; i < users.len; i++) {
-        if (users.items[i].role == CF_ROLE_ADMINISTRATOR) {
-            cf_user tmp = users.items[i];
-            users.items[i] = users.items[admin_count];
-            users.items[admin_count] = tmp;
-            admin_count++;
-        }
-    }
-
-    int64_t total = (int64_t)users.len;
-    int64_t number = accounts_page_number(ctx);
-    /* Geared page count over the whole list (single 500 ratio); the edit
-     * page renders everyone, administrators first — the page only decides
-     * whether the next-page loader follows. */
-    int64_t residual = total;
-    int64_t pages = 0;
-    while (residual > 0) {
-        pages++;
-        residual -= ACCOUNTS_PER_PAGE;
-    }
-    if (pages < 1) pages = 1;
-    bool last = number == pages;
-    char nextbuf[32];
-    const char *next_page = NULL;
-    if (!last) {
-        int n = snprintf(nextbuf, sizeof nextbuf, "%" PRId64, number + 1);
-        if (n < 0 || (size_t)n >= sizeof nextbuf) {
-            cf_user_vector_dispose(&users);
+        cf_view_layout_model layout = {0};
+        rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+        if (rc != CF_OK) {
+            cf_view_accounts_edit_model_dispose(&model);
             cf_account_dispose(&account);
-            return CF_INTERNAL;
+            return rc;
         }
-        next_page = nextbuf;
-    }
+        cf_view_ctx view_ctx;
+        cf_view_ctx_init(&view_ctx, ctx, &layout);
 
-    bool frame = accounts_turbo_frame_request(ctx->request);
-    cf_builder body = {0};
-    rc = accounts_render_edit(&account, restrict_creation, users.items,
-                              admin_count, users.items + admin_count,
-                              users.len - admin_count, next_page, frame,
-                              &body);
-    if (rc == CF_OK) rc = accounts_page_response(ctx, 200, &body, frame);
-    else cf_builder_dispose(&body);
-    cf_user_vector_dispose(&users);
+        bool frame = accounts_turbo_frame_request(ctx->request);
+        cf_builder body = {0};
+        rc = frame ? cf_view_accounts_edit_frame(&view_ctx, &model, &body)
+                   : cf_view_accounts_edit(&view_ctx, &model, &body);
+        if (rc == CF_OK) {
+            rc = accounts_page_response(ctx, 200, &body, frame);
+        } else {
+            cf_builder_dispose(&body);
+        }
+
+        cf_view_layout_model_dispose(&layout);
+        cf_view_accounts_edit_model_dispose(&model);
+    }
     cf_account_dispose(&account);
     return rc;
 }
