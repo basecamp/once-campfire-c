@@ -17,17 +17,14 @@ Subflows, each driven through the app's real UI where it exists:
      attach control (`input[type=file]`, `composer#filePicked`) and sends.
      The composer's FileUploader posts the multipart `message[attachment]`
      to the room's messages route and inserts the rendered turbo-stream
-     reply.  The case accepts either outcome and pins it:
-       * attachment rendered (the full S02 flow) -> assert the attachment
-         element and B observing it live; or
-       * the observed blocked state: the multipart XHR is answered 400 and
-         the pending-upload element sticks, with no attachment rendered.
-     The blocked path is recorded as documented-BLOCKED: multipart file
-     parts are rejected in `src/http/params.c` (`parse_multipart`:
-     `files > 0 -> CF_INVALID`) and the messages Create attachment arm
-     returns CF_INTERNAL (`src/actions/messages.c`), so S02's staged-upload
-     wiring is not reachable from the browser yet.  The preview/variant
-     rows belong to S03/media (vips/ffmpeg absent by design) and are
+     reply.  The attachment path is wired (H02 upload accessor + S02
+     staging, commit 43657aa), so the case requires the rendered attachment
+     in both browsers and FAILS on a 400 from the multipart XHR (that is a
+     regression, not the old blocked state).  Text attachments render the
+     reference `render_link` arm (filename span + signed Active Storage
+     download anchor), not the image/video `.message__attachment` media
+     arms, so the assertion matches both shapes.  The preview/variant rows
+     belong to S03/media (vips/ffmpeg absent by design) and are
      documented-BLOCKED in docs/devel/evidence/V02-browser.md, never
      skipped or faked.
 
@@ -150,80 +147,60 @@ def _upload_flow(a: h.Browser, b: h.Browser, server: h.Server, scratch,
     a.click_ui(h.COMPOSER_SEND)
 
     # The composer uploads files as multipart XHR posts and posts the text
-    # separately; wait for the attachment to render or for the observed
-    # blocked response (400 on the multipart XHR).
-    def attachment_rendered():
+    # separately; the attachment path is wired, so require the rendered
+    # attachment (media arms carry .message__attachment; the reference
+    # render_link file arm is a filename span plus a signed Active Storage
+    # download anchor in the same message). A 400 on the multipart XHR is a
+    # regression, not the old blocked state.
+    def attachment_rendered(browser):
         return bool(
-            a.eval(
-                "(() => {const els = Array.from(document.querySelectorAll("
-                "'#message-area .message__attachment'));"
-                f" return els.some(e => e.innerText.includes({h.jstr(sample.name)}))}})()"
+            browser.eval(
+                "(() => {const area = document.querySelector('#message-area');"
+                " if (!area) return false;"
+                f" const name = {h.jstr(sample.name)};"
+                " const media = Array.from(area.querySelectorAll("
+                "'.message__attachment'));"
+                " if (media.some(e => e.innerText.includes(name))) return true;"
+                " const links = Array.from(area.querySelectorAll('a[href]'));"
+                " return links.some(e => {"
+                "  const href = e.getAttribute('href') || '';"
+                "  const msg = e.closest('.message');"
+                "  return href.includes('active_storage') && msg &&"
+                "         msg.textContent.includes(name);"
+                " });})()"
             )
         )
 
-    blocked = False
     deadline = time.monotonic() + 25
-    while True:
-        if attachment_rendered():
-            break
+    while not attachment_rendered(a):
         if any(
             f"{ROOM}/messages (XHR) 400" in line
             for line in a.network_log(f"{ROOM}/messages")
         ):
-            blocked = True
-            break
-        if time.monotonic() >= deadline:
             raise CaseFailure(
-                "upload flow produced neither a rendered attachment nor the "
-                f"documented 400; A's requests {a.network_log('/messages')[-6:]!r}; "
-                f"message area reads {(a.text('#message-area') or '')[-300:]!r}"
-            )
-        time.sleep(0.5)
-
-    if blocked:
-        # Documented-BLOCKED: assert the exact observable blocked state.
-        if attachment_rendered():
-            raise CaseFailure(
-                "attachment rendered although the multipart upload answered 400"
-            )
-        pending = bool(
-            a.eval(
-                "(() => {const els = Array.from(document.querySelectorAll("
-                "'#message-area .message__pending-upload'));"
-                f" return els.some(e => e.innerText.includes({h.jstr(sample.name)}))}})()"
-            )
-        )
-        if not pending:
-            raise CaseFailure(
-                "the failed upload left no pending-upload element carrying "
-                f"{sample.name!r}; message area reads "
+                "multipart upload answered 400: the attachment path regressed "
+                "(H02/S02 wiring landed in 43657aa); message area reads "
                 f"{(a.text('#message-area') or '')[-300:]!r}"
             )
-        _say(
-            "BLOCKED (documented) upload/attach: the composer's multipart "
-            f"POST {ROOM}/messages was answered 400 and no attachment "
-            "rendered; the pending-upload element sticks at 100% (the S02 "
-            "staged-upload arm is not wired: parse_multipart rejects file "
-            "parts in src/http/params.c and messages.c's Create arm returns "
-            "CF_INTERNAL)"
-        )
-        _say(
-            "BLOCKED (documented) S03 preview/variant rows: the pinned "
-            "vips/ffmpeg tools are absent by design, so no image/video "
-            "preview or variant can be exercised (recorded in V02-browser.md)"
-        )
-    else:
-        _say(f"attachment {sample.name!r} rendered in A's message area")
-        h.poll(
-            lambda: b.eval(
-                "(() => {const els = Array.from(document.querySelectorAll("
-                "'#message-area .message__attachment'));"
-                f" return els.some(e => e.textContent.includes({h.jstr(sample.name)}))}})()"
-            ),
-            25,
-            f"B to observe the attachment {sample.name!r} live",
-        )
-        _say(f"B observed the attachment {sample.name!r} live")
+        if time.monotonic() >= deadline:
+            raise CaseFailure(
+                "upload flow never rendered the attachment; A's requests "
+                f"{a.network_log('/messages')[-6:]!r}; message area reads "
+                f"{(a.text('#message-area') or '')[-300:]!r}"
+            )
+        time.sleep(0.5)
+    _say(f"attachment {sample.name!r} rendered in A's message area")
+    _say(
+        "BLOCKED (documented) S03 preview/variant rows: the pinned "
+        "vips/ffmpeg tools are absent by design, so no image/video "
+        "preview or variant can be exercised (recorded in V02-browser.md)"
+    )
+    h.poll(
+        lambda: attachment_rendered(b),
+        25,
+        f"B to observe the attachment {sample.name!r} live",
+    )
+    _say(f"B observed the attachment {sample.name!r} live")
 
     # The text path of the same submit is independent and must still work.
     h.poll(
