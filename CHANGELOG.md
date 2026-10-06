@@ -5,6 +5,34 @@ subjects stay short; this file carries the detail: task IDs, what landed,
 acceptance evidence, and known gaps. Live status and full evidence links live
 in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed).
 
+## 2026-10-06 09:43 — Four-way measurement set: Rails, Rust, C and the Fil-C build
+
+- **Quad set**: one interleaved invocation per cache arm with all four apps
+  in one run (`--apps c,c-filc,rust,reference --reps 3 --loops 4`, quiet-gate
+  wait capped at 5 s by the owner's instruction, gate still sampled; load
+  observed 1.80–12.05): `bench/results/2bc574b-quad-uncached/` and
+  `bench/results/2bc574b-quad-cache/`, 12/12 valid reps each, pinned
+  preflight green.  Candidate `2bc574b` (verified `git diff`: its `src/` is
+  identical to the published 46ed9c5 tree) with bench binary `2e3c17d1…`;
+  Fil-C binary `3b53ed01…` (Fil-C 0.685, same tree); Rust `1ea6d6f`; Rails
+  `90b3300`; seed `a7630146…`.
+- **Headline (16 clients, medians)**: the memory-safe build reaches
+  0.84–0.97× of Rust on the four cached page routes (room 35,016 vs 36,033 —
+  parity on renders) while the optimized `-O3` C build holds 3.6–4.0× over
+  Rust there; Fil-C pays its full runtime tax only on the uncached paths
+  (post 16,293 = 0.27× of Rust, `/up` 74,122 = 0.41×).  Cache-off Fil-C
+  beats Rails on every row (1.1–17×).  Fil-C profile: cold start 155 ms,
+  idle 78 MB, peak 408–629 MB (allocator), image 292 MiB unpacked.
+- **Size column re-baselined**: the Docker daemon moved to the containerd
+  image store between the 10-05 and 10-06 runs, changing `.Size` accounting
+  for identical image ids.  The table now uses `image-sizes.json` per run,
+  measured as root with `du -s -m -x /` inside each image (Rails 887, Rust
+  161, C 218, Fil-C 292 MiB) — all four taken together on 2026-10-06.
+- README tables rebuilt from the quad set (throughput with the Fil-C
+  columns, a dedicated speed-ratio block, a Fil-C latency block, size rows);
+  the 16-client rows of the fastest apps are round-trip-bound and documented
+  as such.  `46ed9c5-*` result directories remain as the historical record.
+
 ## 2026-10-06 09:19 — Independent-review repairs
 
 - Revalidate current actor status, membership and ownership inside queued
@@ -47,15 +75,15 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   segments and the intermediate `build/bin` was absent.)
 - **`bench/readme_tables.py`** emits the Fil-C columns (throughput, speed
   ratios, a Fil-C latency block, size rows).  Size rows prefer a per-run
-  `image-sizes.json` (`du -shx /` inside each image): the Docker daemon moved
-  to the containerd image store between the 10-05 runs and this one, so its
-  `.Size` (the old "unpacked" column) reads differently for the same image
-  ids — the quad run re-baselines all four images from one measurement
-  moment.
+  `image-sizes.json` (`du -s -m -x /` as root inside each image): the Docker
+  daemon moved to the containerd image store between the 10-05 runs and this
+  one, so its `.Size` (the old "unpacked" column) reads differently for the
+  same image ids — the quad run re-baselines all four images from one
+  measurement moment.
 - Dry run (1 rep, filc only, uncached) green end to end: cold start 135 ms,
   idle 31 MB, room 481 rps at 16 clients (≈4.2× below the bench build),
   every response 200, pinned preflight pass.  The quad measurements and the
-  README tables land in a follow-up entry once the run completes.
+  README tables land in the 09:43 entry above.
 
 ## 2026-10-05 23:15 — P01 front, V02 completion and the final measurements
 

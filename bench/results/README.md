@@ -21,6 +21,10 @@ fallback initials SVG, not the reference webp variant, plus the seed hash) is
 written by `bench/run-c` and must be kept as well.
 `bench/check/check_bodies.py --out .../preflight.json` stores standalone
 body-validation evidence for scaffolding work such as B01a.
+`image-sizes.json` records the unpacked image size for the set's tables,
+measured as root with `du -s -m -x /` inside each image (the Docker store's
+own `.Size` accounting changed with the containerd switch and is no longer
+used for the published column).
 
 Every measurement row must be traceable to a code change: write the revision,
 the change (commit subject or a one-line description), and cache on/off in the
@@ -44,3 +48,15 @@ by an earlier identifier. Mapping for the archived sets:
 | `84ee2ae` | `a0028eb` |
 | `25b9a3b` | `e63e4d3` |
 | `ed9e118` | `85b58ea` |
+
+## Current publication set
+
+The README tables are generated from the four-way set (Rails, Rust, C and the
+Fil-C build, one interleaved invocation per cache arm):
+
+    python3 bench/readme_tables.py \
+      --uncached bench/results/2bc574b-quad-uncached \
+      --cache    bench/results/2bc574b-quad-cache
+
+`46ed9c5-uncached/` and `46ed9c5-cache/` are the earlier three-way set
+(superseded for the tables, kept as the historical record).

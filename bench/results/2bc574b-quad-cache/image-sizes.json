@@ -1,0 +1,22 @@
+{
+  "campfire-reference:app": {
+    "mib": 887,
+    "command": "docker run --rm --user 0 --entrypoint du campfire-reference:app -s -m -x /",
+    "measured": "2026-10-06"
+  },
+  "campfire-rust:app": {
+    "mib": 161,
+    "command": "docker run --rm --user 0 --entrypoint du campfire-rust:app -s -m -x /",
+    "measured": "2026-10-06"
+  },
+  "campfire-c:bench": {
+    "mib": 218,
+    "command": "docker run --rm --user 0 --entrypoint du campfire-c:bench -s -m -x /",
+    "measured": "2026-10-06"
+  },
+  "campfire-c-filc:bench": {
+    "mib": 292,
+    "command": "docker run --rm --user 0 --entrypoint du campfire-c-filc:bench -s -m -x /",
+    "measured": "2026-10-06"
+  }
+}
