@@ -75,14 +75,14 @@ preliminary in that sense.
 
 ### HTTP throughput (16 concurrent clients, requests/second)
 
-| Workload | Rails | Rust (cache on) | C (cache off) | C (cache on) |
-|---|---:|---:|---:|---:|
-| Room page | 234 | 31,741 | 1,995 | **104,523** |
-| Messages page | 438 | 29,021 | 2,465 | **128,748** |
-| Sidebar | 679 | 32,519 | 22,923 | **134,211** |
-| Search | 434 | 33,010 | 5,395 | **128,249** |
-| Post a message | 1,116 | 54,242 | 92,508 | **109,889** |
-| `/up` | 4,363 | 131,207 | 170,347 | **180,614** |
+| Workload | Rails | Rust (cache on) | C (cache off) | C (cache on) | C (cache off) vs Rails | C (cache on) vs Rust |
+|---|---:|---:|---:|---:|---:|---:|
+| Room page | 234 | 31,741 | 1,995 | **104,523** | 8.5× | 3.3× |
+| Messages page | 438 | 29,021 | 2,465 | **128,748** | 5.6× | 4.4× |
+| Sidebar | 679 | 32,519 | 22,923 | **134,211** | 34× | 4.1× |
+| Search | 434 | 33,010 | 5,395 | **128,249** | 12× | 3.9× |
+| Post a message | 1,116 | 54,242 | 92,508 | **109,889** | 83× | 2.0× |
+| `/up` | 4,363 | 131,207 | 170,347 | **180,614** | 39× | 1.4× |
 
 **Read the Rust column with its cache on.** Rust's numbers are its
 production image with the server-side response cache enabled; the pinned

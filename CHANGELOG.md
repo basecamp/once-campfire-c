@@ -27,19 +27,20 @@ in `docs/devel/IMPLEMENTATION-ROADMAP.md` (local working document, not committed
   stack-use-after-scope view-span escapes and the QR SVG length bug fixed
   along the way.
 - **README + MIT license**, structured like the other Campfire ports, with
-  the tables below.
+  the tables below; the throughput table also carries the two comparison
+  ratios (`C (cache off) vs Rails`, `C (cache on) vs Rust`).
 - **Final measurements** (pinned harness, 3 interleaved reps per arm, 16
   clients; full provenance and raw outputs under
   `bench/results/46ed9c5-{uncached,cache}/`):
 
-| Workload | Rails | Rust (cache on) | C (cache off) | C (cache on) |
-|---|---:|---:|---:|---:|
-| Room page | 234 | 31,741 | 1,995 | 104,523 |
-| Messages page | 438 | 29,021 | 2,465 | 128,748 |
-| Sidebar | 679 | 32,519 | 22,923 | 134,211 |
-| Search | 434 | 33,010 | 5,395 | 128,249 |
-| Post a message | 1,116 | 54,242 | 92,508 | 109,889 |
-| `/up` | 4,363 | 131,207 | 170,347 | 180,614 |
+| Workload | Rails | Rust (cache on) | C (cache off) | C (cache on) | C (cache off) vs Rails | C (cache on) vs Rust |
+|---|---:|---:|---:|---:|---:|---:|
+| Room page | 234 | 31,741 | 1,995 | 104,523 | 8.5× | 3.3× |
+| Messages page | 438 | 29,021 | 2,465 | 128,748 | 5.6× | 4.4× |
+| Sidebar | 679 | 32,519 | 22,923 | 134,211 | 34× | 4.1× |
+| Search | 434 | 33,010 | 5,395 | 128,249 | 12× | 3.9× |
+| Post a message | 1,116 | 54,242 | 92,508 | 109,889 | 83× | 2.0× |
+| `/up` | 4,363 | 131,207 | 170,347 | 180,614 | 39× | 1.4× |
 
   Body-cache gain 5.9–52× on the four admitted routes; cache-off C ahead of
   Rails on every row (5.6–83×); cache-on C ahead of the Rust image on every
