@@ -58,18 +58,16 @@
  * non-object JSON body, or subscribable keys smuggled in the query
  * string) proceeds to find_by/create where the source answers 400.
  *
- * Render gate (A02): PushSubscriptionsIndex (index.html +
- * _push_subscription, UA-parse mapping) has no C view yet, so index
- * answers the reference's 500 after loading (loud, never a stub page).
- * The row scoping is real and covered below; the list loader is
- * non-static so the action test exercises it directly.
+ * Render (A02/V02): the index gate is gone; index renders
+ * cf_view_users_push_index(_frame) from the V02 presenter
+ * cf_presenter_users_push_index (for_user scoping, UA mapping and
+ * last_room_visited inside one read transaction) through Layout::load,
+ * page_or_frame.
  *
  * Integrator requests:
- *  R1. PushSubscriptionsIndex view model + renderer (src/views.h),
- *      including the UA-parse mapping (browser/version/platform strings).
- *  R2. A shared record-touch helper (see profiles.c R2); until it lands,
+ *  R1. A shared record-touch helper (see profiles.c R2); until it lands,
  *      the static push_subscriptions touch below is the local copy.
- *  R3. A shared private-network host resolver for actions (this file's
+ *  R2. A shared private-network host resolver for actions (this file's
  *      default + seam is the proposal).
  *
  * c_symbols for the integrator's route rebind (src/routes.c rows 66,67,73):
@@ -87,6 +85,8 @@
 #include "http/params.h"
 #include "models/push_subscription.h"
 #include "models/user.h"
+#include "presenters/push_subscriptions.h"
+#include "views.h"
 #include "views/internal.h" /* cf_views_integer_cast */
 
 #include <arpa/inet.h>
@@ -149,6 +149,78 @@ static cf_err push_head(cf_ctx *ctx, unsigned status) {
     const cf_format *format = cf_ctx_rendered_format(ctx);
     return cf_response_header(ctx->response, push_span("Content-Type"),
                               push_span(format->string));
+}
+
+/* `c.is_turbo_frame_request()` (users.c/sidebars.c convention): a non-blank
+ * `Turbo-Frame` header selects turbo-rails' frame layout. */
+static unsigned char push_lower(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
+static bool push_turbo_frame_request(const cf_request *request) {
+    if (request == NULL) return false;
+    cf_span value = {NULL, 0};
+    bool found = false;
+    for (size_t i = 0; i < request->header_count; i++) {
+        const cf_header *header = &request->headers[i];
+        if (header->name.len != 11) continue;
+        static const char name[] = "turbo-frame";
+        bool match = true;
+        for (size_t k = 0; k < 11; k++) {
+            if (push_lower(header->name.ptr[k]) != (unsigned char)name[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            value = header->value;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+    bool blank = true;
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
+    }
+    return !blank;
+}
+
+/* `Layout#page` appends the stylesheet preload links (`Link` header); the
+ * frame layout carries none. */
+static cf_err push_link_header(cf_ctx *ctx) {
+    cf_builder links = {0};
+    cf_err rc = cf_views_preload_links(&links);
+    if (rc == CF_INVALID) return CF_OK;
+    if (rc == CF_OK && links.len != 0) {
+        rc = cf_response_header(ctx->response, push_span("Link"),
+                                (cf_span){links.ptr, links.len});
+    }
+    cf_builder_dispose(&links);
+    return rc;
+}
+
+/* Freeze a rendered page into the response: status, HTML content type, and
+ * (page layout only) the preload header.  Consumes the builder. */
+static cf_err push_page_response(cf_ctx *ctx, unsigned status,
+                                 cf_builder *body, bool frame) {
+    cf_buf *buf = NULL;
+    cf_err rc = cf_builder_freeze(body, &buf);
+    if (rc != CF_OK) {
+        cf_builder_dispose(body);
+        return rc;
+    }
+    ctx->response->status = status;
+    rc = cf_response_body(ctx->response, buf);
+    cf_buf_release(buf);
+    if (rc != CF_OK) return rc;
+    rc = cf_response_header(ctx->response, push_span("Content-Type"),
+                            push_span("text/html; charset=utf-8"));
+    if (rc != CF_OK) return rc;
+    if (!frame) rc = push_link_header(ctx);
+    return rc;
 }
 
 /* ---- endpoint resolution ------------------------------------------------- */
@@ -550,13 +622,8 @@ static bool push_param_present(const cf_param *param) {
 
 /* ---- index --------------------------------------------------------------- */
 
-/* Non-static so the action test exercises the scoping directly: exactly
- * the caller's subscriptions, in model order. */
-cf_err cf_users_push_subscriptions_list(cf_db *db, int64_t user_id,
-                                        cf_push_subscription_vector *out) {
-    return cf_push_subscription_for_user(db, user_id, out);
-}
-
+/* `users/push_subscriptions#index` (route 66): page_or_frame(OK,
+ * PushSubscriptionsIndex). */
 cf_err cf_action_users_push_subscriptions_index(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
 
@@ -573,16 +640,38 @@ cf_err cf_action_users_push_subscriptions_index(cf_ctx *ctx) {
 
     cf_user user = {0};
     rc = push_current_user(ctx, &user);
-    int64_t user_id = user.id;
+    if (rc != CF_OK) {
+        cf_user_dispose(&user);
+        return rc;
+    }
+
+    /* One read: for_user scoping + UA mapping + last_room_visited. */
+    cf_view_users_push_index_model model = {0};
+    rc = cf_presenter_users_push_index(ctx, &user, &model);
     cf_user_dispose(&user);
     if (rc != CF_OK) return rc;
 
-    cf_push_subscription_vector subscriptions = {0};
-    rc = cf_users_push_subscriptions_list(ctx->reader, user_id,
-                                          &subscriptions);
-    /* UA-parse mapping + framed_page(PushSubscriptionsIndex) need A02. */
-    cf_push_subscription_vector_dispose(&subscriptions);
-    if (rc == CF_OK) rc = CF_INTERNAL; /* R1 render gate: loud, no stub */
+    cf_view_layout_model layout = {0};
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) {
+        cf_view_users_push_index_model_dispose(&model);
+        return rc;
+    }
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+    bool frame = push_turbo_frame_request(ctx->request);
+    cf_builder body = {0};
+    rc = frame ? cf_view_users_push_index_frame(&view_ctx, &model, &body)
+               : cf_view_users_push_index(&view_ctx, &model, &body);
+    if (rc == CF_OK) {
+        rc = push_page_response(ctx, 200, &body, frame);
+    } else {
+        cf_builder_dispose(&body);
+    }
+
+    cf_view_layout_model_dispose(&layout);
+    cf_view_users_push_index_model_dispose(&model);
     return rc;
 }
 

@@ -130,6 +130,8 @@ APP_LIB_SRCS := $(APP_CORE_SRCS) \
 	src/presenters/sidebars.c \
 	src/presenters/searches.c \
 	src/presenters/bots.c \
+	src/presenters/users_profiles.c \
+	src/presenters/push_subscriptions.c \
 	src/actions/first_runs.c \
 	src/actions/messages.c \
 	src/actions/messages/boosts.c \

@@ -48,20 +48,14 @@
  * analyze_later is a no-op in every reachable state (pending is None
  * unless a blob was attached) and needs no job.
  *
- * Render gate (A02): ProfileShow (users/profiles/show.html + _membership,
- * _transfer, layout, form/translation/asset helpers) has no C view yet, so
- * show answers the reference's 500 after loading (loud, never a stub
- * page).  Everything before the render — authentication, format
- * negotiation, transfer_id, the attached check and the direct/shared
- * partition — is real and covered below; the loader is non-static so the
- * action test exercises it directly.
+ * Render (A02/V02): the show gate is gone; show renders
+ * cf_view_users_profile_show(_frame) from the V02 presenter
+ * cf_presenter_users_profile (transfer_id signing, attached check,
+ * profile_memberships mapping and user_summary inside one read transaction)
+ * through Layout::load, page_or_frame.
  *
  * Integrator requests:
- *  R1. ProfileShow view model + renderer (src/views.h).  Proposed shape:
- *        typedef struct { cf_str transfer_id; bool avatar_attached; ... }
- *      carrying the loader outputs below plus the UserSummary; render
- *      users/profiles/show.html in the application layout.
- *  R2. A shared record-touch helper for the (User,avatar) destroy here and
+ *  R1. A shared record-touch helper for the (User,avatar) destroy here and
  *      the push_subscriptions touch (exact SQL:
  *      UPDATE "<table>" SET "updated_at" = ? WHERE "<table>"."id" = ?).
  *      Until it lands, the static touch below (fixed statement, cache
@@ -79,9 +73,10 @@
 #include "db/db_internal.h"
 #include "http/params.h"
 #include "models/active_storage.h"
-#include "models/membership.h"
-#include "models/user.h"
 #include "models/touch.h"
+#include "models/user.h"
+#include "presenters/users_profiles.h"
+#include "views.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -89,9 +84,6 @@
 static cf_span profiles_span(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
 }
-
-/* `TRANSFER_LINK_EXPIRY_DURATION`: 4 hours, in microseconds. */
-#define PROFILES_TRANSFER_EXPIRY_US (INT64_C(4) * INT64_C(3600) * INT64_C(1000000))
 
 /* `require_current_user`: the chain guarantees one; a missing row is the
  * reference's internal error (messages.c convention). */
@@ -147,102 +139,82 @@ static cf_err profiles_redirect_profile(cf_ctx *ctx, const char *notice) {
     return rc;
 }
 
-/* ---- show data (everything before the gated render) ---------------------- */
+/* ---- show ----------------------------------------------------------------- */
 
-/* Move one pair into a destination vector (shallow copy + zero the source
- * slot so the source dispose cannot free it twice). */
-static cf_err profiles_pairs_push(cf_membership_room_pair_vector *dest,
-                                  cf_membership_room_pair *slot) {
-    if (dest->len == dest->cap) {
-        size_t cap = dest->cap == 0 ? 4 : dest->cap * 2;
-        if (cap < dest->cap ||
-            cap > SIZE_MAX / sizeof *dest->items) {
-            return CF_NOMEM;
-        }
-        cf_membership_room_pair *items =
-            realloc(dest->items, cap * sizeof *items);
-        if (items == NULL) return CF_NOMEM;
-        dest->items = items;
-        dest->cap = cap;
-    }
-    dest->items[dest->len] = slot[0];
-    memset(slot, 0, sizeof *slot);
-    dest->len++;
-    return CF_OK;
+/* `c.is_turbo_frame_request()` (users.c/sidebars.c convention): a non-blank
+ * `Turbo-Frame` header selects turbo-rails' frame layout. */
+static unsigned char profiles_lower(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
 }
 
-/* Non-static so the action test exercises the pre-render logic directly:
- * transfer_id signing, the attached check and the direct/shared partition.
- * `now_us` is Time.current (the action passes the process clock).  Only
- * public types cross the boundary (messages.c msg_create_write_cb
- * precedent).  Outputs start empty and stay empty on failure. */
-cf_err cf_users_profiles_load(cf_db *db, const cf_config *config,
-                              int64_t user_id, int64_t now_us,
-                              cf_str *transfer_id_out, bool *avatar_attached_out,
-                              cf_membership_room_pair_vector *direct_out,
-                              cf_membership_room_pair_vector *shared_out) {
-    if (transfer_id_out != NULL) memset(transfer_id_out, 0, sizeof *transfer_id_out);
-    if (avatar_attached_out != NULL) *avatar_attached_out = false;
-    if (direct_out != NULL) *direct_out = (cf_membership_room_pair_vector){0};
-    if (shared_out != NULL) *shared_out = (cf_membership_room_pair_vector){0};
-    if (transfer_id_out == NULL || avatar_attached_out == NULL ||
-        direct_out == NULL || shared_out == NULL) {
-        return CF_INVALID;
+static bool profiles_turbo_frame_request(const cf_request *request) {
+    if (request == NULL) return false;
+    cf_span value = {NULL, 0};
+    bool found = false;
+    for (size_t i = 0; i < request->header_count; i++) {
+        const cf_header *header = &request->headers[i];
+        if (header->name.len != 11) continue;
+        static const char name[] = "turbo-frame";
+        bool match = true;
+        for (size_t k = 0; k < 11; k++) {
+            if (profiles_lower(header->name.ptr[k]) !=
+                (unsigned char)name[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            value = header->value;
+            found = true;
+            break;
+        }
     }
-    if (db == NULL || config == NULL) return CF_INTERNAL;
-    if (config->secret_key_base == NULL) return CF_INTERNAL;
+    if (!found) return false;
+    bool blank = true;
+    for (size_t i = 0; i < value.len; i++) {
+        unsigned char c = value.ptr[i];
+        if (!((c >= 32 && c < 127) || c == '\t')) return false;
+        if (c != ' ' && c != '\t') blank = false;
+    }
+    return !blank;
+}
 
-    /* `transfer_id`: signed id purpose "transfer", 4h expiry. */
-    cf_err rc = cf_auth_signed_id_generate(
-        (cf_span){(const unsigned char *)config->secret_key_base,
-                  config->secret_key_base_len},
-        profiles_span("User"), user_id, profiles_span("transfer"), true,
-        true, now_us + PROFILES_TRANSFER_EXPIRY_US, transfer_id_out);
+/* `Layout#page` appends the stylesheet preload links (`Link` header); the
+ * frame layout carries none. */
+static cf_err profiles_link_header(cf_ctx *ctx) {
+    cf_builder links = {0};
+    cf_err rc = cf_views_preload_links(&links);
+    if (rc == CF_INVALID) return CF_OK;
+    if (rc == CF_OK && links.len != 0) {
+        rc = cf_response_header(ctx->response, profiles_span("Link"),
+                                (cf_span){links.ptr, links.len});
+    }
+    cf_builder_dispose(&links);
+    return rc;
+}
+
+/* Freeze a rendered page into the response: status, HTML content type, and
+ * (page layout only) the preload header.  Consumes the builder. */
+static cf_err profiles_page_response(cf_ctx *ctx, unsigned status,
+                                     cf_builder *body, bool frame) {
+    cf_buf *buf = NULL;
+    cf_err rc = cf_builder_freeze(body, &buf);
+    if (rc != CF_OK) {
+        cf_builder_dispose(body);
+        return rc;
+    }
+    ctx->response->status = status;
+    rc = cf_response_body(ctx->response, buf);
+    cf_buf_release(buf);
     if (rc != CF_OK) return rc;
-
-    /* `attached_blob(...).is_some()`: the attachment row implies its blob
-     * (schema FK); the blob itself is only read by the gated render. */
-    bool attached = false;
-    {
-        cf_attachment attachment = {0};
-        rc = cf_attachment_find_for(
-            db, (cf_str){(char *)"User", 4}, user_id,
-            (cf_str){(char *)"avatar", 6}, &attached, &attachment);
-        cf_attachment_dispose(&attachment);
-        if (rc != CF_OK) {
-            cf_str_dispose(transfer_id_out);
-            return rc;
-        }
-    }
-    *avatar_attached_out = attached;
-
-    /* `profile_memberships`: with_ordered_room, partitioned by direct?
-     * (relative order within each side preserved, like slice partition). */
-    cf_membership_room_pair_vector pairs = {0};
-    rc = cf_membership_with_ordered_room(db, user_id, &pairs);
-    if (rc != CF_OK) {
-        cf_str_dispose(transfer_id_out);
-        return rc;
-    }
-    for (size_t i = 0; i < pairs.len && rc == CF_OK; i++) {
-        bool direct = pairs.items[i].room.room_type == CF_ROOM_DIRECT;
-        rc = profiles_pairs_push(direct ? direct_out : shared_out,
-                                 &pairs.items[i]);
-    }
-    /* Every slot was moved (zeroed) on success; dispose frees the array
-     * and any unmoved tails on failure. */
-    cf_membership_room_pair_vector_dispose(&pairs);
-    if (rc != CF_OK) {
-        cf_str_dispose(transfer_id_out);
-        cf_membership_room_pair_vector_dispose(direct_out);
-        cf_membership_room_pair_vector_dispose(shared_out);
-        *direct_out = (cf_membership_room_pair_vector){0};
-        *shared_out = (cf_membership_room_pair_vector){0};
-        return rc;
-    }
-    return CF_OK;
+    rc = cf_response_header(ctx->response, profiles_span("Content-Type"),
+                            profiles_span("text/html; charset=utf-8"));
+    if (rc != CF_OK) return rc;
+    if (!frame) rc = profiles_link_header(ctx);
+    return rc;
 }
 
+/* `users/profiles#show` (route 60): page_or_frame(OK, ProfileShow). */
 cf_err cf_action_users_profiles_show(cf_ctx *ctx) {
     if (ctx == NULL || ctx->response == NULL) return CF_INVALID;
 
@@ -259,22 +231,38 @@ cf_err cf_action_users_profiles_show(cf_ctx *ctx) {
 
     cf_user user = {0};
     rc = profiles_current_user(ctx, &user);
-    int64_t user_id = user.id;
-    if (rc == CF_OK) {
-        cf_str transfer_id = {0};
-        bool avatar_attached = false;
-        cf_membership_room_pair_vector direct = {0};
-        cf_membership_room_pair_vector shared = {0};
-        rc = cf_users_profiles_load(ctx->reader, cf_app_config(ctx->app),
-                                    user_id, cf_now_us(NULL), &transfer_id,
-                                    &avatar_attached, &direct, &shared);
-        /* user_summary + framed_page(ProfileShow) need A02's R1 view. */
-        cf_str_dispose(&transfer_id);
-        cf_membership_room_pair_vector_dispose(&direct);
-        cf_membership_room_pair_vector_dispose(&shared);
-        if (rc == CF_OK) rc = CF_INTERNAL; /* R1 render gate: loud, no stub */
+    if (rc != CF_OK) {
+        cf_user_dispose(&user);
+        return rc;
     }
+
+    /* One read: transfer_id, attached check, memberships + user summary. */
+    cf_view_users_profile_model model = {0};
+    rc = cf_presenter_users_profile(ctx, &user, &model);
     cf_user_dispose(&user);
+    if (rc != CF_OK) return rc;
+
+    cf_view_layout_model layout = {0};
+    rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) {
+        cf_view_users_profile_model_dispose(&model);
+        return rc;
+    }
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+
+    bool frame = profiles_turbo_frame_request(ctx->request);
+    cf_builder body = {0};
+    rc = frame ? cf_view_users_profile_show_frame(&view_ctx, &model, &body)
+               : cf_view_users_profile_show(&view_ctx, &model, &body);
+    if (rc == CF_OK) {
+        rc = profiles_page_response(ctx, 200, &body, frame);
+    } else {
+        cf_builder_dispose(&body);
+    }
+
+    cf_view_layout_model_dispose(&layout);
+    cf_view_users_profile_model_dispose(&model);
     return rc;
 }
 

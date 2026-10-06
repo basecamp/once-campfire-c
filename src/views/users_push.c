@@ -5,55 +5,18 @@
  * PushSubscription), templates/users/push_subscriptions/{index,
  * _push_subscription}.html and helpers/{application,assets,forms,links,tag}.rs.
  *
- * PROPOSED views.h ADDITIONS (verbatim for the integrator; local copies below
- * are deleted when these land):
+ * The view models and renderer declarations live in src/views.h (landed by
+ * V02 from this file's earlier proposal, verbatim); the dispose functions and
+ * the pure UA row mapping (presenters::accounts::push_subscription over the
+ * landed cf_ua_* parser) below are the definitions behind them.
  *
- *   typedef struct {
- *       int64_t id;
- *       cf_str endpoint;              // owned
- *       cf_str browser;               // owned: UserAgent.parse(user_agent).browser
- *       cf_str version;               // owned: ...version.to_string
- *       cf_str platform;              // owned: ...platform.unwrap_or_default
- *   } cf_view_push_subscription;
- *   typedef struct { cf_view_push_subscription *items; size_t len, cap; }
- *       cf_view_push_subscription_vector;
- *   void cf_view_push_subscription_vector_dispose(cf_view_push_subscription_vector *v);
- *
- *   typedef struct {
- *       cf_view_push_subscription_vector subscriptions; // owned, model order
- *       // link_back_to_last_room_visited target (ctx carries no referrer or
- *       // last-room id, like V-A's G2 gap): the action fills these from
- *       // last_room_visited; golden tests fill them from facts.
- *       bool has_last_room;
- *       int64_t last_room_id;         // valid when has_last_room
- *   } cf_view_users_push_index_model;
- *   void cf_view_users_push_index_model_dispose(cf_view_users_push_index_model *m);
- *
- *   // Pure UA mapping (no SQL): the presenters::accounts::push_subscription
- *   // port over the landed cf_ua_* parser (src/auth/user_agent.h).
- *   cf_err cf_view_push_subscription_parse(cf_span user_agent,
- *       cf_str *browser_out, cf_str *version_out, cf_str *platform_out);
- *   cf_err cf_view_push_subscription_from_row(int64_t id, cf_span endpoint,
- *       cf_span user_agent, cf_view_push_subscription *out);
- *
- *   cf_err cf_view_users_push_index(const cf_view_ctx *,
- *       const cf_view_users_push_index_model *, cf_builder *);
- *   cf_err cf_view_users_push_index_frame(const cf_view_ctx *,
- *       const cf_view_users_push_index_model *, cf_builder *);
- *   cf_err cf_view_push_subscription_partial(const cf_view_ctx *,
- *       const cf_view_push_subscription *, cf_builder *);
- *
- * The row scoping (for_user, model order) stays in
- * src/actions/users/push_subscriptions.c (cf_users_push_subscriptions_list);
- * rendering does no SQL.  The test-notification button posts to
+ * The row scoping (for_user, model order) and the last-room selection are the
+ * V02 presenter cf_presenter_users_push_index
+ * (src/presenters/push_subscriptions.c); rendering performs no SQL.  The
+ * test-notification button posts to
  * user_push_subscription_test_notifications(id) (route 65, owned by the
  * test_notifications packet); the delete button posts to
  * user_push_subscription(id) with _method delete.  No token inputs (D-C02).
- *
- * Integrator requests:
- *  R1. Land the views.h declarations above (verbatim).
- *  R2. Rebind route 66 to build the model (list + UA parse) and call
- *      cf_view_users_push_index(_frame) (replacing the CF_INTERNAL gate).
  */
 #include "views/internal.h"
 
@@ -63,26 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- local copies of the proposed views.h types (deleted on land) -------- */
-
-typedef struct {
-    int64_t id;
-    cf_str endpoint;
-    cf_str browser;
-    cf_str version;
-    cf_str platform;
-} cf_view_push_subscription;
-
-typedef struct {
-    cf_view_push_subscription *items;
-    size_t len, cap;
-} cf_view_push_subscription_vector;
-
-typedef struct {
-    cf_view_push_subscription_vector subscriptions;
-    bool has_last_room;
-    int64_t last_room_id;
-} cf_view_users_push_index_model;
+/* ---- view-model disposal (types declared in views.h) --------------------- */
 
 static void push_str_clear(cf_str *value) {
     free(value->ptr);

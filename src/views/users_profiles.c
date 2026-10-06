@@ -5,60 +5,18 @@
  * ProfileMembership), templates/users/profiles/{show,_membership,_transfer}.html
  * and helpers/{application,assets,filters,forms,links,rooms,tag,turbo,url,users}.rs.
  *
- * PROPOSED views.h ADDITIONS (verbatim for the integrator; local copies below
- * are deleted when these land):
+ * The view models and renderer declarations live in src/views.h (landed by
+ * V02 from this file's earlier proposal, verbatim); the dispose functions
+ * below are the definitions behind them.
  *
- *   typedef struct {
- *       int64_t id;
- *       cf_str name;                    // owned
- *       bool has_bio; cf_str bio;       // owned when has_bio
- *       bool has_email; cf_str email_address; // owned when has_email
- *       cf_role role; cf_status status;
- *       cf_str avatar_path;             // owned: fresh_user_avatar_path
- *   } cf_view_profile_user;
- *   void cf_view_profile_user_dispose(cf_view_profile_user *user);
- *
- *   typedef struct {
- *       int64_t room_id;
- *       cf_str room_param_key;          // owned: "rooms_open"/"rooms_closed"/"rooms_direct"
- *       cf_str room_display_name;       // owned
- *       cf_str involvement;             // owned: "mentions"/"everything"/"nothing"/"invisible"
- *       bool direct;
- *   } cf_view_profile_membership;
- *   typedef struct { cf_view_profile_membership *items; size_t len, cap; }
- *       cf_view_profile_membership_vector;
- *   void cf_view_profile_membership_vector_dispose(cf_view_profile_membership_vector *v);
- *
- *   typedef struct {
- *       cf_view_profile_user user;      // owned (UserSummary)
- *       bool avatar_attached;
- *       cf_str transfer_id;             // owned (signed id, purpose "transfer")
- *       cf_view_profile_membership_vector shared_memberships; // owned
- *       cf_view_profile_membership_vector direct_memberships;  // owned
- *   } cf_view_users_profile_model;
- *   void cf_view_users_profile_model_dispose(cf_view_users_profile_model *m);
- *
- *   cf_err cf_view_users_profile_show(const cf_view_ctx *,
- *       const cf_view_users_profile_model *, cf_builder *);
- *   cf_err cf_view_users_profile_show_frame(const cf_view_ctx *,
- *       const cf_view_users_profile_model *, cf_builder *);
- *   cf_err cf_view_users_profile_transfer(const cf_view_ctx *,
- *       const cf_view_profile_user *, cf_span transfer_id, cf_builder *);
- *   cf_err cf_view_users_profile_membership(const cf_view_ctx *,
- *       const cf_view_profile_membership *, cf_builder *);
- *
- * The loader (transfer_id signing, attached check, direct/shared partition)
- * stays in src/actions/users/profiles.c (cf_users_profiles_load); the
- * display-name/param-key/involvement mapping is the presenters::accounts::
- * profile_memberships port and is supplied by the caller inside the view
- * model (rendering does no SQL).  Presenters for user_summary/avatar_path
- * follow the users.c R2 shape (fresh_user_avatar_path) and are caller-side.
+ * The loader (transfer_id signing, attached check, direct/shared partition,
+ * membership mapping, UserSummary) is the V02 presenter
+ * cf_presenter_users_profile (src/presenters/users_profiles.c); rendering
+ * performs no SQL and no such work.
  *
  * OWNERSHIP TRANSFER: users/show.html.erb also includes users/profiles/_transfer
- * (for administrators).  V-A was told NOT to implement the transfer partial;
- * it is implemented HERE as cf_view_users_profile_transfer and shared by both
- * pages.  V-A's users/show should call it (proposed above) rather than
- * duplicating it.
+ * (for administrators); cf_view_users_profile_transfer is shared by both pages
+ * (V-A's users/show calls it).
  *
  * Rendering follows A02 (src/views/internal.h): attributes through
  * cf_view_attr*, dynamic text through cf_view_text, builders unchanged on
@@ -67,10 +25,7 @@
  * the integrator adds them to src/views/translations.c (R3 below).
  *
  * Integrator requests:
- *  R1. Land the views.h declarations above (verbatim).
- *  R2. Rebind routes 60-62 to call cf_view_users_profile_show(_frame) after
- *      cf_users_profiles_load + user_summary (replacing the CF_INTERNAL gate).
- *  R3. Add "update_password" and "bio" keys to src/views/translations.c
+ *  R1. Add "update_password" and "bio" keys to src/views/translations.c
  *      (values in profile_translation_for below, from translations_table.rs);
  *      this file's local fallback can then be deleted.
  */
@@ -80,40 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- local copies of the proposed views.h types (deleted on land) -------- */
-
-typedef struct {
-    int64_t id;
-    cf_str name;
-    bool has_bio;
-    cf_str bio;
-    bool has_email;
-    cf_str email_address;
-    cf_role role;
-    cf_status status;
-    cf_str avatar_path;
-} cf_view_profile_user;
-
-typedef struct {
-    int64_t room_id;
-    cf_str room_param_key;
-    cf_str room_display_name;
-    cf_str involvement;
-    bool direct;
-} cf_view_profile_membership;
-
-typedef struct {
-    cf_view_profile_membership *items;
-    size_t len, cap;
-} cf_view_profile_membership_vector;
-
-typedef struct {
-    cf_view_profile_user user;
-    bool avatar_attached;
-    cf_str transfer_id;
-    cf_view_profile_membership_vector shared_memberships;
-    cf_view_profile_membership_vector direct_memberships;
-} cf_view_users_profile_model;
+/* ---- view-model disposal (types declared in views.h) --------------------- */
 
 static void profile_str_clear(cf_str *value) {
     free(value->ptr);

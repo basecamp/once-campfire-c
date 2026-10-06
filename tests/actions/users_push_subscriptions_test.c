@@ -1,18 +1,17 @@
 /* tests/actions/users_push_subscriptions_test.c — A-users-push_subscriptions
  * acceptance: `users/push_subscriptions#index` (route ID 66),
- * `users/push_subscriptions#create` (route ID 67) and
- * `users/push_subscriptions#destroy` (route ID 73), per
- * docs/devel/implementation/contracts/controller-packets.md
+ * `users/push_subscriptions#create` (route ID 67) and `#destroy` (route ID
+ * 73), per docs/devel/implementation/contracts/controller-packets.md
  * "A-users-push_subscriptions" and 03-application.md's remaining-packets
  * rule (permit lists, callback order, status/redirect, ownership).
  *
  * Every case runs the real A00 dispatch path through the route double
  * (tests/app/support/route_double.c), which binds rows 66/67/73 to the
  * real actions.  cf.h and src/actions/actions.h are integrator-owned and
- * do not yet declare this packet's symbols, so the entry points (plus the
- * non-static list loader) are declared here; the integrator's routes.c
- * rebind needs the same declarations (c_symbols
- * cf_action_users_push_subscriptions_index/create/destroy).
+ * do not yet declare this packet's symbols, so the entry points are
+ * declared here; the integrator's routes.c rebind needs the same
+ * declarations (c_symbols cf_action_users_push_subscriptions_index/create/
+ * destroy).
  *
  * Endpoint resolution is pinned without network: the strong
  * cf_users_push_resolve_host below replaces the action's weak seam and
@@ -20,10 +19,11 @@
  * delivery itself stays I02's; these cases cover the controller half
  * (scoping, find_by, touch, heads, redirects).
  *
- * Render gate: PushSubscriptionsIndex has no C view yet
- * (push_subscriptions.c R1), so index's ordinary path answers the
- * reference's 500 after loading.  The list loader is exercised directly,
- * and dispatch covers the auth/format paths.
+ * V02 render: the index gate is gone.  The page renders through the
+ * cf_presenter_users_push_index model and is compared token-for-token with
+ * the golden/a push_subscriptions fixture (the parity SECRET_KEY_BASE and
+ * the fixture rows are seeded here), plus a Turbo-Frame structural case and
+ * a direct presenter case (scoping, UA mapping, last_room_visited).
  */
 #include "cf_test.h"
 
@@ -32,26 +32,35 @@
 #include "cf.h"
 #include "config.h"
 #include "context.h"
+#include "core/testclock.h"
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h"
 #include "http/http_internal.h"
 #include "models/push_subscription.h"
+#include "models/room.h"
 #include "models/user.h"
+#include "presenters/push_subscriptions.h"
+#include "views.h"
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "../views/support/golden.h"
 
+#include <errno.h>
 #include <sqlite3.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "yyjson.h"
 
 cf_err cf_action_users_push_subscriptions_index(cf_ctx *ctx);
 cf_err cf_action_users_push_subscriptions_create(cf_ctx *ctx);
 cf_err cf_action_users_push_subscriptions_destroy(cf_ctx *ctx);
-cf_err cf_users_push_subscriptions_list(cf_db *db, int64_t user_id,
-                                        cf_push_subscription_vector *out);
 
 /* Strong resolution pin for the action's weak seam: only the permitted
  * fcm host resolves, to a public IP (model-test convention). */
@@ -77,12 +86,116 @@ cf_optional_str cf_users_push_resolve_host(void *arg, cf_str host) {
 }
 
 #define ORIGIN "http://campfire.test"
-#define HEX64 \
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+/* parity/.env.reference (reference-tools/views/a/golden.sh); the golden
+ * fixtures' signed tokens only reproduce with it. */
+#define GOLDEN_SECRET                                                        \
+    "5335c3b1ad35b4ad170c3413bd651ef3b6ed64e257261871a6de3f978cf3868ee"     \
+    "417a927040935fb30b0f7debdedb34a2a403e9f34b16cf594c917c2ecd4a995"
+#define GOLDEN_VAPID_PUBLIC_KEY                                              \
+    "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8" \
+    "cTriz_qYBVicY02_VxTQ="
 #define FCM_SEND "https://fcm.googleapis.com/fcm/send/x"
+/* The capture's chrome_mac request UA (render.rb). */
+#define CHROME_MAC                                                            \
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "     \
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+/* The fixture push_subscriptions row's stored agent (facts.json: Chrome
+ * 113.0.0.0 on Macintosh). */
+#define FIXTURE_PUSH_UA                                                       \
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "     \
+    "(KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+
+/* tests/fixtures/crates/views/tests/golden/a/facts.json (fixture rows). */
+#define ACCOUNT_ID 873240054
+#define DAVID 127326141
+#define DESIGNERS 654632876
+#define FIXTURE_SUBSCRIPTION 56887440
 
 static cf_span SP(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
+}
+
+/* --- fixture-faithful asset root (users_sidebars_test.c precedent) --------- */
+
+static char g_assets_root[4096];
+
+static const char *golden_dir(void) {
+    const char *dir = getenv("CF_GOLDEN_DIR");
+    return dir != NULL && dir[0] != '\0'
+               ? dir
+               : "tests/fixtures/crates/views/tests/golden";
+}
+
+static bool copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    if (in == NULL) return false;
+    FILE *out = fopen(to, "wb");
+    if (out == NULL) {
+        fclose(in);
+        return false;
+    }
+    char buffer[8192];
+    size_t n;
+    bool ok = true;
+    while ((n = fread(buffer, 1, sizeof buffer, in)) != 0) {
+        if (fwrite(buffer, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    if (ferror(in)) ok = false;
+    fclose(in);
+    if (fclose(out) != 0) ok = false;
+    return ok;
+}
+
+static bool stage_assets_root(void) {
+    char tmpl[] = "/tmp/campfire-push-assets-XXXXXX";
+    if (mkdtemp(tmpl) == NULL) {
+        fprintf(stderr, "  assets: mkdtemp failed\n");
+        return false;
+    }
+    snprintf(g_assets_root, sizeof g_assets_root, "%s", tmpl);
+
+    char public_dir[4200], assets_dir[4300];
+    snprintf(public_dir, sizeof public_dir, "%s/public", g_assets_root);
+    snprintf(assets_dir, sizeof assets_dir, "%s/assets", public_dir);
+    if (mkdir(public_dir, 0700) != 0 || mkdir(assets_dir, 0700) != 0) {
+        fprintf(stderr, "  assets: mkdir failed: %s\n", strerror(errno));
+        return false;
+    }
+    char manifest_from[4200], manifest_to[4600];
+    snprintf(manifest_from, sizeof manifest_from,
+             "tests/fixtures/assets/public/assets/.manifest.json");
+    snprintf(manifest_to, sizeof manifest_to, "%s/.manifest.json", assets_dir);
+    if (!copy_file(manifest_from, manifest_to)) {
+        fprintf(stderr, "  assets: manifest copy failed\n");
+        return false;
+    }
+
+    char facts_path[4600];
+    snprintf(facts_path, sizeof facts_path, "%s/a/facts.json", golden_dir());
+    yyjson_doc *facts = yyjson_read_file(facts_path, 0, NULL, NULL);
+    if (facts == NULL) {
+        fprintf(stderr, "  assets: cannot read %s\n", facts_path);
+        return false;
+    }
+    const char *importmap =
+        yyjson_get_str(yyjson_obj_get(yyjson_doc_get_root(facts),
+                                      "importmap_tags"));
+    bool ok = importmap != NULL;
+    if (ok) {
+        char importmap_to[4600];
+        snprintf(importmap_to, sizeof importmap_to, "%s/importmap-tags.html",
+                 g_assets_root);
+        FILE *file = fopen(importmap_to, "wb");
+        ok = file != NULL &&
+             fwrite(importmap, 1, strlen(importmap), file) == strlen(importmap);
+        if (file != NULL && fclose(file) != 0) ok = false;
+    }
+    yyjson_doc_free(facts);
+    if (!ok) fprintf(stderr, "  assets: importmap staging failed\n");
+    return ok;
 }
 
 /* --- scratch app + started writer ------------------------------------------ */
@@ -95,14 +208,13 @@ typedef struct {
 } push_env;
 
 static bool env_open(push_env *env) {
+    if (g_assets_root[0] == '\0' && !stage_assets_root()) return false;
     memset(env, 0, sizeof *env);
     if (!cf_db_scratch_open(&env->scratch)) return false;
     cf_config_entry entries[4] = {
         {"PUBLIC_ORIGIN", ORIGIN},
-        {"SECRET_KEY_BASE", HEX64},
-        {"VAPID_PUBLIC_KEY",
-         "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8"
-         "cTriz_qYBVicY02_VxTQ="},
+        {"SECRET_KEY_BASE", GOLDEN_SECRET},
+        {"VAPID_PUBLIC_KEY", GOLDEN_VAPID_PUBLIC_KEY},
         {"DATABASE_PATH", env->scratch.path},
     };
     if (cf_config_parse(entries, 4, NULL, &env->config) != CF_OK) {
@@ -111,6 +223,11 @@ static bool env_open(push_env *env) {
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
+        return false;
+    }
+    /* The staged root renders the layout with the fixtures' importmap. */
+    if (cf_views_assets_configure(g_assets_root) != CF_OK) {
+        fprintf(stderr, "  env_open: assets configure failed\n");
         return false;
     }
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
@@ -312,6 +429,66 @@ static bool head_contains(cf_response *resp, cf_request *req,
     return found;
 }
 
+static bool span_contains(cf_span span, const char *needle) {
+    size_t len = strlen(needle);
+    if (len == 0) return true;
+    if (span.len < len) return false;
+    for (size_t i = 0; i + len <= span.len; i++) {
+        if (memcmp(span.ptr + i, needle, len) == 0) return true;
+    }
+    return false;
+}
+
+/* --- golden fixture rows (facts.json) -------------------------------------- */
+
+/* The push golden's page (David) and last-room target: the account, David,
+ * Designers as his earliest room, its membership, and the fixture
+ * subscription (id 56887440, endpoint .../123, the stored Chrome-113 UA). */
+static void seed_fixture_push(cf_db *db) {
+    char sql[1024];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO accounts (id, created_at, custom_styles, join_code, "
+             "name, settings, singleton_guard, updated_at) VALUES "
+             "(%d, '2026-09-26 13:00:20.000000', NULL, 'CRMu-l8Ge-KB9B', "
+             "'37signals', NULL, 0, '2026-09-26 13:00:20.000000')",
+             ACCOUNT_ID);
+    exec_sql(db, sql);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO users (id, bio, created_at, email_address, name, "
+             "role, status, updated_at) VALUES (%lld, NULL, "
+             "'2026-09-26 13:00:10.000000', 'david@37signals.com', 'David', "
+             "1, 0, '2026-09-26 13:00:20.000000')",
+             (long long)DAVID);
+    exec_sql(db, sql);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO rooms (id, created_at, creator_id, name, type, "
+             "updated_at) VALUES (%lld, '2026-09-26 11:00:00.000000', %lld, "
+             "'Designers', 'Rooms::Closed', '2026-09-26 13:00:20.300000')",
+             (long long)DESIGNERS, (long long)DAVID);
+    exec_sql(db, sql);
+    snprintf(sql, sizeof sql,
+             "INSERT INTO memberships (id, created_at, involvement, room_id, "
+             "unread_at, updated_at, user_id) VALUES (900010, '2026-09-26 "
+             "12:00:00.000000', 'mentions', %lld, NULL, "
+             "'2026-09-26 12:00:00.000000', %lld)",
+             (long long)DESIGNERS, (long long)DAVID);
+    exec_sql(db, sql);
+    sqlite3 *handle = cf_db_handle(db);
+    sqlite3_stmt *stmt = NULL;
+    snprintf(sql, sizeof sql,
+             "INSERT INTO push_subscriptions (id, auth_key, created_at, "
+             "endpoint, p256dh_key, updated_at, user_agent, user_id) VALUES "
+             "(%lld, 'auth-key', '2026-09-26 13:00:20.000000', "
+             "'https://fcm.googleapis.com/fcm/send/123', 'p256dh-key', "
+             "'2026-09-26 13:00:20.000000', ?, %lld)",
+             (long long)FIXTURE_SUBSCRIPTION, (long long)DAVID);
+    CF_REQUIRE(sqlite3_prepare_v2(handle, sql, -1, &stmt, NULL) == SQLITE_OK);
+    sqlite3_bind_text(stmt, 1, FIXTURE_PUSH_UA, -1, SQLITE_TRANSIENT);
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(step == SQLITE_DONE);
+}
+
 /* --- acceptance ------------------------------------------------------------ */
 
 CF_TEST(users_push_subscriptions_route_ids_bind_the_actions) {
@@ -333,24 +510,59 @@ CF_TEST(users_push_subscriptions_route_ids_bind_the_actions) {
              cf_action_users_push_subscriptions_destroy);
 }
 
-CF_TEST(users_push_subscriptions_index_authenticated_gates_on_view) {
+/* The V02 render: the index page matches the golden/a fixture token-for-token
+ * (fixture rows seeded; parity SECRET_KEY_BASE; the fixture's stored UA and
+ * David's original room drive the mapped strings and the back link). */
+CF_TEST(users_push_subscriptions_index_matches_the_golden) {
     push_env env;
     CF_REQUIRE(env_open(&env));
-    seed_user(env.scratch.db, 1, "David");
-    seed_subscription(env.scratch.db, 20, 1, FCM_SEND, "p256dh-key", "auth-key",
-                      "2026-01-02 03:04:05");
+    seed_fixture_push(env.scratch.db);
     char cookie[4096];
     make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
-                        "david-session", 1);
+                        "fixture-david", DAVID);
 
     cf_request req;
     cf_response resp;
     push_request(&req, CF_GET, "/users/me/push_subscriptions", NULL, NULL,
-                 "same-origin", cookie, NULL);
+                 "same-origin", cookie, CHROME_MAC);
     CF_REQUIRE(run_request(&env, &req, &resp));
-    /* R1: rows load (see the list case), but PushSubscriptionsIndex has no
-     * C view yet, so the ordinary path fails loudly instead of stubbing. */
-    CF_CHECK(resp.status == 500);
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(head_contains(&resp, &req,
+                           "Content-Type: text/html; charset=utf-8\r\n"));
+    /* The page layout carries the stylesheet preload links. */
+    CF_CHECK(head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("push_subscriptions", (const char *)body.ptr, body.len);
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+/* A Turbo-Frame request renders turbo-rails' frame layout (head + content, no
+ * title/nav) and carries no Link preload header. */
+CF_TEST(users_push_subscriptions_index_turbo_frame_renders_the_frame) {
+    push_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_fixture_push(env.scratch.db);
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                        "fixture-david-frame", DAVID);
+
+    cf_request req;
+    cf_response resp;
+    push_request(&req, CF_GET, "/users/me/push_subscriptions", NULL, NULL,
+                 "same-origin", cookie, CHROME_MAC);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Turbo-Frame"),
+                                  SP("push_subscriptions")) == CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(!head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    CF_CHECK(span_contains(body, "id=\"push_subscriptions\""));
+    CF_CHECK(
+        !span_contains(body, "Push notification subscriptions</title>"));
+    CF_CHECK(!span_contains(body, "<nav id=\"nav\">"));
     cf_response_dispose(&resp);
     env_close(&env);
 }
@@ -390,7 +602,7 @@ CF_TEST(users_push_subscriptions_index_unacceptable_format_is_406) {
     env_close(&env);
 }
 
-CF_TEST(users_push_subscriptions_list_scopes_to_the_user) {
+CF_TEST(users_push_subscriptions_presenter_scopes_and_maps) {
     push_env env;
     CF_REQUIRE(env_open(&env));
     seed_user(env.scratch.db, 1, "David");
@@ -401,21 +613,109 @@ CF_TEST(users_push_subscriptions_list_scopes_to_the_user) {
                       "2026-01-02 03:04:05");
     seed_subscription(env.scratch.db, 22, 2, FCM_SEND, "p3", "a3",
                       "2026-01-02 03:04:05");
+    /* The stored UA maps to browser/version/platform (row 20). */
+    {
+        sqlite3 *handle = cf_db_handle(env.scratch.db);
+        sqlite3_stmt *stmt = NULL;
+        CF_REQUIRE(sqlite3_prepare_v2(
+                       handle,
+                       "UPDATE push_subscriptions SET user_agent = ? WHERE "
+                       "id = 20",
+                       -1, &stmt, NULL) == SQLITE_OK);
+        sqlite3_bind_text(stmt, 1, FIXTURE_PUSH_UA, -1, SQLITE_TRANSIENT);
+        CF_REQUIRE(sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+    }
+    /* user 1's original room (earliest membership): room 30. */
+    exec_sql(env.scratch.db,
+             "INSERT INTO rooms (id, created_at, creator_id, name, type, "
+             "updated_at) VALUES (30, '2026-01-01 00:00:00', 1, 'Original', "
+             "'Rooms::Open', '2026-01-01 00:00:00')");
+    exec_sql(env.scratch.db,
+             "INSERT INTO memberships (id, created_at, involvement, room_id, "
+             "unread_at, updated_at, user_id) VALUES (300, '2026-01-01 "
+             "00:00:00', 'everything', 30, NULL, '2026-01-01 00:00:00', 1)");
+    exec_sql(env.scratch.db,
+             "INSERT INTO rooms (id, created_at, creator_id, name, type, "
+             "updated_at) VALUES (31, '2026-01-02 00:00:00', 1, 'Visited', "
+             "'Rooms::Open', '2026-01-02 00:00:00')");
+    exec_sql(env.scratch.db,
+             "INSERT INTO memberships (id, created_at, involvement, room_id, "
+             "unread_at, updated_at, user_id) VALUES (301, '2026-01-02 "
+             "00:00:00', 'everything', 31, NULL, '2026-01-02 00:00:00', 1)");
 
-    cf_push_subscription_vector out = {0};
-    CF_REQUIRE(cf_users_push_subscriptions_list(env.scratch.db, 1, &out) ==
+    cf_request req;
+    cf_response resp;
+    cf_response_init(&resp);
+    push_request(&req, CF_GET, "/users/me/push_subscriptions", NULL, NULL,
+                 NULL, NULL, NULL);
+    cf_ctx ctx;
+    CF_REQUIRE(cf_ctx_create(&ctx, env.app, env.scratch.db, &req, &resp) ==
                CF_OK);
-    CF_REQUIRE(out.len == 2);
-    CF_CHECK(out.items[0].id == 20 && out.items[0].user_id == 1);
-    CF_CHECK(out.items[1].id == 21 && out.items[1].user_id == 1);
-    cf_push_subscription_vector_dispose(&out);
+    cf_user user = {0};
+    bool found = false;
+    CF_REQUIRE(cf_user_find_by_id(env.scratch.db, 1, &found, &user) == CF_OK);
+    CF_REQUIRE(found);
+    cf_view_users_push_index_model model = {0};
+    CF_REQUIRE(cf_presenter_users_push_index(&ctx, &user, &model) == CF_OK);
 
-    memset(&out, 0, sizeof out);
-    CF_REQUIRE(cf_users_push_subscriptions_list(env.scratch.db, 2, &out) ==
+    /* Exactly the caller's rows, in model order. */
+    CF_REQUIRE(model.subscriptions.len == 2);
+    CF_CHECK(model.subscriptions.items[0].id == 20);
+    CF_CHECK(model.subscriptions.items[1].id == 21);
+    const cf_view_push_subscription *row = &model.subscriptions.items[0];
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)row->endpoint.ptr,
+                                     row->endpoint.len},
+                           FCM_SEND));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)row->browser.ptr,
+                                     row->browser.len},
+                           "Chrome"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)row->version.ptr,
+                                     row->version.len},
+                           "113.0.0.0"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)row->platform.ptr,
+                                     row->platform.len},
+                           "Macintosh"));
+    /* No cookie: the original room. */
+    CF_CHECK(model.has_last_room && model.last_room_id == 30);
+    cf_view_users_push_index_model_dispose(&model);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp);
+
+    /* The last_room cookie wins when the user is a member of that room. */
+    cf_request req2;
+    cf_response resp2;
+    cf_response_init(&resp2);
+    push_request(&req2, CF_GET, "/users/me/push_subscriptions", NULL, NULL,
+                 NULL, NULL, NULL);
+    CF_REQUIRE(cf_test_req_header(&req2, SP("Cookie"), SP("last_room=31")) ==
                CF_OK);
-    CF_REQUIRE(out.len == 1);
-    CF_CHECK(out.items[0].id == 22);
-    cf_push_subscription_vector_dispose(&out);
+    CF_REQUIRE(cf_ctx_create(&ctx, env.app, env.scratch.db, &req2, &resp2) ==
+               CF_OK);
+    memset(&model, 0, sizeof model);
+    CF_REQUIRE(cf_presenter_users_push_index(&ctx, &user, &model) == CF_OK);
+    CF_CHECK(model.has_last_room && model.last_room_id == 31);
+    cf_view_users_push_index_model_dispose(&model);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp2);
+
+    /* An unknown room in the cookie falls back to the original. */
+    cf_request req3;
+    cf_response resp3;
+    cf_response_init(&resp3);
+    push_request(&req3, CF_GET, "/users/me/push_subscriptions", NULL, NULL,
+                 NULL, NULL, NULL);
+    CF_REQUIRE(cf_test_req_header(&req3, SP("Cookie"), SP("last_room=999")) ==
+               CF_OK);
+    CF_REQUIRE(cf_ctx_create(&ctx, env.app, env.scratch.db, &req3, &resp3) ==
+               CF_OK);
+    memset(&model, 0, sizeof model);
+    CF_REQUIRE(cf_presenter_users_push_index(&ctx, &user, &model) == CF_OK);
+    CF_CHECK(model.has_last_room && model.last_room_id == 30);
+    cf_view_users_push_index_model_dispose(&model);
+    cf_user_dispose(&user);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp3);
     env_close(&env);
 }
 

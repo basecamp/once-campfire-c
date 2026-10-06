@@ -424,6 +424,13 @@ cf_err cf_presenter_room_show(cf_ctx *ctx, const cf_room *room,
                               int64_t message_id,
                               cf_view_room_show_model *out);
 
+/* `Room#display_name` for a `for_user` helper call
+ * (presenters::accounts::room_display_name): a direct room is named after its
+ * other members (read here), a shared room after its column; the sentence
+ * itself is cf_view_room_display_name.  `out` is owned. */
+cf_err cf_presenter_room_display_name(cf_db *db, const cf_room *room,
+                                      const cf_user *for_user, cf_str *out);
+
 /* -------------------------------------------------------- message presenters */
 
 /* One read transaction; `row` is an already-loaded messages row.  Maps the
@@ -534,6 +541,87 @@ void cf_view_sidebar_model_dispose(cf_view_sidebar_model *model);
 cf_err cf_presenter_sidebar(cf_ctx *ctx, const cf_user *user,
                             cf_view_sidebar_model *out);
 
+/* ------------------------------------------------ users profiles view models */
+
+/* `users::ProfileUser`: `UserSummary` as users/profiles/show reads it. */
+typedef struct {
+    int64_t id;
+    cf_str name;                          /* owned */
+    bool has_bio; cf_str bio;             /* owned when has_bio */
+    bool has_email; cf_str email_address; /* owned when has_email */
+    cf_role role;
+    cf_status status;
+    cf_str avatar_path; /* owned: fresh_user_avatar_path */
+} cf_view_profile_user;
+
+void cf_view_profile_user_dispose(cf_view_profile_user *user);
+
+/* `users::ProfileMembership` (presenters::accounts::profile_memberships). */
+typedef struct {
+    int64_t room_id;
+    cf_str room_param_key;    /* owned: "rooms_open"/"rooms_closed"/"rooms_direct" */
+    cf_str room_display_name; /* owned */
+    cf_str involvement;       /* owned: "mentions"/"everything"/"nothing"/"invisible" */
+    bool direct;
+} cf_view_profile_membership;
+
+typedef struct {
+    cf_view_profile_membership *items;
+    size_t len, cap;
+} cf_view_profile_membership_vector;
+
+void cf_view_profile_membership_vector_dispose(
+    cf_view_profile_membership_vector *vector);
+
+/* `users::ProfileShow` (Users::ProfilesController#show). */
+typedef struct {
+    cf_view_profile_user user; /* owned (UserSummary) */
+    bool avatar_attached;
+    cf_str transfer_id; /* owned: signed id, purpose "transfer" */
+    cf_view_profile_membership_vector shared_memberships; /* owned */
+    cf_view_profile_membership_vector direct_memberships; /* owned */
+} cf_view_users_profile_model;
+
+void cf_view_users_profile_model_dispose(cf_view_users_profile_model *model);
+
+/* --------------------------------------- users push subscriptions view models */
+
+/* `users::PushSubscription` (`presenters::accounts::push_subscription`). */
+typedef struct {
+    int64_t id;
+    cf_str endpoint; /* owned; "" when the column is NULL */
+    cf_str browser;  /* owned: UserAgent.parse(user_agent).browser */
+    cf_str version;  /* owned: ...version.to_string */
+    cf_str platform; /* owned: ...platform.unwrap_or_default */
+} cf_view_push_subscription;
+
+typedef struct {
+    cf_view_push_subscription *items;
+    size_t len, cap;
+} cf_view_push_subscription_vector;
+
+void cf_view_push_subscription_vector_dispose(
+    cf_view_push_subscription_vector *vector);
+
+/* `users::PushSubscriptionsIndex` (Users::PushSubscriptionsController#index). */
+typedef struct {
+    cf_view_push_subscription_vector subscriptions; /* owned, model order */
+    bool has_last_room;
+    int64_t last_room_id; /* valid when has_last_room */
+} cf_view_users_push_index_model;
+
+void cf_view_users_push_index_model_dispose(
+    cf_view_users_push_index_model *model);
+
+/* Pure UA mapping (no SQL): the presenters::accounts::push_subscription port
+ * over the landed cf_ua_* parser (src/auth/user_agent.h). */
+cf_err cf_view_push_subscription_parse(cf_span user_agent, cf_str *browser_out,
+                                       cf_str *version_out,
+                                       cf_str *platform_out);
+cf_err cf_view_push_subscription_from_row(int64_t id, cf_span endpoint,
+                                          cf_span user_agent,
+                                          cf_view_push_subscription *out);
+
 /* ------------------------------------------------------------- renderers */
 
 /* Each family renders two ways, matching the reference's
@@ -643,6 +731,34 @@ cf_err cf_view_sidebar_direct_partial(const cf_view_ctx *ctx,
                                       cf_builder *out);
 cf_err cf_view_sidebar_shared_partial(const cf_view_sidebar_room *room,
                                       cf_builder *out);
+
+/* users/profiles/show.html.erb (page and turbo-rails frame). */
+cf_err cf_view_users_profile_show(const cf_view_ctx *ctx,
+                                  const cf_view_users_profile_model *model,
+                                  cf_builder *out);
+cf_err cf_view_users_profile_show_frame(
+    const cf_view_ctx *ctx, const cf_view_users_profile_model *model,
+    cf_builder *out);
+/* users/profiles/_transfer.html (shared with users/show). */
+cf_err cf_view_users_profile_transfer(const cf_view_ctx *ctx,
+                                      const cf_view_profile_user *user,
+                                      cf_span transfer_id, cf_builder *out);
+/* users/profiles/_membership.html. */
+cf_err cf_view_users_profile_membership(
+    const cf_view_ctx *ctx, const cf_view_profile_membership *membership,
+    cf_builder *out);
+
+/* users/push_subscriptions/index.html.erb (page and turbo-rails frame) and
+ * _push_subscription.html. */
+cf_err cf_view_users_push_index(const cf_view_ctx *ctx,
+                                const cf_view_users_push_index_model *model,
+                                cf_builder *out);
+cf_err cf_view_users_push_index_frame(
+    const cf_view_ctx *ctx, const cf_view_users_push_index_model *model,
+    cf_builder *out);
+cf_err cf_view_push_subscription_partial(
+    const cf_view_ctx *ctx, const cf_view_push_subscription *subscription,
+    cf_builder *out);
 
 /* `SearchesHelper#search_path`: "/searches?q=" + CGI.escape(query) into the
  * caller's builder (the renderer's links and the create action's redirect).

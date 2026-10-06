@@ -108,9 +108,10 @@ fail:
     return rc;
 }
 
-/* `room_display_name(room, for_user:)` (presenters.rs). */
-static cf_err room_display_name_for(cf_db *db, const cf_room *room,
-                                    const cf_user *for_user, cf_str *out) {
+/* `room_display_name(room, for_user:)` (presenters.rs); shared with the
+ * users/profiles presenter through views.h. */
+cf_err cf_presenter_room_display_name(cf_db *db, const cf_room *room,
+                                      const cf_user *for_user, cf_str *out) {
     memset(out, 0, sizeof *out);
     cf_span *names = NULL;
     size_t name_count = 0;
@@ -177,7 +178,7 @@ cf_err cf_presenter_room_show(cf_ctx *ctx, const cf_room *room,
                        &out->room.name);
         if (rc != CF_OK) goto fail;
     }
-    rc = room_display_name_for(ctx->reader, room, user, &out->room.display_name);
+    rc = cf_presenter_room_display_name(ctx->reader, room, user, &out->room.display_name);
     if (rc != CF_OK) goto fail;
     out->updated_at_us = room->updated_at;
     rc = cf_presenter_user_view(ctx, user, &out->user);

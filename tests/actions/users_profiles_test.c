@@ -7,15 +7,19 @@
  * Every case runs the real A00 dispatch path through the route double
  * (tests/app/support/route_double.c), which binds rows 60/61/62 to the
  * real actions.  cf.h and src/actions/actions.h are integrator-owned and
- * do not yet declare this packet's symbols, so the entry points (plus the
- * non-static loader) are declared here; the integrator's routes.c rebind
- * needs the same declarations (c_symbols cf_action_users_profiles_show /
+ * do not yet declare this packet's symbols, so the entry points are
+ * declared here; the integrator's routes.c rebind needs the same
+ * declarations (c_symbols cf_action_users_profiles_show /
  * cf_action_users_profiles_update).
  *
- * Render gate: ProfileShow has no C view yet (profiles.c R1), so show's
- * ordinary path answers the reference's 500 after loading.  The loader
- * itself (transfer_id signing, attached check, direct/shared partition)
- * is exercised directly, and dispatch covers the auth/format paths.
+ * V02 render: the show gate is gone.  The page renders through the
+ * cf_presenter_users_profile model and is compared token-for-token with the
+ * golden/a profile fixtures the views suite uses (the fixture rows are
+ * seeded here; the transfer token only reproduces with the parity
+ * SECRET_KEY_BASE and the capture instant, frozen per case), plus a
+ * Turbo-Frame structural case.  The presenter's load/mapping (transfer id
+ * purpose, attached flag, ordered partition, display names, involvements,
+ * UserSummary) is exercised directly against its view model.
  */
 #include "cf_test.h"
 
@@ -24,6 +28,7 @@
 #include "cf.h"
 #include "config.h"
 #include "context.h"
+#include "core/testclock.h"
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h"
@@ -32,30 +37,151 @@
 #include "models/membership.h"
 #include "models/room.h"
 #include "models/user.h"
+#include "presenters/users_profiles.h"
+#include "views.h"
 
 #include "../app/support/route_double.h"
 #include "../app/support/test_request.h"
+#include "../views/support/golden.h"
 
+#include <errno.h>
 #include <sqlite3.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "yyjson.h"
 
 cf_err cf_action_users_profiles_show(cf_ctx *ctx);
 cf_err cf_action_users_profiles_update(cf_ctx *ctx);
-cf_err cf_users_profiles_load(cf_db *db, const cf_config *config,
-                              int64_t user_id, int64_t now_us,
-                              cf_str *transfer_id_out,
-                              bool *avatar_attached_out,
-                              cf_membership_room_pair_vector *direct_out,
-                              cf_membership_room_pair_vector *shared_out);
 
 #define ORIGIN "http://campfire.test"
-#define HEX64 \
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+/* parity/.env.reference (reference-tools/views/a/golden.sh); the golden
+ * fixtures' signed tokens only reproduce with it. */
+#define GOLDEN_SECRET                                                        \
+    "5335c3b1ad35b4ad170c3413bd651ef3b6ed64e257261871a6de3f978cf3868ee"     \
+    "417a927040935fb30b0f7debdedb34a2a403e9f34b16cf594c917c2ecd4a995"
+#define GOLDEN_VAPID_PUBLIC_KEY                                              \
+    "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8" \
+    "cTriz_qYBVicY02_VxTQ="
+/* render.rb's CHROME_MAC (the profile goldens' per-UA cases use it). */
+#define CHROME_MAC                                                            \
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "     \
+    "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+/* The capture instants (transfer exp minus 4h) the golden tokens embed. */
+#define GOLDEN_DAVID_NOW_US INT64_C(1790427622182000)
+#define GOLDEN_KEVIN_NOW_US INT64_C(1790427622196000)
+
+/* tests/fixtures/crates/views/tests/golden/a/facts.json (fixture rows). */
+#define ACCOUNT_ID 873240054
+#define DAVID 127326141
+#define JASON 149087659
+#define BENDER 394959859
+#define KEVIN 712064548
+#define JZ 773523953
+#define EX_EMPLOYEE 773523954
+#define SPAM_HAM 773523955
+#define ANNA 773523956
+
+#define ALL_PETS 104393281
+#define DIRECT_JASON 186869642
+#define HQ 201306877
+#define DIRECT_BENDER 340026324
+#define ALL_TALK 486777696
+#define DESIGNERS 654632876
+#define DIRECT_KEVIN 699448325
 
 static cf_span SP(const char *text) {
     return (cf_span){(const unsigned char *)text, strlen(text)};
+}
+
+/* --- fixture-faithful asset root (users_sidebars_test.c precedent) --------- */
+
+/* Stage a static root whose manifest is the pinned fixture root and whose
+ * importmap-tags.html is the facts' block, so the action renders the layout
+ * bytes the golden was captured with. */
+static char g_assets_root[4096];
+
+static const char *golden_dir(void) {
+    const char *dir = getenv("CF_GOLDEN_DIR");
+    return dir != NULL && dir[0] != '\0'
+               ? dir
+               : "tests/fixtures/crates/views/tests/golden";
+}
+
+static bool copy_file(const char *from, const char *to) {
+    FILE *in = fopen(from, "rb");
+    if (in == NULL) return false;
+    FILE *out = fopen(to, "wb");
+    if (out == NULL) {
+        fclose(in);
+        return false;
+    }
+    char buffer[8192];
+    size_t n;
+    bool ok = true;
+    while ((n = fread(buffer, 1, sizeof buffer, in)) != 0) {
+        if (fwrite(buffer, 1, n, out) != n) {
+            ok = false;
+            break;
+        }
+    }
+    if (ferror(in)) ok = false;
+    fclose(in);
+    if (fclose(out) != 0) ok = false;
+    return ok;
+}
+
+static bool stage_assets_root(void) {
+    char tmpl[] = "/tmp/campfire-profiles-assets-XXXXXX";
+    if (mkdtemp(tmpl) == NULL) {
+        fprintf(stderr, "  assets: mkdtemp failed\n");
+        return false;
+    }
+    snprintf(g_assets_root, sizeof g_assets_root, "%s", tmpl);
+
+    char public_dir[4200], assets_dir[4300];
+    snprintf(public_dir, sizeof public_dir, "%s/public", g_assets_root);
+    snprintf(assets_dir, sizeof assets_dir, "%s/assets", public_dir);
+    if (mkdir(public_dir, 0700) != 0 || mkdir(assets_dir, 0700) != 0) {
+        fprintf(stderr, "  assets: mkdir failed: %s\n", strerror(errno));
+        return false;
+    }
+    char manifest_from[4200], manifest_to[4600];
+    snprintf(manifest_from, sizeof manifest_from,
+             "tests/fixtures/assets/public/assets/.manifest.json");
+    snprintf(manifest_to, sizeof manifest_to, "%s/.manifest.json", assets_dir);
+    if (!copy_file(manifest_from, manifest_to)) {
+        fprintf(stderr, "  assets: manifest copy failed\n");
+        return false;
+    }
+
+    char facts_path[4600];
+    snprintf(facts_path, sizeof facts_path, "%s/a/facts.json", golden_dir());
+    yyjson_doc *facts = yyjson_read_file(facts_path, 0, NULL, NULL);
+    if (facts == NULL) {
+        fprintf(stderr, "  assets: cannot read %s\n", facts_path);
+        return false;
+    }
+    const char *importmap =
+        yyjson_get_str(yyjson_obj_get(yyjson_doc_get_root(facts),
+                                      "importmap_tags"));
+    bool ok = importmap != NULL;
+    if (ok) {
+        char importmap_to[4600];
+        snprintf(importmap_to, sizeof importmap_to, "%s/importmap-tags.html",
+                 g_assets_root);
+        FILE *file = fopen(importmap_to, "wb");
+        ok = file != NULL &&
+             fwrite(importmap, 1, strlen(importmap), file) == strlen(importmap);
+        if (file != NULL && fclose(file) != 0) ok = false;
+    }
+    yyjson_doc_free(facts);
+    if (!ok) fprintf(stderr, "  assets: importmap staging failed\n");
+    return ok;
 }
 
 /* --- scratch app + started writer ------------------------------------------ */
@@ -68,14 +194,13 @@ typedef struct {
 } profiles_env;
 
 static bool env_open(profiles_env *env) {
+    if (g_assets_root[0] == '\0' && !stage_assets_root()) return false;
     memset(env, 0, sizeof *env);
     if (!cf_db_scratch_open(&env->scratch)) return false;
     cf_config_entry entries[4] = {
         {"PUBLIC_ORIGIN", ORIGIN},
-        {"SECRET_KEY_BASE", HEX64},
-        {"VAPID_PUBLIC_KEY",
-         "BEYXTBB5_jNhNzXDmx5KEU55Vbbd-u--Lk9rM5OFQvUkPIBwZJ9QzAq0zdEzFw6yTV8"
-         "cTriz_qYBVicY02_VxTQ="},
+        {"SECRET_KEY_BASE", GOLDEN_SECRET},
+        {"VAPID_PUBLIC_KEY", GOLDEN_VAPID_PUBLIC_KEY},
         {"DATABASE_PATH", env->scratch.path},
     };
     if (cf_config_parse(entries, 4, NULL, &env->config) != CF_OK) {
@@ -85,6 +210,11 @@ static bool env_open(profiles_env *env) {
     if (cf_app_create(env->config, &env->app) != CF_OK) {
         cf_config_destroy(env->config);
         env->config = NULL;
+        return false;
+    }
+    /* The staged root renders the layout with the fixtures' importmap. */
+    if (cf_views_assets_configure(g_assets_root) != CF_OK) {
+        fprintf(stderr, "  env_open: assets configure failed\n");
         return false;
     }
     if (cf_writer_start(env->app, env->config) != CF_OK) return false;
@@ -208,14 +338,15 @@ static void seed_room(cf_db *db, int64_t id, const char *name,
 }
 
 static void seed_membership(cf_db *db, int64_t id, int64_t room_id,
-                            int64_t user_id) {
+                            int64_t user_id, const char *involvement) {
     char sql[512];
     snprintf(sql, sizeof sql,
              "INSERT INTO memberships (id, connected_at, connections, "
              "created_at, involvement, room_id, unread_at, updated_at, "
              "user_id) VALUES (%lld, NULL, 0, '2026-01-02 03:04:05', "
-             "'mentions', %lld, NULL, '2026-01-02 03:04:05', %lld)",
-             (long long)id, (long long)room_id, (long long)user_id);
+             "'%s', %lld, NULL, '2026-01-02 03:04:05', %lld)",
+             (long long)id, involvement, (long long)room_id,
+             (long long)user_id);
     exec_sql(db, sql);
 }
 
@@ -236,6 +367,139 @@ static void seed_blob_attachment(cf_db *db, int64_t blob_id,
              (long long)attachment_id, (long long)blob_id,
              (long long)user_id);
     exec_sql(db, sql);
+}
+
+/* --- golden fixture rows (facts.json / the reference fixtures) ------------- */
+
+static void seed_fixture_account(cf_db *db) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO accounts (id, created_at, custom_styles, join_code, "
+             "name, settings, singleton_guard, updated_at) VALUES "
+             "(%d, '2026-09-26 13:00:20.000000', NULL, 'CRMu-l8Ge-KB9B', "
+             "'37signals', NULL, 0, '2026-09-26 13:00:20.000000')",
+             ACCOUNT_ID);
+    exec_sql(db, sql);
+}
+
+static void seed_fixture_user(cf_db *db, int64_t id, const char *name,
+                              const char *email, const char *bio, int role,
+                              int status) {
+    char sql[768];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO users (id, bio, created_at, email_address, name, "
+             "role, status, updated_at) VALUES (%lld, %s, "
+             "'2026-09-26 13:00:10.000000', %s, '%s', %d, %d, "
+             "'2026-09-26 13:00:20.000000')",
+             (long long)id, bio != NULL ? "?" : "NULL",
+             email != NULL ? "?" : "NULL", name, role, status);
+    sqlite3 *handle = cf_db_handle(db);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(handle, sql, -1, &stmt, NULL) == SQLITE_OK);
+    int bind = 1;
+    if (bio != NULL) sqlite3_bind_text(stmt, bind++, bio, -1, SQLITE_TRANSIENT);
+    if (email != NULL) {
+        sqlite3_bind_text(stmt, bind++, email, -1, SQLITE_TRANSIENT);
+    }
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(step == SQLITE_DONE);
+}
+
+static void seed_fixture_room(cf_db *db, int64_t id, const char *name,
+                              const char *type, int64_t creator_id,
+                              const char *created_at) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO rooms (id, created_at, creator_id, name, type, "
+             "updated_at) VALUES (%lld, '%s', %lld, %s, '%s', "
+             "'2026-09-26 13:00:20.300000')",
+             (long long)id, created_at, (long long)creator_id,
+             name != NULL ? "?" : "NULL", type);
+    sqlite3 *handle = cf_db_handle(db);
+    sqlite3_stmt *stmt = NULL;
+    CF_REQUIRE(sqlite3_prepare_v2(handle, sql, -1, &stmt, NULL) == SQLITE_OK);
+    if (name != NULL) {
+        sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+    }
+    int step = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    CF_REQUIRE(step == SQLITE_DONE);
+}
+
+static void seed_fixture_membership(cf_db *db, int64_t id, int64_t room_id,
+                                    int64_t user_id, const char *involvement) {
+    char sql[512];
+    snprintf(sql, sizeof sql,
+             "INSERT INTO memberships (id, created_at, involvement, room_id, "
+             "unread_at, updated_at, user_id) VALUES (%lld, '2026-09-26 "
+             "12:00:00.000000', '%s', %lld, NULL, "
+             "'2026-09-26 12:00:00.000000', %lld)",
+             (long long)id, involvement, (long long)room_id,
+             (long long)user_id);
+    exec_sql(db, sql);
+}
+
+/* The facts.json rows: David's and Kevin's memberships drive the two golden
+ * pages; Designers is seeded as David's earliest room (`Room.original`), the
+ * push page's last-room target.  The direct memberships are inserted so the
+ * `ORDER BY LOWER(rooms.name)` ties (all direct rooms have a NULL name) list
+ * them in the reference's order (users_sidebars_test.c note). */
+static void seed_fixture(cf_db *db) {
+    seed_fixture_account(db);
+    seed_fixture_user(db, DAVID, "David", "david@37signals.com", NULL, 1, 0);
+    seed_fixture_user(db, JASON, "Jason", "jason@37signals.com", NULL, 1, 0);
+    seed_fixture_user(db, BENDER, "Bender Bot", NULL, NULL, 2, 0);
+    seed_fixture_user(db, KEVIN, "Kevin", "kevin@37signals.com", "Programmer",
+                      0, 0);
+    seed_fixture_user(db, JZ, "JZ", "jz@37signals.com", "Designer", 0, 0);
+    seed_fixture_user(db, EX_EMPLOYEE, "Ex Employee",
+                      "ex-deactivated-e892fe70-ae77-4cee-9fc0-0b7c37f5b417"
+                      "@37signals.com",
+                      NULL, 0, 1);
+    seed_fixture_user(db, SPAM_HAM, "Spam Ham", "spam@example.com", NULL, 0,
+                      2);
+    seed_fixture_user(db, ANNA, "Anna Bea Cole", "abc@example.com", NULL, 0,
+                      0);
+
+    seed_fixture_room(db, ALL_PETS, "All Pets", "Rooms::Open", DAVID,
+                      "2026-09-26 12:00:00.000000");
+    seed_fixture_room(db, DIRECT_JASON, NULL, "Rooms::Direct", JASON,
+                      "2026-09-26 12:00:00.000000");
+    seed_fixture_room(db, HQ, "HQ", "Rooms::Open", DAVID,
+                      "2026-09-26 12:00:00.000000");
+    seed_fixture_room(db, DIRECT_BENDER, NULL, "Rooms::Direct", BENDER,
+                      "2026-09-26 12:00:00.000000");
+    seed_fixture_room(db, ALL_TALK, "All Talk", "Rooms::Closed", JASON,
+                      "2026-09-26 12:00:00.000000");
+    seed_fixture_room(db, DESIGNERS, "Designers", "Rooms::Closed", DAVID,
+                      "2026-09-26 11:00:00.000000");
+    seed_fixture_room(db, DIRECT_KEVIN, NULL, "Rooms::Direct", DAVID,
+                      "2026-09-26 12:00:00.000000");
+
+    seed_fixture_membership(db, 900001, DIRECT_JASON, JASON, "everything");
+    seed_fixture_membership(db, 900002, DIRECT_JASON, DAVID, "everything");
+    seed_fixture_membership(db, 900003, DIRECT_KEVIN, DAVID, "everything");
+    seed_fixture_membership(db, 900004, DIRECT_KEVIN, KEVIN, "everything");
+    seed_fixture_membership(db, 900005, DIRECT_BENDER, BENDER, "everything");
+    seed_fixture_membership(db, 900006, DIRECT_BENDER, KEVIN, "everything");
+    seed_fixture_membership(db, 900010, DESIGNERS, DAVID, "mentions");
+    seed_fixture_membership(db, 900011, DESIGNERS, KEVIN, "mentions");
+    seed_fixture_membership(db, 900012, DESIGNERS, JZ, "everything");
+    seed_fixture_membership(db, 900013, DESIGNERS, JASON, "everything");
+    seed_fixture_membership(db, 900020, ALL_PETS, DAVID, "everything");
+    seed_fixture_membership(db, 900021, ALL_PETS, JASON, "everything");
+    seed_fixture_membership(db, 900022, ALL_PETS, SPAM_HAM, "mentions");
+    seed_fixture_membership(db, 900023, ALL_PETS, ANNA, "mentions");
+    seed_fixture_membership(db, 900030, HQ, DAVID, "everything");
+    seed_fixture_membership(db, 900031, HQ, KEVIN, "everything");
+    seed_fixture_membership(db, 900032, HQ, JASON, "everything");
+    seed_fixture_membership(db, 900033, HQ, JZ, "everything");
+    seed_fixture_membership(db, 900034, HQ, SPAM_HAM, "mentions");
+    seed_fixture_membership(db, 900035, HQ, ANNA, "mentions");
+    seed_fixture_membership(db, 900040, ALL_TALK, DAVID, "everything");
+    seed_fixture_membership(db, 900041, ALL_TALK, JASON, "everything");
+    seed_fixture_membership(db, 900042, ALL_TALK, BENDER, "mentions");
 }
 
 /* --- request/response helpers ---------------------------------------------- */
@@ -274,6 +538,16 @@ static void profile_request(cf_request *req, cf_method method,
     }
 }
 
+static bool span_contains(cf_span span, const char *needle) {
+    size_t len = strlen(needle);
+    if (len == 0) return true;
+    if (span.len < len) return false;
+    for (size_t i = 0; i + len <= span.len; i++) {
+        if (memcmp(span.ptr + i, needle, len) == 0) return true;
+    }
+    return false;
+}
+
 static bool head_contains(cf_response *resp, cf_request *req,
                           const char *needle) {
     if (resp->status == 0) resp->status = 200;
@@ -310,6 +584,24 @@ static bool flash_value(cf_ctx *ctx, const char *key, const char *expected) {
     return value.len == len && memcmp(value.ptr, expected, len) == 0;
 }
 
+/* Build GET `/users/me/profile` as `user_id` with the capture's UA. */
+static unsigned profile_fixture_seq = 0;
+
+static void profile_fixture_get(profiles_env *env, cf_request *req,
+                                int64_t user_id, const char *ua) {
+    static char cookie[4096];
+    char token[64];
+    snprintf(token, sizeof token, "profile-token-%u",
+             profile_fixture_seq++);
+    make_session_cookie(env->config, env->scratch.db, cookie, sizeof cookie,
+                        token, user_id);
+    profile_request(req, CF_GET, "/users/me/profile", NULL, NULL, "same-origin",
+                    cookie);
+    if (ua != NULL) {
+        CF_REQUIRE(cf_test_req_header(req, SP("User-Agent"), SP(ua)) == CF_OK);
+    }
+}
+
 /* --- acceptance ------------------------------------------------------------ */
 
 CF_TEST(users_profiles_route_ids_bind_the_actions) {
@@ -325,24 +617,129 @@ CF_TEST(users_profiles_route_ids_bind_the_actions) {
     CF_CHECK(cf_route_action(62) == cf_action_users_profiles_update);
 }
 
-CF_TEST(users_profiles_show_authenticated_gates_on_the_missing_view) {
+/* The V02 render: David's page matches the golden/a fixture token-for-token
+ * (fixture rows seeded; parity SECRET_KEY_BASE; the capture instant frozen so
+ * the transfer token, expiry included, reproduces byte-exactly). */
+CF_TEST(users_profiles_show_matches_the_golden) {
     profiles_env env;
     CF_REQUIRE(env_open(&env));
-    seed_user(env.scratch.db, 1, "David", "david@example.com",
-              "2026-01-02 03:04:05");
-    char cookie[4096];
-    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
-                        "david-session", 1);
+    seed_fixture(env.scratch.db);
+    cf_test_clock_set_fixed_us(GOLDEN_DAVID_NOW_US);
 
     cf_request req;
     cf_response resp;
-    profile_request(&req, CF_GET, "/users/me/profile", NULL, NULL,
-                    "same-origin", cookie);
+    profile_fixture_get(&env, &req, DAVID, CHROME_MAC);
     CF_REQUIRE(run_request(&env, &req, &resp));
-    /* R1: everything loads (see the loader cases), but ProfileShow has no
-     * C view yet, so the ordinary path fails loudly instead of stubbing. */
-    CF_CHECK(resp.status == 500);
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(head_contains(&resp, &req,
+                           "Content-Type: text/html; charset=utf-8\r\n"));
+    /* The page layout carries the stylesheet preload links. */
+    CF_CHECK(head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("profile_chrome_mac", (const char *)body.ptr, body.len);
     cf_response_dispose(&resp);
+    cf_test_clock_clear();
+    env_close(&env);
+}
+
+/* Kevin (member) viewing his own profile: his memberships, bio and email. */
+CF_TEST(users_profiles_kevin_matches_the_golden) {
+    profiles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_fixture(env.scratch.db);
+    cf_test_clock_set_fixed_us(GOLDEN_KEVIN_NOW_US);
+
+    cf_request req;
+    cf_response resp;
+    profile_fixture_get(&env, &req, KEVIN, CHROME_MAC);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("profile_kevin", (const char *)body.ptr, body.len);
+    cf_response_dispose(&resp);
+    cf_test_clock_clear();
+    env_close(&env);
+}
+
+/* An attached avatar renders the delete control (the golden's with_avatar
+ * case) while the avatar image stays the token-based path. */
+CF_TEST(users_profiles_with_avatar_matches_the_golden) {
+    profiles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_fixture(env.scratch.db);
+    seed_blob_attachment(env.scratch.db, 50, 60, KEVIN);
+    /* The capture attached the avatar (and the account logo) later in the
+     * run, touching both rows: the golden's fresh paths carry 13:00:29.  The
+     * same late section had already set the account's custom styles. */
+    {
+        char sql[256];
+        snprintf(sql, sizeof sql,
+                 "UPDATE users SET updated_at = '2026-09-26 13:00:29.000000' "
+                 "WHERE id = %lld",
+                 (long long)KEVIN);
+        exec_sql(env.scratch.db, sql);
+    }
+    exec_sql(env.scratch.db,
+             "UPDATE accounts SET updated_at = '2026-09-26 13:00:29.000000', "
+             "custom_styles = 'body { --x: 1; } a > b { color: red }'");
+    /* The same late section attached the account logo (body class). */
+    {
+        char sql[768];
+        snprintf(sql, sizeof sql,
+                 "INSERT INTO active_storage_blobs (id, byte_size, checksum, "
+                 "content_type, created_at, filename, key, metadata, "
+                 "service_name) VALUES (51, 10, NULL, 'image/png', "
+                 "'2026-09-26 13:00:29.000000', 'logo.png', 'logo-key', NULL, "
+                 "'disk')");
+        exec_sql(env.scratch.db, sql);
+        snprintf(sql, sizeof sql,
+                 "INSERT INTO active_storage_attachments (id, blob_id, "
+                 "created_at, name, record_id, record_type) VALUES (61, 51, "
+                 "'2026-09-26 13:00:29.000000', 'logo', %d, 'Account')",
+                 ACCOUNT_ID);
+        exec_sql(env.scratch.db, sql);
+    }
+    cf_test_clock_set_fixed_us(GOLDEN_KEVIN_NOW_US);
+
+    cf_request req;
+    cf_response resp;
+    profile_fixture_get(&env, &req, KEVIN, CHROME_MAC);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    cf_golden_expect("profile_with_avatar", (const char *)body.ptr, body.len);
+    cf_response_dispose(&resp);
+    cf_test_clock_clear();
+    env_close(&env);
+}
+
+/* A Turbo-Frame request renders turbo-rails' frame layout (head + content,
+ * no title/nav) and carries no Link preload header. */
+CF_TEST(users_profiles_turbo_frame_renders_the_frame_layout) {
+    profiles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_fixture(env.scratch.db);
+    cf_test_clock_set_fixed_us(GOLDEN_KEVIN_NOW_US);
+
+    cf_request req;
+    cf_response resp;
+    profile_fixture_get(&env, &req, KEVIN, CHROME_MAC);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Turbo-Frame"),
+                                  SP("profile")) == CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_REQUIRE(resp.status == 200);
+    CF_CHECK(!head_contains(&resp, &req, "Link: <"));
+    CF_REQUIRE(resp.body != NULL);
+    cf_span body = cf_buf_span(resp.body);
+    CF_CHECK(span_contains(body, "id=\"session_transfer_url\""));
+    CF_CHECK(span_contains(body, "name=\"user[name]\""));
+    CF_CHECK(!span_contains(body, "<title>Kevin</title>"));
+    CF_CHECK(!span_contains(body, "<nav id=\"nav\">"));
+    cf_response_dispose(&resp);
+    cf_test_clock_clear();
     env_close(&env);
 }
 
@@ -381,7 +778,7 @@ CF_TEST(users_profiles_show_unacceptable_format_is_406) {
     env_close(&env);
 }
 
-CF_TEST(users_profiles_loader_signs_partitions_and_reports_attached) {
+CF_TEST(users_profiles_presenter_maps_the_profile_model) {
     profiles_env env;
     CF_REQUIRE(env_open(&env));
     seed_user(env.scratch.db, 1, "David", NULL, "2026-01-02 03:04:05");
@@ -391,33 +788,39 @@ CF_TEST(users_profiles_loader_signs_partitions_and_reports_attached) {
     seed_room(env.scratch.db, 11, "all-talk", "Rooms::Open", 2);
     seed_room(env.scratch.db, 12, "dm", "Rooms::Direct", 2);
     seed_room(env.scratch.db, 13, "Bravo", "Rooms::Open", 2);
-    seed_membership(env.scratch.db, 101, 10, 1);
-    seed_membership(env.scratch.db, 102, 11, 1);
-    seed_membership(env.scratch.db, 103, 12, 1);
-    seed_membership(env.scratch.db, 104, 13, 1);
-    seed_membership(env.scratch.db, 105, 10, 2); /* another user's row */
+    seed_membership(env.scratch.db, 101, 10, 1, "everything");
+    seed_membership(env.scratch.db, 102, 11, 1, "mentions");
+    seed_membership(env.scratch.db, 103, 12, 1, "nothing");
+    seed_membership(env.scratch.db, 104, 13, 1, "invisible");
+    seed_membership(env.scratch.db, 105, 10, 2, "everything"); /* other user */
 
-    cf_str transfer = {0};
-    bool attached = true; /* must be overwritten */
-    cf_membership_room_pair_vector direct = {0};
-    cf_membership_room_pair_vector shared = {0};
-    int64_t now = INT64_C(1767225600000000); /* 2026-01-01T00:00:00Z */
-    CF_REQUIRE(cf_users_profiles_load(env.scratch.db, env.config, 1, now,
-                                      &transfer, &attached, &direct,
-                                      &shared) == CF_OK);
-    CF_CHECK(!attached);
-
-    /* transfer_id verifies as purpose "transfer" for this user. */
-    cf_optional_i64 verified = {false, 0};
+    cf_request req;
+    cf_response resp;
+    cf_response_init(&resp);
+    profile_request(&req, CF_GET, "/users/me/profile", NULL, NULL,
+                    "same-origin", NULL);
+    cf_ctx ctx;
+    CF_REQUIRE(cf_ctx_create(&ctx, env.app, env.scratch.db, &req, &resp) ==
+               CF_OK);
+    cf_user user = {0};
     bool found = false;
+    CF_REQUIRE(cf_user_find_by_id(env.scratch.db, 1, &found, &user) == CF_OK);
+    CF_REQUIRE(found);
+    cf_view_users_profile_model model = {0};
+    CF_REQUIRE(cf_presenter_users_profile(&ctx, &user, &model) == CF_OK);
+
+    /* transfer_id verifies as purpose "transfer" for this user... */
+    int64_t now = cf_now_us(env.app);
+    cf_optional_i64 verified = {false, 0};
+    bool tf_found = false;
     CF_REQUIRE(cf_auth_signed_id_verify(
                    (cf_span){(const unsigned char *)env.config->secret_key_base,
                              env.config->secret_key_base_len},
                    SP("User"),
-                   (cf_span){(const unsigned char *)transfer.ptr,
-                             transfer.len},
-                   SP("transfer"), true, now, &verified, &found) == CF_OK);
-    CF_CHECK(found && verified.present && verified.value == 1);
+                   (cf_span){(const unsigned char *)model.transfer_id.ptr,
+                             model.transfer_id.len},
+                   SP("transfer"), true, now, &verified, &tf_found) == CF_OK);
+    CF_CHECK(tf_found && verified.present && verified.value == 1);
     /* ...and for no other purpose. */
     cf_optional_i64 wrong = {false, 0};
     bool wrong_found = true;
@@ -425,40 +828,86 @@ CF_TEST(users_profiles_loader_signs_partitions_and_reports_attached) {
                    (cf_span){(const unsigned char *)env.config->secret_key_base,
                              env.config->secret_key_base_len},
                    SP("User"),
-                   (cf_span){(const unsigned char *)transfer.ptr,
-                             transfer.len},
+                   (cf_span){(const unsigned char *)model.transfer_id.ptr,
+                             model.transfer_id.len},
                    SP("avatar"), true, now, &wrong, &wrong_found) == CF_OK);
     CF_CHECK(!wrong_found);
 
-    /* Partition keeps with_ordered_room order within each side. */
-    CF_REQUIRE(shared.len == 3 && direct.len == 1);
-    CF_CHECK(shared.items[0].room.id == 11);
-    CF_CHECK(shared.items[1].room.id == 13);
-    CF_CHECK(shared.items[2].room.id == 10);
-    CF_CHECK(direct.items[0].room.id == 12);
-    for (size_t i = 0; i < shared.len; i++) {
-        CF_CHECK(shared.items[i].membership.user_id == 1);
-        CF_CHECK(shared.items[i].room.room_type != CF_ROOM_DIRECT);
-    }
-    CF_CHECK(direct.items[0].room.room_type == CF_ROOM_DIRECT);
+    /* UserSummary: the row's fields plus the token-based avatar path. */
+    CF_CHECK(!model.avatar_attached);
+    CF_CHECK(model.user.id == 1);
+    CF_CHECK(model.user.name.len == 5 &&
+             memcmp(model.user.name.ptr, "David", 5) == 0);
+    CF_CHECK(!model.user.has_bio && !model.user.has_email);
+    CF_CHECK(model.user.role == CF_ROLE_MEMBER &&
+             model.user.status == CF_STATUS_ACTIVE);
+    CF_CHECK(span_contains(
+        (cf_span){(const unsigned char *)model.user.avatar_path.ptr,
+                  model.user.avatar_path.len},
+        "/avatar?v=20260102030405"));
 
-    cf_str_dispose(&transfer);
-    cf_membership_room_pair_vector_dispose(&direct);
-    cf_membership_room_pair_vector_dispose(&shared);
+    /* Partition keeps with_ordered_room order within each side; param keys,
+     * display names (a direct room with no other member is the viewer) and
+     * involvements match profile_memberships. */
+    CF_REQUIRE(model.shared_memberships.len == 3 &&
+               model.direct_memberships.len == 1);
+    const cf_view_profile_membership *s0 = &model.shared_memberships.items[0];
+    const cf_view_profile_membership *s1 = &model.shared_memberships.items[1];
+    const cf_view_profile_membership *s2 = &model.shared_memberships.items[2];
+    const cf_view_profile_membership *d0 = &model.direct_memberships.items[0];
+    CF_CHECK(s0->room_id == 11 && s1->room_id == 13 && s2->room_id == 10);
+    CF_CHECK(d0->room_id == 12 && d0->direct);
+    CF_CHECK(!s0->direct && !s1->direct && !s2->direct);
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         s0->room_param_key.ptr,
+                                     s0->room_param_key.len},
+                           "rooms_open"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         d0->room_param_key.ptr,
+                                     d0->room_param_key.len},
+                           "rooms_direct"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         s0->room_display_name.ptr,
+                                     s0->room_display_name.len},
+                           "all-talk"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         s1->room_display_name.ptr,
+                                     s1->room_display_name.len},
+                           "Bravo"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         s2->room_display_name.ptr,
+                                     s2->room_display_name.len},
+                           "Zebra"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)
+                                         d0->room_display_name.ptr,
+                                     d0->room_display_name.len},
+                           "David"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)s0->involvement.ptr,
+                                     s0->involvement.len},
+                           "mentions"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)s1->involvement.ptr,
+                                     s1->involvement.len},
+                           "invisible"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)s2->involvement.ptr,
+                                     s2->involvement.len},
+                           "everything"));
+    CF_CHECK(span_contains((cf_span){(const unsigned char *)d0->involvement.ptr,
+                                     d0->involvement.len},
+                           "nothing"));
+    cf_view_users_profile_model_dispose(&model);
 
     /* With an avatar attached, the flag flips and nothing else changes. */
     seed_blob_attachment(env.scratch.db, 50, 60, 1);
-    memset(&transfer, 0, sizeof transfer);
-    memset(&direct, 0, sizeof direct);
-    memset(&shared, 0, sizeof shared);
-    CF_REQUIRE(cf_users_profiles_load(env.scratch.db, env.config, 1, now,
-                                      &transfer, &attached, &direct,
-                                      &shared) == CF_OK);
-    CF_CHECK(attached);
-    CF_CHECK(shared.len == 3 && direct.len == 1);
-    cf_str_dispose(&transfer);
-    cf_membership_room_pair_vector_dispose(&direct);
-    cf_membership_room_pair_vector_dispose(&shared);
+    memset(&model, 0, sizeof model);
+    CF_REQUIRE(cf_presenter_users_profile(&ctx, &user, &model) == CF_OK);
+    CF_CHECK(model.avatar_attached);
+    CF_CHECK(model.shared_memberships.len == 3 &&
+             model.direct_memberships.len == 1);
+    cf_view_users_profile_model_dispose(&model);
+
+    cf_user_dispose(&user);
+    cf_ctx_destroy(&ctx);
+    cf_response_dispose(&resp);
     env_close(&env);
 }
 

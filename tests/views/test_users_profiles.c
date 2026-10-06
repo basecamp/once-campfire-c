@@ -9,10 +9,9 @@
  * Models are built from the case's facts (users/data), exactly as the Rust
  * runner builds ProfileShow/PushSubscriptionsIndex from facts.json.
  *
- * The renderers live in src/views/users_profiles.c and src/views/users_push.c.
- * Their view-model structs are copied field-for-field here until the
- * integrator lands the proposed views.h declarations (see the TUs' headers);
- * no TU includes both copies, so there is no collision today.
+ * The renderers live in src/views/users_profiles.c and src/views/users_push.c;
+ * their view models and declarations live in src/views.h since the V02
+ * presenter packet landed them (this file uses the real types directly).
  */
 #include "cf_test.h"
 
@@ -26,84 +25,6 @@
 #include <string.h>
 
 #include "yyjson.h"
-
-/* ---- local copies of the proposed view models (see the TUs) ---------------- */
-
-typedef struct {
-    int64_t id;
-    cf_str name;
-    bool has_bio;
-    cf_str bio;
-    bool has_email;
-    cf_str email_address;
-    cf_role role;
-    cf_status status;
-    cf_str avatar_path;
-} t_profile_user;
-
-typedef struct {
-    int64_t room_id;
-    cf_str room_param_key;
-    cf_str room_display_name;
-    cf_str involvement;
-    bool direct;
-} t_profile_membership;
-
-typedef struct {
-    t_profile_membership *items;
-    size_t len, cap;
-} t_profile_membership_vector;
-
-typedef struct {
-    t_profile_user user;
-    bool avatar_attached;
-    cf_str transfer_id;
-    t_profile_membership_vector shared_memberships;
-    t_profile_membership_vector direct_memberships;
-} t_profile_model;
-
-typedef struct {
-    int64_t id;
-    cf_str endpoint;
-    cf_str browser;
-    cf_str version;
-    cf_str platform;
-} t_push_subscription;
-
-typedef struct {
-    t_push_subscription *items;
-    size_t len, cap;
-} t_push_vector;
-
-typedef struct {
-    t_push_vector subscriptions;
-    bool has_last_room;
-    int64_t last_room_id;
-} t_push_model;
-
-cf_err cf_view_users_profile_show(const cf_view_ctx *,
-                                  const t_profile_model *, cf_builder *);
-cf_err cf_view_users_profile_show_frame(const cf_view_ctx *,
-                                        const t_profile_model *,
-                                        cf_builder *);
-cf_err cf_view_users_profile_transfer(const cf_view_ctx *,
-                                      const t_profile_user *, cf_span,
-                                      cf_builder *);
-cf_err cf_view_users_profile_membership(const cf_view_ctx *,
-                                        const t_profile_membership *,
-                                        cf_builder *);
-void cf_view_users_profile_model_dispose(t_profile_model *model);
-cf_err cf_view_users_push_index(const cf_view_ctx *, const t_push_model *,
-                                cf_builder *);
-cf_err cf_view_users_push_index_frame(const cf_view_ctx *,
-                                      const t_push_model *, cf_builder *);
-cf_err cf_view_push_subscription_partial(const cf_view_ctx *,
-                                         const t_push_subscription *,
-                                         cf_builder *);
-void cf_view_users_push_index_model_dispose(t_push_model *model);
-cf_err cf_view_push_subscription_parse(cf_span user_agent, cf_str *browser_out,
-                                       cf_str *version_out,
-                                       cf_str *platform_out);
 
 /* ---- small builders --------------------------------------------------------- */
 
@@ -128,20 +49,20 @@ static void clear_str(cf_str *value) {
     memset(value, 0, sizeof *value);
 }
 
-static void profile_dispose(t_profile_model *model) {
+static void profile_dispose(cf_view_users_profile_model *model) {
     if (model == NULL) return;
     cf_view_users_profile_model_dispose(model);
 }
 
-static void push_dispose(t_push_model *model) {
+static void push_dispose(cf_view_users_push_index_model *model) {
     if (model == NULL) return;
     cf_view_users_push_index_model_dispose(model);
 }
 
-static cf_err push_item(t_push_vector *vector, t_push_subscription *item) {
+static cf_err push_item(cf_view_push_subscription_vector *vector, cf_view_push_subscription *item) {
     if (vector->len == vector->cap) {
         size_t cap = vector->cap != 0 ? vector->cap * 2 : 4;
-        t_push_subscription *grown =
+        cf_view_push_subscription *grown =
             realloc(vector->items, cap * sizeof *grown);
         if (grown == NULL) return CF_NOMEM;
         vector->items = grown;
@@ -152,11 +73,11 @@ static cf_err push_item(t_push_vector *vector, t_push_subscription *item) {
     return CF_OK;
 }
 
-static cf_err membership_item(t_profile_membership_vector *vector,
-                              t_profile_membership *item) {
+static cf_err membership_item(cf_view_profile_membership_vector *vector,
+                              cf_view_profile_membership *item) {
     if (vector->len == vector->cap) {
         size_t cap = vector->cap != 0 ? vector->cap * 2 : 4;
-        t_profile_membership *grown =
+        cf_view_profile_membership *grown =
             realloc(vector->items, cap * sizeof *grown);
         if (grown == NULL) return CF_NOMEM;
         vector->items = grown;
@@ -215,7 +136,7 @@ static void overlay_platform(cf_view_ctx *ctx, const char *ua) {
 }
 
 /* parity_a.rs users_profiles_show(): case data into the view model. */
-static cf_err build_profile(const char *name, t_profile_model *model) {
+static cf_err build_profile(const char *name, cf_view_users_profile_model *model) {
     memset(model, 0, sizeof *model);
     yyjson_val *case_obj = cf_facts_case(name);
     CF_REQUIRE(case_obj != NULL);
@@ -277,7 +198,7 @@ static cf_err build_profile(const char *name, t_profile_model *model) {
         yyjson_val *list = yyjson_obj_get(profile, sides[s]);
         for (size_t i = 0; i < yyjson_arr_size(list); i++) {
             yyjson_val *item = yyjson_arr_get(list, i);
-            t_profile_membership entry;
+            cf_view_profile_membership entry;
             memset(&entry, 0, sizeof entry);
             entry.room_id = cf_facts_i64(item, "room_id", 0);
             entry.direct = cf_facts_bool(item, "direct");
@@ -301,7 +222,7 @@ static cf_err build_profile(const char *name, t_profile_model *model) {
 }
 
 /* parity_a.rs users_push_subscriptions(): case data into the view model. */
-static cf_err build_push(const char *name, t_push_model *model) {
+static cf_err build_push(const char *name, cf_view_users_push_index_model *model) {
     memset(model, 0, sizeof *model);
     yyjson_val *case_obj = cf_facts_case(name);
     CF_REQUIRE(case_obj != NULL);
@@ -309,7 +230,7 @@ static cf_err build_push(const char *name, t_push_model *model) {
     yyjson_val *list = yyjson_obj_get(data, "push_subscriptions");
     for (size_t i = 0; i < yyjson_arr_size(list); i++) {
         yyjson_val *item = yyjson_arr_get(list, i);
-        t_push_subscription entry;
+        cf_view_push_subscription entry;
         memset(&entry, 0, sizeof entry);
         entry.id = cf_facts_i64(item, "id", 0);
         cf_err rc = set_str(&entry.endpoint, cf_facts_str(item, "endpoint"));
@@ -368,7 +289,7 @@ CF_TEST(users_profiles_show_matches_golden) {
         CF_REQUIRE(
             cf_facts_view_ctx(&ctx, profile_cases[i], NULL, NULL));
         overlay_platform(&ctx, profile_uas[i]);
-        t_profile_model model;
+        cf_view_users_profile_model model;
         CF_REQUIRE(build_profile(profile_cases[i], &model) == CF_OK);
         cf_builder out = {0};
         CF_REQUIRE(cf_view_users_profile_show(&ctx, &model, &out) == CF_OK);
@@ -386,7 +307,7 @@ CF_TEST(users_profiles_kevin_and_avatar_golden) {
         cf_view_ctx ctx = {0};
         CF_REQUIRE(cf_facts_view_ctx(&ctx, name, NULL, NULL));
         overlay_platform(&ctx, "chrome_mac");
-        t_profile_model model;
+        cf_view_users_profile_model model;
         CF_REQUIRE(build_profile(name, &model) == CF_OK);
         cf_builder out = {0};
         CF_REQUIRE(cf_view_users_profile_show(&ctx, &model, &out) == CF_OK);
@@ -401,7 +322,7 @@ CF_TEST(users_push_subscriptions_matches_golden) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "push_subscriptions", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_push_model model;
+    cf_view_users_push_index_model model;
     CF_REQUIRE(build_push("push_subscriptions", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_push_index(&ctx, &model, &out) == CF_OK);
@@ -417,7 +338,7 @@ CF_TEST(users_profiles_frame_has_content_without_page_chrome) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "profile_kevin", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_profile_model model;
+    cf_view_users_profile_model model;
     CF_REQUIRE(build_profile("profile_kevin", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_profile_show_frame(&ctx, &model, &out) ==
@@ -438,7 +359,7 @@ CF_TEST(users_push_frame_has_content_without_page_chrome) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "push_subscriptions", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_push_model model;
+    cf_view_users_push_index_model model;
     CF_REQUIRE(build_push("push_subscriptions", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_push_index_frame(&ctx, &model, &out) == CF_OK);
@@ -457,7 +378,7 @@ CF_TEST(users_profiles_page_has_the_layout_and_forms) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "profile_kevin", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_profile_model model;
+    cf_view_users_profile_model model;
     CF_REQUIRE(build_profile("profile_kevin", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_profile_show(&ctx, &model, &out) == CF_OK);
@@ -494,7 +415,7 @@ CF_TEST(users_profiles_avatar_attached_shows_delete) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "profile_with_avatar", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_profile_model model;
+    cf_view_users_profile_model model;
     CF_REQUIRE(build_profile("profile_with_avatar", &model) == CF_OK);
     CF_REQUIRE(model.avatar_attached);
     cf_builder out = {0};
@@ -515,7 +436,7 @@ CF_TEST(users_profiles_transfer_other_user_arm) {
     /* ctx current user is Kevin (the `as` user); force David to take the
      * non-self arm. */
     ctx.current_user.id = 127326141;
-    t_profile_model model;
+    cf_view_users_profile_model model;
     CF_REQUIRE(build_profile("profile_kevin", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_profile_transfer(
@@ -536,7 +457,7 @@ CF_TEST(users_profiles_empty_memberships_render_cleanly) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "profile_kevin", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_profile_model model;
+    cf_view_users_profile_model model;
     memset(&model, 0, sizeof model);
     model.user.id = 9;
     CF_REQUIRE(set_str(&model.user.name, "Solo") == CF_OK);
@@ -560,7 +481,7 @@ CF_TEST(users_push_page_has_the_layout_and_buttons) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "push_subscriptions", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_push_model model;
+    cf_view_users_push_index_model model;
     CF_REQUIRE(build_push("push_subscriptions", &model) == CF_OK);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_push_index(&ctx, &model, &out) == CF_OK);
@@ -587,7 +508,7 @@ CF_TEST(users_push_empty_renders_the_shell) {
     cf_view_ctx ctx = {0};
     CF_REQUIRE(cf_facts_view_ctx(&ctx, "push_subscriptions", NULL, NULL));
     overlay_platform(&ctx, "chrome_mac");
-    t_push_model model;
+    cf_view_users_push_index_model model;
     memset(&model, 0, sizeof model);
     cf_builder out = {0};
     CF_REQUIRE(cf_view_users_push_index(&ctx, &model, &out) == CF_OK);
@@ -645,7 +566,7 @@ CF_TEST(users_profiles_failure_leaves_the_builder_unchanged) {
     CF_CHECK(cf_view_users_profile_transfer(&ctx, NULL, (cf_span){NULL, 0},
                                             &out) == CF_INVALID);
     CF_CHECK(out.len == len);
-    t_push_model push;
+    cf_view_users_push_index_model push;
     memset(&push, 0, sizeof push);
     CF_CHECK(cf_view_users_push_index(NULL, &push, &out) == CF_INVALID);
     CF_CHECK(out.len == len);
