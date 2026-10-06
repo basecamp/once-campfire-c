@@ -7,7 +7,9 @@
  *
  * The HTML inside each stream comes from the caller's `Partials` (Rust's
  * trait): production passes A02's presenters and renderers through
- * cf_broadcast_partials_views, so no markup is duplicated here. Broadcasts
+ * cf_broadcast_partials_views, so no markup is duplicated here. Direct-room
+ * creates render per recipient (the membership's own unread state), room
+ * list partials render once and are shared by every recipient. Broadcasts
  * happen after the caller's commit; a CF_BUSY return is the post-commit
  * delivery failure the caller records (never a rollback). */
 #include "cable/channels.h"
@@ -772,24 +774,6 @@ static cf_err views_boost(void *user, const cf_boost *boost,
     return rc;
 }
 
-static cf_err views_shared_room(void *user, const cf_room *room,
-                                cf_builder *out) {
-    (void)user;
-    (void)room;
-    (void)out;
-    /* users/sidebars/rooms/_shared is a later A02 packet; the renderer is not
-     * part of the view contract yet, and C02 does not duplicate its markup. */
-    return partial_missing("users/sidebars/rooms/_shared");
-}
-
-static cf_err views_direct_room(void *user, const cf_membership *membership,
-                                cf_builder *out) {
-    (void)user;
-    (void)membership;
-    (void)out;
-    return partial_missing("users/sidebars/rooms/_direct");
-}
-
 void cf_broadcast_partials_views(cf_broadcast_partials *out,
                                  cf_broadcast_views *views) {
     if (out == NULL) return;
@@ -798,7 +782,14 @@ void cf_broadcast_partials_views(cf_broadcast_partials *out,
     out->message = views_message;
     out->message_presentation = views_message_presentation;
     out->boost = views_boost;
-    out->shared_room = views_shared_room;
-    out->direct_room = views_direct_room;
+    /* The sidebar room partials are the A02 renderers behind the reference's
+     * `Partials` trait (rooms.rs render_shared_room / directs.rs
+     * broadcast_create_room); they take the cf_broadcast_views pair as their
+     * `user`.  shared_room maps the room row once (unread=false), while
+     * direct_room is called once per membership by
+     * cf_broadcast_direct_room_create, so each recipient's own unread state
+     * is rendered. */
+    out->shared_room = cf_view_rooms_shared_room_partial;
+    out->direct_room = cf_view_rooms_direct_room_partial;
     out->user = views;
 }

@@ -4,9 +4,9 @@
  * selection, frame variants, broadcast partials incl. the involvements
  * update-from-invisible prepend path).
  *
- * The renderers live in src/views/rooms_forms.c; their declarations belong
- * in src/views.h (integrator).  Until they land there they are mirrored
- * here; the mirror must match rooms_forms.c exactly.
+ * The renderers live in src/views/rooms_forms.c; V02 moved their models and
+ * prototypes into src/views.h (the packet proposal), so this file no longer
+ * mirrors the declarations.
  */
 #include "cf_test.h"
 #include "support/golden.h"
@@ -25,73 +25,6 @@
 #include <sqlite3.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* ---- mirror of the proposed src/views.h addition (see rooms_forms.c) ------ */
-
-typedef struct {
-    bool is_new;
-    int64_t room_id;
-    bool has_name;
-    cf_str name;
-    bool can_administer;
-    bool has_last_room_id;
-    int64_t last_room_id;
-    const cf_view_user *users;
-    size_t user_count;
-} cf_view_rooms_open_form_model;
-
-typedef struct {
-    bool is_new;
-    int64_t room_id;
-    bool has_name;
-    cf_str name;
-    bool can_administer;
-    int64_t current_user_id;
-    bool has_last_room_id;
-    int64_t last_room_id;
-    const cf_view_user *selected;
-    size_t selected_count;
-    const cf_view_user *unselected;
-    size_t unselected_count;
-} cf_view_rooms_closed_form_model;
-
-typedef struct {
-    int64_t room_id;
-    cf_str display_name;
-    bool has_last_room_id;
-    int64_t last_room_id;
-    const cf_view_user *users;
-    size_t user_count;
-} cf_view_rooms_direct_edit_model;
-
-void cf_view_rooms_open_form_dispose(cf_view_rooms_open_form_model *model);
-void cf_view_rooms_closed_form_dispose(cf_view_rooms_closed_form_model *model);
-void cf_view_rooms_direct_edit_dispose(cf_view_rooms_direct_edit_model *model);
-cf_err cf_view_rooms_open_form(const cf_view_ctx *ctx,
-                               const cf_view_rooms_open_form_model *model,
-                               cf_builder *out);
-cf_err cf_view_rooms_open_form_frame(const cf_view_ctx *ctx,
-                                     const cf_view_rooms_open_form_model *model,
-                                     cf_builder *out);
-cf_err cf_view_rooms_closed_form(const cf_view_ctx *ctx,
-                                 const cf_view_rooms_closed_form_model *model,
-                                 cf_builder *out);
-cf_err cf_view_rooms_closed_form_frame(
-    const cf_view_ctx *ctx, const cf_view_rooms_closed_form_model *model,
-    cf_builder *out);
-cf_err cf_view_rooms_direct_new(const cf_view_ctx *ctx, cf_builder *out);
-cf_err cf_view_rooms_direct_new_frame(const cf_view_ctx *ctx, cf_builder *out);
-cf_err cf_view_rooms_direct_edit(const cf_view_ctx *ctx,
-                                 const cf_view_rooms_direct_edit_model *model,
-                                 cf_builder *out);
-cf_err cf_view_rooms_direct_edit_frame(
-    const cf_view_ctx *ctx, const cf_view_rooms_direct_edit_model *model,
-    cf_builder *out);
-cf_err cf_view_rooms_shared_room_partial(void *user, const cf_room *room,
-                                         cf_builder *out);
-cf_err cf_view_rooms_direct_room_partial(void *user,
-                                         const cf_membership *membership,
-                                         cf_builder *out);
 
 /* ---- helpers -------------------------------------------------------------- */
 

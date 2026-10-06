@@ -62,32 +62,11 @@
  * (integrator-owned; rows currently on the development 501 until this packet
  * verifies).
  *
- * Integrator requests (views packet; this file is self-contained meanwhile):
- *  R1. cf_view_rooms_closed_form / cf_view_rooms_closed_form_frame — the
- *      ClosedsNew/ClosedsEdit templates (rooms/closeds/new.html, rooms/
- *      closeds/edit.html: the room form, the selected/unselected user
- *      checkbox lists posting `user_ids[]`, the type-switch link and the
- *      delete-room section shown only when can_administer).  Proposed
- *      declarations (src/views.h):
- *        typedef struct { bool is_new; int64_t room_id; cf_str name;
- *                         bool can_administer; int64_t current_user_id;
- *                         cf_view_user *selected; size_t selected_count;
- *                         cf_view_user *unselected;
- *                         size_t unselected_count; } cf_view_rooms_closed_form;
- *        cf_err cf_view_rooms_closed_form(const cf_view_ctx *ctx,
- *            const cf_view_rooms_closed_form *model, cf_builder *out);
- *        cf_err cf_view_rooms_closed_form_frame(const cf_view_ctx *ctx,
- *            const cf_view_rooms_closed_form *model, cf_builder *out);
- *      Until they land, the static functions below render the same form
- *      skeleton (action, room[name] value, checked/unchecked `user_ids[]`
- *      boxes, conditional delete section) with a clearly marked placeholder
- *      body.
- *  R2. The sidebar shared-room partial behind render_shared_room
- *      (rooms.rs render_shared_room: users/sidebars/rooms/_shared), which
- *      the create/update member broadcasts carry.  The action supplies its
- *      own static shim partial (see closeds_shared_room_partial) so the
- *      broadcast plumbing stays exact; swap in the real renderer when it
- *      lands.
+ * V02 swaps: the ClosedsNew/ClosedsEdit render is the real golden-verified
+ * cf_view_rooms_closed_form(_frame) (models in src/views.h), and the
+ * create/update member broadcasts carry the production
+ * `Partials::shared_room` renderer (cf_view_rooms_shared_room_partial via
+ * cf_broadcast_partials_views), so no placeholder markup remains here.
  */
 #include "cf.h"
 
@@ -496,141 +475,33 @@ static void closeds_views_dispose(cf_view_user *views, size_t count) {
     free(views);
 }
 
-/* ---- the ClosedsNew/ClosedsEdit render (INTEGRATOR SHIM R1) --------------- */
+/* ---- the ClosedsNew/ClosedsEdit render ------------------------------------ */
 
-typedef struct {
-    bool is_new;
-    int64_t room_id;
-    cf_span name; /* borrowed: the room name, or the DEFAULT for new */
-    bool has_name;
-    bool can_administer;
-    int64_t current_user_id;
-    /* Partition of User.active.ordered by membership (new: all unselected). */
-    const cf_view_user *selected;
-    size_t selected_count;
-    const cf_view_user *unselected;
-    size_t unselected_count;
-} closeds_form;
-
-static cf_err closeds_user_checkbox(cf_builder *out, const cf_view_user *user,
-                                    bool checked) {
-    char id[40];
-    int n = snprintf(id, sizeof id, "%" PRId64, user->id);
-    if (n < 0 || (size_t)n >= sizeof id) return CF_INTERNAL;
-    cf_err rc = cf_builder_append(out, closeds_span("  <label><input "
-                                                   "type=\"checkbox\" "
-                                                   "name=\"user_ids[]\" "
-                                                   "value=\""));
-    if (rc == CF_OK) {
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)id, (size_t)n});
-    }
-    if (rc == CF_OK && checked) {
-        rc = cf_builder_append(out, closeds_span("\" checked=\"checked"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, closeds_span("\">"));
-    if (rc == CF_OK) {
-        rc = cf_html_text(out, (cf_span){
-                                   (const unsigned char *)user->name.ptr,
-                                   user->name.len});
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, closeds_span("</label>\n"));
-    }
-    return rc;
-}
-
-/* The form skeleton the ClosedsNew/ClosedsEdit templates share (R1): the
- * form action, the `room[name]` value, the selected/unselected `user_ids[]`
- * boxes, and the delete-room section only when can_administer. */
-static cf_err closeds_form_content(const closeds_form *form, cf_builder *out) {
-    cf_err rc;
-    if (form->is_new) {
-        rc = cf_builder_append(out, closeds_span("<form action=\"/rooms/"
-                                                "closeds\" method=\"post\">\n"));
-    } else {
-        char action[80];
-        int n = snprintf(action, sizeof action, "<form action=\"/rooms/"
-                                                "closeds/%" PRId64
-                                                "\" method=\"post\">\n",
-                         form->room_id);
-        if (n < 0 || (size_t)n >= sizeof action) return CF_INTERNAL;
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)action, (size_t)n});
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, closeds_span("  <!-- INTEGRATOR R1: "
-                                                "rooms/closeds form "
-                                                "placeholder -->\n  <input "
-                                                "name=\"room[name]\" "
-                                                "value=\""));
-    }
-    if (rc == CF_OK && form->has_name) rc = cf_html_attr(out, form->name);
-    if (rc == CF_OK) rc = cf_builder_append(out, closeds_span("\">\n"));
-    for (size_t i = 0; rc == CF_OK && i < form->selected_count; i++) {
-        rc = closeds_user_checkbox(out, &form->selected[i], true);
-    }
-    for (size_t i = 0; rc == CF_OK && i < form->unselected_count; i++) {
-        rc = closeds_user_checkbox(out, &form->unselected[i], false);
-    }
-    if (rc == CF_OK && !form->is_new && form->can_administer) {
-        char action[80];
-        int n = snprintf(action, sizeof action,
-                         "  <form action=\"/rooms/%" PRId64
-                         "\" method=\"post\">\n",
-                         form->room_id);
-        if (n < 0 || (size_t)n >= sizeof action) return CF_INTERNAL;
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)action, (size_t)n});
-        if (rc == CF_OK) {
-            rc = cf_builder_append(out, closeds_span("  <input type=\"hidden\" "
-                                                    "name=\"_method\" "
-                                                    "value=\"delete\">\n"
-                                                    "  </form>\n"));
-        }
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, closeds_span("</form>\n"));
-    return rc;
-}
-
-static cf_err closeds_form_page(const cf_view_ctx *ctx,
-                                const closeds_form *form, cf_builder *out) {
-    cf_builder content = {0};
-    cf_err rc = closeds_form_content(form, &content);
-    if (rc == CF_OK) {
-        rc = cf_view_layout_page(ctx, (cf_span){NULL, 0}, false,
-                                 (cf_span){NULL, 0}, false, (cf_span){NULL, 0},
-                                 (cf_span){content.ptr, content.len},
-                                 (cf_span){NULL, 0}, (cf_span){NULL, 0},
-                                 (cf_span){NULL, 0}, out);
-    }
-    cf_builder_dispose(&content);
-    return rc;
-}
-
-static cf_err closeds_form_frame(const cf_view_ctx *ctx,
-                                 const closeds_form *form, cf_builder *out) {
-    cf_builder content = {0};
-    cf_err rc = closeds_form_content(form, &content);
-    if (rc == CF_OK) {
-        rc = cf_view_layout_frame(ctx, (cf_span){NULL, 0},
-                                  (cf_span){content.ptr, content.len}, out);
-    }
-    cf_builder_dispose(&content);
-    return rc;
+/* Copy a borrowed span into an owned cf_str (the form models own their name;
+ * the request params outlive the render but the model contract is owned). */
+static cf_err closeds_str_copy(cf_span span, cf_str *out) {
+    memset(out, 0, sizeof *out);
+    if (span.len != 0 && span.ptr == NULL) return CF_INVALID;
+    char *copy = malloc(span.len + 1);
+    if (copy == NULL) return CF_NOMEM;
+    if (span.len != 0) memcpy(copy, span.ptr, span.len);
+    copy[span.len] = '\0';
+    out->ptr = copy;
+    out->len = span.len;
+    return CF_OK;
 }
 
 /* Render the new/edit form: presenter reads (active users, partitioned by
  * membership for edit) first, then respond_to (HTML only), then
  * Layout::load.  `selected_ids` partitions membership for edit; NULL selects
- * nobody (new). */
+ * nobody (new).  The golden-verified cf_view_rooms_closed_form(_frame) does
+ * the markup; this builds its model and answers the request. */
 static cf_err closeds_render_form(cf_ctx *ctx, bool is_new, int64_t room_id,
                                   cf_span name, bool has_name,
                                   bool can_administer,
                                   int64_t current_user_id,
                                   const int64_t *selected_ids,
                                   size_t selected_count) {
-    (void)current_user_id;
     cf_user_vector users = {0};
     cf_view_user *views = NULL;
     size_t view_count = 0;
@@ -696,22 +567,31 @@ static cf_err closeds_render_form(cf_ctx *ctx, bool is_new, int64_t room_id,
     cf_view_ctx view_ctx;
     cf_view_ctx_init(&view_ctx, ctx, &layout);
 
-    closeds_form form = {
-        .is_new = is_new,
-        .room_id = room_id,
-        .name = name,
-        .has_name = has_name,
-        .can_administer = can_administer,
-        .current_user_id = current_user_id,
-        .selected = selected,
-        .selected_count = selected_len,
-        .unselected = unselected,
-        .unselected_count = unselected_len,
-    };
+    cf_view_rooms_closed_form_model model;
+    memset(&model, 0, sizeof model);
+    model.is_new = is_new;
+    model.room_id = room_id;
+    model.can_administer = can_administer;
+    model.current_user_id = current_user_id;
+    model.has_last_room_id = layout.has_last_room_visited;
+    model.last_room_id = layout.last_room_visited_id;
+    model.selected = selected;
+    model.selected_count = selected_len;
+    model.unselected = unselected;
+    model.unselected_count = unselected_len;
+    if (has_name) {
+        model.has_name = true;
+        rc = closeds_str_copy(name, &model.name);
+    }
+
     bool frame = closeds_turbo_frame_request(ctx->request);
     cf_builder body = {0};
-    rc = frame ? closeds_form_frame(&view_ctx, &form, &body)
-               : closeds_form_page(&view_ctx, &form, &body);
+    if (rc == CF_OK) {
+        rc = frame
+                 ? cf_view_rooms_closed_form_frame(&view_ctx, &model, &body)
+                 : cf_view_rooms_closed_form(&view_ctx, &model, &body);
+    }
+    cf_view_rooms_closed_form_dispose(&model);
     cf_view_layout_model_dispose(&layout);
     closeds_views_dispose(selected, selected_len);
     closeds_views_dispose(unselected, unselected_len);
@@ -949,45 +829,23 @@ static cf_err closeds_revise_write(cf_tx *tx, void *arg) {
 
 /* ---- broadcasts ----------------------------------------------------------- */
 
-/* INTEGRATOR SHIM R2 (see the header): the shared-room partial as a
- * deterministic placeholder, until the sidebar packet lands.  Only the markup
- * is a shim; the per-member streams, action, target and delivery path are
- * the reference's (`broadcast_prepend_to user, :rooms, target:
- * :shared_rooms` for create, `broadcast_replace_to` for update). */
-static cf_err closeds_shared_room_partial(void *user, const cf_room *room,
-                                          cf_builder *out) {
-    (void)user;
-    cf_err rc = cf_builder_append(out, closeds_span("<div class=\"shared-room"
-                                                   "\" data-room-id=\""));
-    if (rc == CF_OK) {
-        char id[32];
-        int n = snprintf(id, sizeof id, "%" PRId64, room->id);
-        if (n < 0 || (size_t)n >= sizeof id) return CF_INTERNAL;
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)id, (size_t)n});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, closeds_span("\">"));
-    if (rc == CF_OK && room->name.present) {
-        rc = cf_html_text(out, (cf_span){
-                                   (const unsigned char *)room->name.value.ptr,
-                                   room->name.value.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, closeds_span("</div>"));
-    return rc;
-}
-
-/* `broadcast_to_members` (closeds.rs): the shared-room partial rendered
- * once, to every member's own rooms stream, through the app's cable.
- * Post-commit delivery policy (00-contracts.md; the rooms.c convention): a
- * full loop queue (CF_BUSY, or a stopping cable) drops the broadcast and is
- * counted; it must not fail the committed mutation.  Other failures
- * propagate.  A missing cable is an internal error. */
+/* `broadcast_to_members` (closeds.rs): the production shared-room partial
+ * (cf_view_rooms_shared_room_partial via cf_broadcast_partials_views)
+ * rendered once, to every member's own rooms stream, through the app's
+ * cable — `broadcast_prepend_to user, :rooms, target: :shared_rooms` for
+ * create, `broadcast_replace_to` for update.  Post-commit delivery policy
+ * (00-contracts.md; the rooms.c convention): a full loop queue (CF_BUSY, or
+ * a stopping cable) drops the broadcast and is counted; it must not fail the
+ * committed mutation.  Other failures propagate.  A missing cable is an
+ * internal error. */
 static cf_err closeds_broadcast(cf_ctx *ctx, const cf_room *room, bool update) {
     cf_cable *cable = cf_app_cable(ctx->app);
     if (cable == NULL) return CF_INTERNAL;
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, NULL);
+    cf_broadcast_views views = {ctx, &view_ctx};
     cf_broadcast_partials partials;
-    memset(&partials, 0, sizeof partials);
-    partials.shared_room = closeds_shared_room_partial;
+    cf_broadcast_partials_views(&partials, &views);
     cf_err rc = update ? cf_broadcast_closed_room_update(ctx->reader, cable,
                                                          room, &partials)
                        : cf_broadcast_closed_room_create(ctx->reader, cable,

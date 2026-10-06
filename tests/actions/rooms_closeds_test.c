@@ -19,10 +19,10 @@
  * (granted vs. revoked exactly as the reference computes them) and replaces
  * the partial on the same per-member streams; `destroy` asserts the
  * reference's internal error with no row changes (there is deliberately no
- * closeds#destroy success path).  The new/edit renders use the packet's R1
- * placeholder forms (asserting action, name value and the checked/unchecked
- * `user_ids[]` partition), not the golden templates, which are the views
- * packet's integrator request.
+ * closeds#destroy success path).  The new/edit renders are the golden
+ * cf_view_rooms_closed_form templates (V02 swap): action, name value and the
+ * checked/unchecked `user_ids[]` partition.  The broadcasts assert the
+ * production users/sidebars/rooms/_shared anchor.
  */
 #include "cf_test.h"
 
@@ -795,12 +795,20 @@ CF_TEST(closeds_create_grants_submitted_users_and_broadcasts) {
     CF_CHECK(member_of(env.scratch.db, id, 2));
     CF_CHECK(!member_of(env.scratch.db, id, 3));
 
-    char payload[256];
+    /* The production `Partials::shared_room` renderer (V02): the exact
+     * users/sidebars/rooms/_shared anchor, not the old placeholder. */
+    char payload[1024];
     snprintf(payload, sizeof payload,
              "<turbo-stream action=\"prepend\" target=\"shared_rooms\">"
-             "<template><div class=\"shared-room\" data-room-id=\"%" PRId64
-             "\">Secret</div></template></turbo-stream>",
-             id);
+             "<template><a id=\"list_rooms_closed_%" PRId64 "\" "
+             "data-rooms-list-target=\"room\" data-room-id=\"%" PRId64 "\" "
+             "data-badge-dot-target=\"unread\" "
+             "data-sorted-list-target=\"item\" data-sorted-list-name=\"Secret\" "
+             "style=\"--column-gap: 0.5em\" class=\"align-center gap room btn "
+             "txt-nowrap\" href=\"/rooms/%" PRId64 "\">\n  <span "
+             "class=\"overflow-ellipsis\">Secret</span>\n</a>"
+             "</template></turbo-stream>",
+             id, id, id);
     CF_CHECK(closeds_conn_expect_payload(&conn2, SP(payload), 5000));
     closeds_conn_close(&conn2);
     closeds_conn_close(&conn3);
@@ -967,10 +975,14 @@ CF_TEST(closeds_edit_partitions_members_and_shows_delete) {
     CF_CHECK(resp.status == 200);
     CF_CHECK(body_contains(&resp, "<form action=\"/rooms/closeds/42\""));
     CF_CHECK(body_contains(&resp, "value=\"Secret\""));
+    /* The golden template's membership switch: the checkbox carries its
+     * switch class before the checked attribute. */
     CF_CHECK(body_contains(&resp,
-                           "value=\"1\" checked=\"checked\""));
+                           "value=\"1\" class=\"switch__input\" "
+                           "checked=\"checked\""));
     CF_CHECK(body_contains(&resp,
-                           "value=\"2\" checked=\"checked\""));
+                           "value=\"2\" class=\"switch__input\" "
+                           "checked=\"checked\""));
     CF_CHECK(body_contains(&resp, "value=\"delete\""));
     cf_response_dispose(&resp);
     env_close(&env);
@@ -1068,14 +1080,32 @@ CF_TEST(closeds_update_revises_memberships_and_broadcasts) {
     CF_CHECK(env.control_events[0].user_id == 2);
     CF_CHECK(env.control_events[0].reconnect);
 
-    char payload[256];
-    snprintf(payload, sizeof payload,
-             "<turbo-stream action=\"replace\" "
-             "target=\"list_rooms_closed_42\">"
-             "<template><div class=\"shared-room\" data-room-id=\"42\">"
-             "Vault</div></template></turbo-stream>");
-    CF_CHECK(closeds_conn_expect_payload(&conn1, SP(payload), 5000));
-    CF_CHECK(closeds_conn_expect_payload(&conn3, SP(payload), 5000));
+    CF_CHECK(closeds_conn_expect_payload(
+        &conn1,
+        SP("<turbo-stream action=\"replace\" "
+           "target=\"list_rooms_closed_42\">"
+           "<template><a id=\"list_rooms_closed_42\" "
+           "data-rooms-list-target=\"room\" data-room-id=\"42\" "
+           "data-badge-dot-target=\"unread\" data-sorted-list-target=\"item\" "
+           "data-sorted-list-name=\"Vault\" style=\"--column-gap: 0.5em\" "
+           "class=\"align-center gap room btn txt-nowrap\" "
+           "href=\"/rooms/42\">\n  <span "
+           "class=\"overflow-ellipsis\">Vault</span>\n</a>"
+           "</template></turbo-stream>"),
+        5000));
+    CF_CHECK(closeds_conn_expect_payload(
+        &conn3,
+        SP("<turbo-stream action=\"replace\" "
+           "target=\"list_rooms_closed_42\">"
+           "<template><a id=\"list_rooms_closed_42\" "
+           "data-rooms-list-target=\"room\" data-room-id=\"42\" "
+           "data-badge-dot-target=\"unread\" data-sorted-list-target=\"item\" "
+           "data-sorted-list-name=\"Vault\" style=\"--column-gap: 0.5em\" "
+           "class=\"align-center gap room btn txt-nowrap\" "
+           "href=\"/rooms/42\">\n  <span "
+           "class=\"overflow-ellipsis\">Vault</span>\n</a>"
+           "</template></turbo-stream>"),
+        5000));
     closeds_conn_close(&conn1);
     closeds_conn_close(&conn3);
     env_close(&env);

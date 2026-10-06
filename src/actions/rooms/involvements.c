@@ -51,14 +51,14 @@
  *      the template's turbo-frame shell byte for byte (frame id, url-param,
  *      data attributes) with a clearly marked placeholder button carrying
  *      the current involvement value where the helper's bell form goes.
- *  R2. The sidebar shared-room partial behind render_shared_room
- *      (rooms.rs render_shared_room: users/sidebars/rooms/_shared), which
- *      the update broadcast's prepend branch needs.  The action calls the
- *      landed cf_broadcast_partials_views production partials; their
- *      shared_room slot reports CF_NOT_FOUND until that packet lands (the
- *      cable module's own documented gap), so an update *from* invisible
- *      currently fails after committing.  Covered transitions (to invisible
- *      removes, to a visible value only redirects) need no partial.
+ *  R2 (V02, done). The sidebar shared-room partial behind render_shared_room
+ *      (rooms.rs render_shared_room: users/sidebars/rooms/_shared), which the
+ *      update broadcast's prepend branch needs.  cf_broadcast_partials_views
+ *      now installs the real renderer
+ *      (cf_view_rooms_shared_room_partial), so an update *from* invisible
+ *      prepends the golden-verified `_shared` markup to the member's own
+ *      rooms stream.  Covered transitions (to invisible removes, to a
+ *      visible value only redirects) need no partial.
  */
 #include "cf.h"
 
@@ -612,8 +612,9 @@ cf_err cf_action_rooms_involvements_update(cf_ctx *ctx) {
         return rc;
     }
 
-    /* broadcast_visibility_changes: render_shared_room's partials live
-     * inside the production partials; involvement_change with previous. */
+    /* broadcast_visibility_changes: render_shared_room's partials are the
+     * production shared_room slot (the real _shared render since V02);
+     * involvement_change with previous. */
     rc = involvements_broadcast_change(ctx, &room, &membership, has_previous,
                                        previous);
     int64_t room_id = room.id;

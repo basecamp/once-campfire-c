@@ -1,9 +1,12 @@
 /* tests/cable/test_cable_broadcasts.c — the exact Turbo payload source
  * (channels/broadcasts.rs): stream names, DOM targets, attributes and the
  * delivered Active Support JSON frames, through real C01 connections. The
- * HTML comes from the reference tests' FakePartials; one case renders the
- * same markup through A02's production presenters and renderers
- * (cf_broadcast_partials_views), proving no duplicated markup. */
+ * HTML comes from the reference tests' FakePartials; the production cases
+ * render through A02's presenters and renderers (cf_broadcast_partials_
+ * views), proving no duplicated markup, and pin the per-recipient rule:
+ * direct-room creates render each membership's own `_direct` anchor (the
+ * member set and unread class differ per recipient) while shared-room
+ * broadcasts render once and deliver identical bytes to every member. */
 #include "cable_channels_testutil.h"
 
 #include "models/boost.h"
@@ -85,6 +88,16 @@ static cf_membership load_membership(chan_fixture *f, int64_t id) {
     cf_membership membership = {0};
     CF_REQUIRE(cf_membership_find(f->scratch.db, id, &membership) == CF_OK);
     return membership;
+}
+
+/* A byte substring of the builder's content (empty needles match). */
+static bool builder_has(const cf_builder *builder, const char *needle) {
+    size_t n = strlen(needle);
+    if (builder->len < n) return false;
+    for (size_t i = 0; i + n <= builder->len; i++) {
+        if (n == 0 || memcmp(builder->ptr + i, needle, n) == 0) return true;
+    }
+    return false;
 }
 
 /* The room-messages stream parts for a room: [gid param, "messages"]. */
@@ -442,6 +455,278 @@ CF_TEST(production_partials_render_through_a02) {
     chan_disconnect(&kevin);
     cf_ctx_destroy(&ctx);
     cf_response_dispose(&response);
+    chan_fixture_close(&f);
+}
+
+/* ---- production partials: per-recipient rendering ------------------------------- */
+
+/* A request/view context pair for the production partials (the same shape a
+ * controller supplies), plus the partials it installs. */
+typedef struct {
+    cf_ctx ctx;
+    cf_response response;
+    cf_view_ctx view;
+    cf_broadcast_views views;
+    cf_broadcast_partials partials;
+} prod_partials;
+
+static bool prod_partials_open(prod_partials *p, chan_fixture *f) {
+    memset(p, 0, sizeof *p);
+    cf_test_routes_reset();
+    if (cf_test_routes_add("GET", "/rooms/:id", 1, NULL) != CF_OK) {
+        return false;
+    }
+    cf_response_init(&p->response);
+    cf_request request;
+    memset(&request, 0, sizeof request);
+    request.method = CF_GET;
+    request.path = (cf_span){(const unsigned char *)"/rooms/10", 9};
+    request.target = request.path;
+    if (cf_ctx_create(&p->ctx, f->app, f->scratch.db, &request, &p->response) !=
+        CF_OK) {
+        return false;
+    }
+    p->ctx.identity.kind = CF_AUTH_SESSION;
+    p->ctx.identity.user_id = CHAN_KEVIN;
+    p->view.asset_path = test_asset_path;
+    p->views.ctx = &p->ctx;
+    p->views.view = &p->view;
+    cf_broadcast_partials_views(&p->partials, &p->views);
+    return true;
+}
+
+static void prod_partials_close(prod_partials *p) {
+    cf_ctx_destroy(&p->ctx);
+    cf_response_dispose(&p->response);
+}
+
+/* Subscribe `c` to its own `[user_gid, "rooms"]` stream. */
+static void subscribe_own_rooms(chan_fixture *f, chan_conn *c, int64_t user_id,
+                                char *identifier_out, size_t cap) {
+    cf_str gid = {0};
+    CF_REQUIRE(cf_cable_user_gid_param(user_id, &gid) == CF_OK);
+    cf_span parts[2] = {
+        {(const unsigned char *)gid.ptr, gid.len},
+        {(const unsigned char *)"rooms", 5},
+    };
+    subscribe_turbo(f, c, parts, 2, identifier_out, cap);
+    cf_str_dispose(&gid);
+}
+
+/* The exact frame a Turbo broadcast of `html` produces: byte parity between
+ * the renderer's output and what the pipeline delivers.  The message is
+ * quoted with the production cf_json_string (Active Support escaping, so
+ * newlines inside the partial become \n, exactly as turbo_publish writes
+ * them). */
+static bool expect_turbo_html(chan_conn *c, const char *identifier,
+                              const char *action, const char *target,
+                              cf_span html, int timeout_ms) {
+    size_t need = html.len + 256;
+    char *tag = malloc(need);
+    if (tag == NULL) return false;
+    int n = snprintf(tag, need,
+                     "<turbo-stream action=\"%s\" target=\"%s\">"
+                     "<template>%.*s</template></turbo-stream>",
+                     action, target, (int)html.len,
+                     (const char *)html.ptr);
+    bool ok = n >= 0 && (size_t)n < need;
+    if (!ok) {
+        free(tag);
+        return false;
+    }
+    cf_builder quoted = {0};
+    ok = cf_json_string(
+             &quoted,
+             (cf_span){(const unsigned char *)tag, (size_t)n}) == CF_OK;
+    free(tag);
+    char payload[65536];
+    char expected[131072];
+    if (ok && quoted.len + 1 <= sizeof payload) {
+        memcpy(payload, quoted.ptr, quoted.len);
+        payload[quoted.len] = '\0';
+        chan_delivery_expected(expected, sizeof expected, identifier, payload);
+    } else {
+        ok = false;
+    }
+    cf_builder_dispose(&quoted);
+    return ok && chan_expect(c, expected, timeout_ms);
+}
+
+/* `unread_at` is a real column; the fixture seeds every membership read so a
+ * per-membership unread state is one UPDATE away. */
+static void mark_unread(chan_fixture *f, int64_t membership_id, bool unread) {
+    char sql[160];
+    if (unread) {
+        snprintf(sql, sizeof sql,
+                 "UPDATE memberships SET unread_at='2026-01-02 00:00:00' "
+                 "WHERE id=%lld",
+                 (long long)membership_id);
+    } else {
+        snprintf(sql, sizeof sql,
+                 "UPDATE memberships SET unread_at=NULL WHERE id=%lld",
+                 (long long)membership_id);
+    }
+    CF_REQUIRE(chan_exec(f->scratch.db, sql));
+}
+
+/* The direct-room broadcast is per recipient: each membership's own unread
+ * state is rendered (the reference's presenter.sidebar_direct per
+ * membership), and each frame is byte-identical to the renderer's output for
+ * that membership.  Drop counters do not move. */
+CF_TEST(production_partials_direct_room_is_per_recipient) {
+    chan_fixture f;
+    CF_REQUIRE(chan_fixture_open(&f));
+    /* Kevin's direct membership (25) unread; Bender's (26) read. */
+    mark_unread(&f, 25, true);
+
+    chan_conn kevin, bender;
+    CF_REQUIRE(chan_connect(&f, CHAN_KEVIN, &kevin));
+    CF_REQUIRE(chan_connect(&f, CHAN_BENDER, &bender));
+    char kevin_stream[1024], bender_stream[1024];
+    subscribe_own_rooms(&f, &kevin, CHAN_KEVIN, kevin_stream,
+                        sizeof kevin_stream);
+    subscribe_own_rooms(&f, &bender, CHAN_BENDER, bender_stream,
+                        sizeof bender_stream);
+
+    prod_partials p;
+    CF_REQUIRE(prod_partials_open(&p, &f));
+
+    cf_room direct = load_room(&f, CHAN_DIRECT);
+    cf_membership m25 = load_membership(&f, 25);
+    cf_membership m26 = load_membership(&f, 26);
+    CF_REQUIRE(m25.unread_at.present);
+    CF_CHECK(!m26.unread_at.present);
+
+    /* The expected bytes: the renderer called directly for each membership
+     * (unread true for Kevin, false for Bender), with the broadcast pipeline
+     * wrapping them unchanged. */
+    cf_builder html25 = {0}, html26 = {0};
+    CF_REQUIRE(cf_view_rooms_direct_room_partial(&p.views, &m25, &html25) ==
+               CF_OK);
+    CF_REQUIRE(cf_view_rooms_direct_room_partial(&p.views, &m26, &html26) ==
+               CF_OK);
+    CF_CHECK(builder_has(&html25, "class=\"direct unread\""));
+    CF_CHECK(!builder_has(&html25, "class=\"direct\""));
+    CF_CHECK(builder_has(&html26, "class=\"direct\""));
+    CF_CHECK(!builder_has(&html26, "class=\"direct unread\""));
+    CF_CHECK(builder_has(&html25, "Bender")); /* Kevin's other member */
+    CF_CHECK(builder_has(&html26, "Kevin"));
+    CF_CHECK(memcmp(html25.ptr, html26.ptr,
+                    html25.len < html26.len ? html25.len : html26.len) != 0);
+
+    cf_cable_stats before;
+    cf_cable_stats_get(f.cable, &before);
+    CF_REQUIRE(cf_broadcast_direct_room_create(f.scratch.db, f.cable, &direct,
+                                               &p.partials) == CF_OK);
+    CF_CHECK(expect_turbo_html(&kevin, kevin_stream, "prepend", "direct_rooms",
+                               (cf_span){html25.ptr, html25.len}, 3000));
+    CF_CHECK(expect_turbo_html(&bender, bender_stream, "prepend", "direct_rooms",
+                               (cf_span){html26.ptr, html26.len}, 3000));
+    /* One frame per recipient, nothing crossed over. */
+    CF_CHECK(chan_silent(&kevin, 200));
+    CF_CHECK(chan_silent(&bender, 200));
+
+    cf_cable_stats after;
+    cf_cable_stats_get(f.cable, &after);
+    CF_CHECK(after.published == before.published + 2);
+    CF_CHECK(after.delivered == before.delivered + 2);
+    CF_CHECK(after.dropped == before.dropped);
+
+    cf_builder_dispose(&html25);
+    cf_builder_dispose(&html26);
+    cf_membership_dispose(&m25);
+    cf_membership_dispose(&m26);
+    cf_room_dispose(&direct);
+    prod_partials_close(&p);
+    chan_disconnect(&kevin);
+    chan_disconnect(&bender);
+    chan_fixture_close(&f);
+}
+
+/* The shared-room broadcasts are rendered once: two recipients on the same
+ * stream (and two members on their own streams) receive identical bytes, and
+ * the renderer's unread=false mapping holds even when their memberships are
+ * unread. */
+CF_TEST(production_partials_shared_room_is_shared_bytes) {
+    chan_fixture f;
+    CF_REQUIRE(chan_fixture_open(&f));
+    /* Every designers member unread: the shared partial must not reflect it. */
+    mark_unread(&f, 20, true);
+    mark_unread(&f, 21, true);
+    mark_unread(&f, 22, true);
+
+    chan_conn jz, kevin;
+    CF_REQUIRE(chan_connect(&f, CHAN_JZ, &jz));
+    CF_REQUIRE(chan_connect(&f, CHAN_KEVIN, &kevin));
+    cf_span rooms_part[1] = {{(const unsigned char *)"rooms", 5}};
+    char everyone_jz[1024], everyone_kevin[1024];
+    subscribe_turbo(&f, &jz, rooms_part, 1, everyone_jz, sizeof everyone_jz);
+    subscribe_turbo(&f, &kevin, rooms_part, 1, everyone_kevin,
+                    sizeof everyone_kevin);
+    char own_jz[1024], own_kevin[1024];
+    subscribe_own_rooms(&f, &jz, CHAN_JZ, own_jz, sizeof own_jz);
+    subscribe_own_rooms(&f, &kevin, CHAN_KEVIN, own_kevin, sizeof own_kevin);
+
+    prod_partials p;
+    CF_REQUIRE(prod_partials_open(&p, &f));
+
+    cf_room designers = load_room(&f, CHAN_DESIGNERS);
+
+    /* opens#update: one render, `:rooms`, list target. */
+    cf_room as_open = designers;
+    as_open.room_type = CF_ROOM_OPEN;
+    cf_builder shared = {0};
+    CF_REQUIRE(cf_view_rooms_shared_room_partial(NULL, &as_open, &shared) ==
+               CF_OK);
+    CF_CHECK(!builder_has(&shared, " unread\""));
+    CF_CHECK(builder_has(
+        &shared, "class=\"align-center gap room btn txt-nowrap\""));
+
+    cf_cable_stats before;
+    cf_cable_stats_get(f.cable, &before);
+    CF_REQUIRE(cf_broadcast_open_room_update(f.cable, &as_open, &p.partials) ==
+               CF_OK);
+    CF_CHECK(expect_turbo_html(&jz, everyone_jz, "replace",
+                               "list_rooms_open_10",
+                               (cf_span){shared.ptr, shared.len}, 3000));
+    CF_CHECK(expect_turbo_html(&kevin, everyone_kevin, "replace",
+                               "list_rooms_open_10",
+                               (cf_span){shared.ptr, shared.len}, 3000));
+    cf_cable_stats after;
+    cf_cable_stats_get(f.cable, &after);
+    CF_CHECK(after.published == before.published + 1);
+    CF_CHECK(after.delivered == before.delivered + 2);
+    CF_CHECK(after.dropped == before.dropped);
+
+    /* closeds#create: the same bytes on each member's own stream, even
+     * though every membership is unread. */
+    cf_builder closed = {0};
+    CF_REQUIRE(cf_view_rooms_shared_room_partial(NULL, &designers, &closed) ==
+               CF_OK);
+    CF_CHECK(!builder_has(&closed, " unread\""));
+    CF_CHECK(builder_has(&closed, "id=\"list_rooms_closed_10\""));
+    CF_CHECK(builder_has(&closed, ">Designers</span>"));
+
+    cf_cable_stats_get(f.cable, &before);
+    CF_REQUIRE(cf_broadcast_closed_room_create(f.scratch.db, f.cable,
+                                               &designers, &p.partials) ==
+               CF_OK);
+    CF_CHECK(expect_turbo_html(&jz, own_jz, "prepend", "shared_rooms",
+                               (cf_span){closed.ptr, closed.len}, 3000));
+    CF_CHECK(expect_turbo_html(&kevin, own_kevin, "prepend", "shared_rooms",
+                               (cf_span){closed.ptr, closed.len}, 3000));
+    cf_cable_stats_get(f.cable, &after);
+    /* Three members published (David has no connection), two delivered. */
+    CF_CHECK(after.published == before.published + 3);
+    CF_CHECK(after.delivered == before.delivered + 2);
+    CF_CHECK(after.dropped == before.dropped);
+
+    cf_builder_dispose(&shared);
+    cf_builder_dispose(&closed);
+    cf_room_dispose(&designers);
+    prod_partials_close(&p);
+    chan_disconnect(&jz);
+    chan_disconnect(&kevin);
     chan_fixture_close(&f);
 }
 

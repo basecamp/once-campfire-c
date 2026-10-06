@@ -18,10 +18,10 @@
  * forced open type (a converted closed room grants every active user), the
  * exact replace broadcast, and the redirect; `destroy` asserts the
  * reference's internal error with no row changes (there is deliberately no
- * opens#destroy success path).  The new/edit renders use the packet's R1
- * placeholder forms (asserting action, name value, user list and the
- * conditional delete section), not the golden templates, which are the views
- * packet's integrator request.
+ * opens#destroy success path).  The new/edit renders are the golden
+ * cf_view_rooms_open_form templates (V02 swap): action, name value / heading,
+ * user list and the conditional delete section.  The create/update
+ * broadcasts assert the production users/sidebars/rooms/_shared anchor.
  */
 #include "cf_test.h"
 
@@ -776,12 +776,20 @@ CF_TEST(opens_create_grants_every_active_user_and_broadcasts) {
     CF_CHECK(member_of(env.scratch.db, id, 1));
     CF_CHECK(member_of(env.scratch.db, id, 2));
 
-    char payload[256];
+    /* The production `Partials::shared_room` renderer (V02): the exact
+     * users/sidebars/rooms/_shared anchor, not the old placeholder. */
+    char payload[1024];
     snprintf(payload, sizeof payload,
              "<turbo-stream action=\"prepend\" target=\"shared_rooms\">"
-             "<template><div class=\"shared-room\" data-room-id=\"%" PRId64
-             "\">HQ</div></template></turbo-stream>",
-             id);
+             "<template><a id=\"list_rooms_open_%" PRId64 "\" "
+             "data-rooms-list-target=\"room\" data-room-id=\"%" PRId64 "\" "
+             "data-badge-dot-target=\"unread\" "
+             "data-sorted-list-target=\"item\" data-sorted-list-name=\"HQ\" "
+             "style=\"--column-gap: 0.5em\" class=\"align-center gap room btn "
+             "txt-nowrap\" href=\"/rooms/%" PRId64 "\">\n  <span "
+             "class=\"overflow-ellipsis\">HQ</span>\n</a>"
+             "</template></turbo-stream>",
+             id, id, id);
     CF_CHECK(opens_conn_expect_payload(&conn, SP(payload), 5000));
     opens_conn_close(&conn);
     env_close(&env);
@@ -989,7 +997,10 @@ CF_TEST(opens_edit_hides_delete_for_plain_members) {
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 200);
     CF_CHECK(body_contains(&resp, "<form action=\"/rooms/opens/42\""));
-    CF_CHECK(body_contains(&resp, "value=\"HQ\""));
+    /* Not an administrator: the golden template renders the name as a
+     * heading, not an editable input (room_name_row's can_administer
+     * branch). */
+    CF_CHECK(body_contains(&resp, "txt-x-large\"> HQ </h1>"));
     CF_CHECK(!body_contains(&resp, "value=\"delete\""));
     cf_response_dispose(&resp);
     env_close(&env);
@@ -1070,8 +1081,14 @@ CF_TEST(opens_update_renames_and_broadcasts_over_patch) {
     CF_CHECK(opens_conn_expect_payload(
         &conn,
         SP("<turbo-stream action=\"replace\" target=\"list_rooms_open_42\">"
-           "<template><div class=\"shared-room\" "
-           "data-room-id=\"42\">Lobby</div></template></turbo-stream>"),
+           "<template><a id=\"list_rooms_open_42\" "
+           "data-rooms-list-target=\"room\" data-room-id=\"42\" "
+           "data-badge-dot-target=\"unread\" data-sorted-list-target=\"item\" "
+           "data-sorted-list-name=\"Lobby\" style=\"--column-gap: 0.5em\" "
+           "class=\"align-center gap room btn txt-nowrap\" "
+           "href=\"/rooms/42\">\n  <span "
+           "class=\"overflow-ellipsis\">Lobby</span>\n</a>"
+           "</template></turbo-stream>"),
         5000));
     opens_conn_close(&conn);
     env_close(&env);

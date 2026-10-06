@@ -22,8 +22,9 @@
  * other members with the display name; `destroy` succeeds for every member
  * (no administer grant) with the exact `:rooms` removal broadcast, while
  * non-members and out-of-scope rooms take set_room's root redirect.  The
- * new/edit renders use the packet's R1 placeholder forms, not the golden
- * templates, which are the views packet's integrator request.
+ * new/edit renders are the golden cf_view_rooms_direct_new/edit templates
+ * (V02 swap), and the create broadcasts assert the production
+ * users/sidebars/rooms/_direct anchor, rendered per membership.
  */
 #include "cf_test.h"
 
@@ -529,6 +530,27 @@ static bool directs_conn_subscribe(directs_conn *c) {
 
 /* Read one frame and compare it with the exact delivery frame the broadcast
  * source produces for `payload` on this subscription. */
+/* The delivered frame whose message contains every needle.  The direct-room
+ * payload embeds the room's creation-time epoch and signed avatar URLs, so
+ * exact equality is not stable across runs; the stream/action/target and the
+ * per-recipient member text still pin the reference behavior. */
+static bool directs_conn_expect_contains(directs_conn *c,
+                                         const char *const *needles,
+                                         size_t count, int timeout_ms) {
+    char got[262144];
+    if (!directs_conn_next_text(c, got, sizeof got, timeout_ms)) {
+        fprintf(stderr, "  no broadcast frame\n");
+        return false;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (strstr(got, needles[i]) == NULL) {
+            fprintf(stderr, "  frame missing %s\n  got: %s\n", needles[i], got);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool directs_conn_expect_payload(directs_conn *c, cf_span payload,
                                         int timeout_ms) {
     cf_builder ident_json = {0};
@@ -646,6 +668,9 @@ CF_TEST(directs_index_unauthenticated_is_redirected_to_sign_in) {
 
 /* --- directs#new ----------------------------------------------------------- */
 
+/* The golden DirectsNew template (V02 swap): the autocomplete form posts to
+ * /rooms/directs through the hidden `user_ids[]` select; no user list is
+ * read (Rust `DirectsNew { ctx }` carries no locals). */
 CF_TEST(directs_new_renders_the_user_select) {
     directs_env env;
     CF_REQUIRE(env_open(&env));
@@ -660,10 +685,11 @@ CF_TEST(directs_new_renders_the_user_select) {
     cf_response resp;
     CF_REQUIRE(run_request(&env, &req, &resp));
     CF_CHECK(resp.status == 200);
-    CF_CHECK(body_contains(&resp, "<form action=\"/rooms/directs\""));
+    CF_CHECK(body_contains(&resp, "action=\"/rooms/directs\""));
     CF_CHECK(body_contains(&resp, "name=\"user_ids[]\""));
-    CF_CHECK(body_contains(&resp, "Kevin"));
-    CF_CHECK(body_contains(&resp, "JZ"));
+    CF_CHECK(body_contains(&resp, "data-template-id=\"autocompletable-user\""));
+    CF_CHECK(body_contains(&resp,
+                           "name=\"rooms_direct[user_ids_input]\""));
     cf_response_dispose(&resp);
     env_close(&env);
 }
@@ -768,19 +794,20 @@ CF_TEST(directs_create_makes_the_room_and_broadcasts_per_member) {
     int64_t membership1 = membership_id_of(env.scratch.db, id, 1);
     int64_t membership2 = membership_id_of(env.scratch.db, id, 2);
     CF_CHECK(membership1 > 0 && membership2 > 0);
-    char payload1[256], payload2[256];
-    snprintf(payload1, sizeof payload1,
-             "<turbo-stream action=\"prepend\" target=\"direct_rooms\">"
-             "<template><div class=\"direct-room\" data-membership-id=\"%"
-             PRId64 "\"></div></template></turbo-stream>",
-             membership1);
-    snprintf(payload2, sizeof payload2,
-             "<turbo-stream action=\"prepend\" target=\"direct_rooms\">"
-             "<template><div class=\"direct-room\" data-membership-id=\"%"
-             PRId64 "\"></div></template></turbo-stream>",
-             membership2);
-    CF_CHECK(directs_conn_expect_payload(&conn1, SP(payload1), 5000));
-    CF_CHECK(directs_conn_expect_payload(&conn2, SP(payload2), 5000));
+    /* The production `Partials::direct_room` renderer (V02) renders one
+     * users/sidebars/rooms/_direct anchor per membership: each recipient
+     * sees the *other* member (its own unread state in the class; both are
+     * read here).  The payload embeds the room's creation-time epoch and
+     * signed avatar URLs, so the stable assertions are the stream/action/
+     * target plus the per-recipient member text in the message body. */
+    char anchor[64];
+    snprintf(anchor, sizeof anchor, "list_rooms_direct_%" PRId64, id);
+    const char *frame1[] = {"target=\\\"direct_rooms\\\"", anchor,
+                            "\\n          JZ\\n"};
+    const char *frame2[] = {"target=\\\"direct_rooms\\\"", anchor,
+                            "\\n          Kevin\\n"};
+    CF_CHECK(directs_conn_expect_contains(&conn1, frame1, 3, 5000));
+    CF_CHECK(directs_conn_expect_contains(&conn2, frame2, 3, 5000));
     directs_conn_close(&conn1);
     directs_conn_close(&conn2);
     env_close(&env);

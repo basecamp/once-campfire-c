@@ -120,9 +120,10 @@ cf_err cf_cable_user_gid_param(int64_t user_id, cf_str *out);
 /* ---- broadcasts (channels/broadcasts.rs) ----------------------------------- */
 
 /* The HTML a broadcast carries, rendered by the caller: Rust's `Partials`
- * trait. `shared_room` and `direct_room` come from the sidebar packet of A02
- * that has not landed yet; the production provider reports them as
- * unavailable rather than inventing markup. */
+ * trait. `shared_room` renders once per broadcast (every recipient sees the
+ * same bytes); `direct_room` is invoked once per membership by
+ * cf_broadcast_direct_room_create, so it must render that recipient's own
+ * markup (the reference renders SidebarDirect per membership). */
 typedef struct cf_broadcast_partials {
     cf_err (*message)(void *user, const cf_message *message, cf_builder *out);
     cf_err (*message_presentation)(void *user, const cf_message *message,
@@ -142,9 +143,10 @@ typedef struct {
     const cf_view_ctx *view;
 } cf_broadcast_views;
 
-/* Fill the production partials: A02's presenters and renderers. The sidebar
- * room partials are a later A02 packet and report CF_NOT_FOUND (reported to
- * the integrator) instead of duplicating markup here. */
+/* Fill the production partials: A02's presenters and renderers, including
+ * the sidebar room renderers (`users/sidebars/rooms/_shared` behind
+ * shared_room, and presenter.sidebar_direct + `_direct` behind direct_room,
+ * both from A-users-sidebars / V-E). */
 void cf_broadcast_partials_views(cf_broadcast_partials *out,
                                  cf_broadcast_views *views);
 

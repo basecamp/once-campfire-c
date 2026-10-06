@@ -622,6 +622,88 @@ cf_err cf_view_push_subscription_from_row(int64_t id, cf_span endpoint,
                                           cf_span user_agent,
                                           cf_view_push_subscription *out);
 
+/* --------------------------------------------------- room subclass forms */
+
+/* rooms/opens/new + edit (crates/views/src/rooms.rs OpenFormView).  The
+ * user list is `User.active.ordered` as `UserView` rows, borrowed; the name
+ * carries FormRoom.name's Option (an absent name omits the input's value
+ * attribute and empties the edit title).  last_room_* carries
+ * ViewContext.last_room_visited_id for the nav's back link.  The renderer
+ * (and its _frame variant) is the golden-verified template port; actions
+ * only map their loaded rows onto this model. */
+typedef struct {
+    bool is_new;
+    int64_t room_id; /* valid when !is_new */
+    bool has_name;
+    cf_str name; /* owned when has_name */
+    bool can_administer;
+    bool has_last_room_id;
+    int64_t last_room_id; /* valid when has_last_room_id */
+    const cf_view_user *users; /* borrowed */
+    size_t user_count;
+} cf_view_rooms_open_form_model;
+
+void cf_view_rooms_open_form_dispose(cf_view_rooms_open_form_model *model);
+
+cf_err cf_view_rooms_open_form(const cf_view_ctx *ctx,
+                               const cf_view_rooms_open_form_model *model,
+                               cf_builder *out);
+cf_err cf_view_rooms_open_form_frame(const cf_view_ctx *ctx,
+                                     const cf_view_rooms_open_form_model *model,
+                                     cf_builder *out);
+
+/* rooms/closeds/new + edit (ClosedFormView).  selected/unselected partition
+ * `User.active.ordered` by membership; current_user_id pins the new room's
+ * creator rows. */
+typedef struct {
+    bool is_new;
+    int64_t room_id; /* valid when !is_new */
+    bool has_name;
+    cf_str name; /* owned when has_name */
+    bool can_administer;
+    int64_t current_user_id;
+    bool has_last_room_id;
+    int64_t last_room_id; /* valid when has_last_room_id */
+    const cf_view_user *selected; /* borrowed */
+    size_t selected_count;
+    const cf_view_user *unselected; /* borrowed */
+    size_t unselected_count;
+} cf_view_rooms_closed_form_model;
+
+void cf_view_rooms_closed_form_dispose(cf_view_rooms_closed_form_model *model);
+
+cf_err cf_view_rooms_closed_form(const cf_view_ctx *ctx,
+                                 const cf_view_rooms_closed_form_model *model,
+                                 cf_builder *out);
+cf_err cf_view_rooms_closed_form_frame(
+    const cf_view_ctx *ctx, const cf_view_rooms_closed_form_model *model,
+    cf_builder *out);
+
+/* rooms/directs/new (DirectsNew: no locals) and edit (DirectEditView:
+ * `@room.users.many? ? @room.users.without(Current.user) : @room.users` plus
+ * room_display_name). */
+cf_err cf_view_rooms_direct_new(const cf_view_ctx *ctx, cf_builder *out);
+cf_err cf_view_rooms_direct_new_frame(const cf_view_ctx *ctx,
+                                      cf_builder *out);
+
+typedef struct {
+    int64_t room_id;
+    cf_str display_name; /* owned */
+    bool has_last_room_id;
+    int64_t last_room_id; /* valid when has_last_room_id */
+    const cf_view_user *users; /* borrowed */
+    size_t user_count;
+} cf_view_rooms_direct_edit_model;
+
+void cf_view_rooms_direct_edit_dispose(cf_view_rooms_direct_edit_model *model);
+
+cf_err cf_view_rooms_direct_edit(const cf_view_ctx *ctx,
+                                 const cf_view_rooms_direct_edit_model *model,
+                                 cf_builder *out);
+cf_err cf_view_rooms_direct_edit_frame(
+    const cf_view_ctx *ctx, const cf_view_rooms_direct_edit_model *model,
+    cf_builder *out);
+
 /* ------------------------------------------------------------- renderers */
 
 /* Each family renders two ways, matching the reference's
@@ -731,6 +813,20 @@ cf_err cf_view_sidebar_direct_partial(const cf_view_ctx *ctx,
                                       cf_builder *out);
 cf_err cf_view_sidebar_shared_partial(const cf_view_sidebar_room *room,
                                       cf_builder *out);
+
+/* The `channels::Partials` providers behind the room broadcasts
+ * (rooms.rs render_shared_room / directs.rs broadcast_create_room):
+ * `shared_room` is the SidebarRoom mapping over the room row with
+ * unread=false (one render, every recipient sees the same bytes), while
+ * `direct_room` assembles the reference presenter.sidebar_direct per
+ * membership through `user` — the cable module's cf_broadcast_views pair —
+ * so each direct-room recipient receives the markup for its own unread
+ * state.  Both signatures match the cf_broadcast_partials slots exactly. */
+cf_err cf_view_rooms_shared_room_partial(void *user, const cf_room *room,
+                                         cf_builder *out);
+cf_err cf_view_rooms_direct_room_partial(void *user,
+                                         const cf_membership *membership,
+                                         cf_builder *out);
 
 /* users/profiles/show.html.erb (page and turbo-rails frame). */
 cf_err cf_view_users_profile_show(const cf_view_ctx *ctx,

@@ -15,9 +15,9 @@
  * the involvement_change broadcast), unauthorized/forbidden/not-found
  * cases, parameter failures (unknown value, hash/array), mutation
  * state assertions, and route-ID binding including the PATCH/PUT update
- * alias.  The update-from-invisible prepend branch needs the sidebar
- * shared-room partial (a later packet; production partials report
- * CF_NOT_FOUND), so it is reported uncovered rather than asserted.
+ * alias.  The update-from-invisible prepend branch asserts the production
+ * shared-room partial (V02 wired cf_view_rooms_shared_room_partial into
+ * cf_broadcast_partials_views, so the branch no longer fails after commit).
  */
 #include "cf_test.h"
 
@@ -926,6 +926,61 @@ CF_TEST(involvements_update_to_invisible_broadcasts_the_room_removal) {
         &conn,
         SP("<turbo-stream action=\"remove\" "
            "target=\"list_rooms_open_42\"></turbo-stream>"),
+        5000));
+    inv_conn_close(&conn);
+    env_close(&env);
+}
+
+/* invisible -> mentions: `broadcast_visibility_changes`' prepend branch
+ * renders the production users/sidebars/rooms/_shared anchor
+ * (`render_shared_room`) on the member's own rooms stream.  Before V02 wired
+ * the partial this update failed after committing (CF_NOT_FOUND). */
+CF_TEST(involvements_update_from_invisible_prepends_the_shared_room) {
+    inv_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_base(&env);
+
+    inv_conn conn;
+    CF_REQUIRE(inv_conn_open(&env, 1, &conn));
+    CF_REQUIRE(inv_conn_subscribe(&env, &conn, 1));
+
+    /* mentions -> invisible: the previous value the branch later reads. */
+    cf_request first;
+    prepare_update(&env, &first, CF_PATCH, 1, "/rooms/42/involvement",
+                   "involvement=invisible");
+    cf_response first_resp;
+    CF_REQUIRE(run_request(&env, &first, &first_resp));
+    CF_CHECK(first_resp.status == 302);
+    cf_response_dispose(&first_resp);
+    CF_CHECK(inv_conn_expect_payload(
+        &conn,
+        SP("<turbo-stream action=\"remove\" "
+           "target=\"list_rooms_open_42\"></turbo-stream>"),
+        5000));
+
+    /* invisible -> mentions: prepend the shared-room anchor. */
+    cf_request second;
+    prepare_update(&env, &second, CF_PATCH, 1, "/rooms/42/involvement",
+                   "involvement=mentions");
+    cf_response second_resp;
+    CF_REQUIRE(run_request(&env, &second, &second_resp));
+    CF_CHECK(second_resp.status == 302);
+    char *stored = read_involvement(env.scratch.db, 42, 1);
+    CF_CHECK(stored != NULL && strcmp(stored, "mentions") == 0);
+    free(stored);
+    cf_response_dispose(&second_resp);
+
+    CF_CHECK(inv_conn_expect_payload(
+        &conn,
+        SP("<turbo-stream action=\"prepend\" target=\"shared_rooms\">"
+           "<template><a id=\"list_rooms_open_42\" "
+           "data-rooms-list-target=\"room\" data-room-id=\"42\" "
+           "data-badge-dot-target=\"unread\" data-sorted-list-target=\"item\" "
+           "data-sorted-list-name=\"HQ\" style=\"--column-gap: 0.5em\" "
+           "class=\"align-center gap room btn txt-nowrap\" "
+           "href=\"/rooms/42\">\n  <span "
+           "class=\"overflow-ellipsis\">HQ</span>\n</a>"
+           "</template></turbo-stream>"),
         5000));
     inv_conn_close(&conn);
     env_close(&env);

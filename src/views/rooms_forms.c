@@ -21,87 +21,16 @@
  * new-room current-user hidden input), directs/new is the autocomplete
  * select, directs/edit the member cards plus the delete-ping form.
  *
- * INTEGRATOR (views.h is integrator-owned; the declarations below are the
- * proposed addition, to be MOVED into src/views.h verbatim — struct blocks
- * plus prototypes — and removed here):
- *
- *   typedef struct {
- *       bool is_new; int64_t room_id;
- *       bool has_name; cf_str name;
- *       bool can_administer;
- *       bool has_last_room_id; int64_t last_room_id;
- *       const cf_view_user *users; size_t user_count;
- *   } cf_view_rooms_open_form_model;
- *   void cf_view_rooms_open_form_dispose(cf_view_rooms_open_form_model *model);
- *   cf_err cf_view_rooms_open_form(const cf_view_ctx *ctx,
- *       const cf_view_rooms_open_form_model *model, cf_builder *out);
- *   cf_err cf_view_rooms_open_form_frame(const cf_view_ctx *ctx,
- *       const cf_view_rooms_open_form_model *model, cf_builder *out);
- *
- *   typedef struct {
- *       bool is_new; int64_t room_id;
- *       bool has_name; cf_str name;
- *       bool can_administer; int64_t current_user_id;
- *       bool has_last_room_id; int64_t last_room_id;
- *       const cf_view_user *selected; size_t selected_count;
- *       const cf_view_user *unselected; size_t unselected_count;
- *   } cf_view_rooms_closed_form_model;
- *   void cf_view_rooms_closed_form_dispose(cf_view_rooms_closed_form_model *model);
- *   cf_err cf_view_rooms_closed_form(const cf_view_ctx *ctx,
- *       const cf_view_rooms_closed_form_model *model, cf_builder *out);
- *   cf_err cf_view_rooms_closed_form_frame(const cf_view_ctx *ctx,
- *       const cf_view_rooms_closed_form_model *model, cf_builder *out);
- *
- *   cf_err cf_view_rooms_direct_new(const cf_view_ctx *ctx, cf_builder *out);
- *   cf_err cf_view_rooms_direct_new_frame(const cf_view_ctx *ctx,
- *       cf_builder *out);
- *   typedef struct {
- *       int64_t room_id; cf_str display_name;
- *       bool has_last_room_id; int64_t last_room_id;
- *       const cf_view_user *users; size_t user_count;
- *   } cf_view_rooms_direct_edit_model;
- *   void cf_view_rooms_direct_edit_dispose(cf_view_rooms_direct_edit_model *model);
- *   cf_err cf_view_rooms_direct_edit(const cf_view_ctx *ctx,
- *       const cf_view_rooms_direct_edit_model *model, cf_builder *out);
- *   cf_err cf_view_rooms_direct_edit_frame(const cf_view_ctx *ctx,
- *       const cf_view_rooms_direct_edit_model *model, cf_builder *out);
- *
- *   cf_err cf_view_rooms_shared_room_partial(void *user,
- *       const cf_room *room, cf_builder *out);
- *   cf_err cf_view_rooms_direct_room_partial(void *user,
- *       const cf_membership *membership, cf_builder *out);
- *
- * Notes on the proposal versus the actions' R1/R2 shims (which these
- * replace; parameter/return types match the shims exactly):
- *  - The R1 proposals name a struct and its renderer identically
- *    (e.g. `cf_view_rooms_open_form` for both), which C forbids.  The
- *    structs take the codebase's `_model` suffix
- *    (cf_view_room_show_model precedent); function names are unchanged.
- *  - `has_name` carries FormRoom.name's Option (an absent name omits the
- *    input's value attribute and empties the edit title/display name).
- *  - `has_last_room_id/last_room_id` carry ViewContext.last_room_visited_id
- *    for the nav's back link (`/` when absent).  cf_view_ctx does not carry
- *    it (cf_view_layout_model does); either keep it on these models or land
- *    it on cf_view_ctx and drop the fields here.
- *  - User arrays are borrowed (the actions own the cf_view_user rows); only
- *    the owned name/display strings dispose.
- *  - `cf_view_rooms_direct_new` takes no model, like the reference
- *    DirectsNew (the template has no locals).
- *
- * R2 wiring (cable/src/actions are integrator-owned):
- *  - `cf_view_rooms_shared_room_partial` is the `Partials::shared_room`
- *    behind render_shared_room (SidebarRoom with unread=false, exactly the
- *    reference presenter): wire it into cf_broadcast_partials_views'
- *    shared_room slot (currently CF_NOT_FOUND) and swap the opens/closeds
- *    actions' static shims for it.  It unlocks the involvements
- *    update-from-invisible prepend branch (currently 404-after-commit).
- *  - `cf_view_rooms_direct_room_partial` is `Partials::direct_room`
- *    (SidebarDirect assembled like the reference presenter.sidebar_direct,
- *    rendered through cf_view_sidebar_direct_partial).  `user` must be the
- *    cable module's cf_broadcast_views (ctx drives the reads and avatar
- *    signing, view the render); NULL is CF_INVALID.  Wire it into
- *    cf_broadcast_partials_views' direct_room slot and swap the directs
- *    action's static shim for it (setting partials.user to the views pair).
+ * The form models and renderer prototypes live in src/views.h (V02 moved
+ * the packet's declaration block there; the structs keep the codebase's
+ * `_model` suffix, function names are unchanged from the packet proposal).
+ * The two broadcast partials (`cf_view_rooms_shared_room_partial`,
+ * `cf_view_rooms_direct_room_partial`) are the `channels::Partials`
+ * providers: V02 wired them into cf_broadcast_partials_views and swapped
+ * the actions' static shims for them, so the reference stream/action/target
+ * plumbing now carries these real renders (SidebarRoom with unread=false
+ * once per broadcast; SidebarDirect per membership, so each direct-room
+ * recipient gets its own unread state).
  *
  * Local translation table: the room_name key is not in src/views/
  * translations.c yet, so the form's translation button is rendered here
@@ -121,43 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- proposed views.h additions (see the header comment) ------------------ */
-
-typedef struct {
-    bool is_new;
-    int64_t room_id; /* valid when !is_new */
-    bool has_name;
-    cf_str name; /* owned when has_name */
-    bool can_administer;
-    bool has_last_room_id;
-    int64_t last_room_id; /* valid when has_last_room_id */
-    const cf_view_user *users; /* borrowed */
-    size_t user_count;
-} cf_view_rooms_open_form_model;
-
-typedef struct {
-    bool is_new;
-    int64_t room_id; /* valid when !is_new */
-    bool has_name;
-    cf_str name; /* owned when has_name */
-    bool can_administer;
-    int64_t current_user_id;
-    bool has_last_room_id;
-    int64_t last_room_id; /* valid when has_last_room_id */
-    const cf_view_user *selected; /* borrowed */
-    size_t selected_count;
-    const cf_view_user *unselected; /* borrowed */
-    size_t unselected_count;
-} cf_view_rooms_closed_form_model;
-
-typedef struct {
-    int64_t room_id;
-    cf_str display_name; /* owned */
-    bool has_last_room_id;
-    int64_t last_room_id; /* valid when has_last_room_id */
-    const cf_view_user *users; /* borrowed */
-    size_t user_count;
-} cf_view_rooms_direct_edit_model;
+/* ---- form model disposal (the models are declared in views.h) ------------- */
 
 void cf_view_rooms_open_form_dispose(cf_view_rooms_open_form_model *model) {
     if (model == NULL) return;

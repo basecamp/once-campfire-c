@@ -54,32 +54,12 @@
  * this packet verifies).  Rows 126/127 stay on the reference
  * `action_not_found` error and are not implemented here.
  *
- * Integrator requests (views packet; this file is self-contained meanwhile):
- *  R1. cf_view_rooms_direct_new / cf_view_rooms_direct_new_frame and
- *      cf_view_rooms_direct_edit / cf_view_rooms_direct_edit_frame — the
- *      DirectsNew/DirectsEdit templates (rooms/directs/new.html with the
- *      autocomplete `user_ids[]` select posting to /rooms/directs;
- *      rooms/directs/edit.html with the display name and member list).
- *      Proposed declarations (src/views.h):
- *        cf_err cf_view_rooms_direct_new(const cf_view_ctx *ctx,
- *                                        cf_builder *out);
- *        cf_err cf_view_rooms_direct_new_frame(const cf_view_ctx *ctx,
- *                                             cf_builder *out);
- *        typedef struct { int64_t room_id; cf_str display_name;
- *                         cf_view_user *users; size_t user_count;
- *                       } cf_view_rooms_direct_edit;
- *        cf_err cf_view_rooms_direct_edit(const cf_view_ctx *ctx,
- *            const cf_view_rooms_direct_edit *model, cf_builder *out);
- *        cf_err cf_view_rooms_direct_edit_frame(const cf_view_ctx *ctx,
- *            const cf_view_rooms_direct_edit *model, cf_builder *out);
- *      Until they land, the static functions below render the same skeletons
- *      (form action, `user_ids[]` field, display name, member names) with a
- *      clearly marked placeholder body.
- *  R2. The sidebar direct-room partial behind the create broadcast
- *      (users/sidebars/rooms/_direct, one per membership).  The action
- *      supplies its own static shim partial (see directs_direct_partial) so
- *      the broadcast plumbing stays exact; swap in the real renderer when
- *      it lands.
+ * V02 swaps: DirectsNew/DirectsEdit render through the real golden-verified
+ * cf_view_rooms_direct_new/edit(_frame) (models in src/views.h), and the
+ * create broadcast carries the production `Partials::direct_room` renderer
+ * (cf_view_rooms_direct_room_partial via cf_broadcast_partials_views, once
+ * per membership so each recipient gets its own unread state), so no
+ * placeholder markup remains here.
  */
 #include "cf.h"
 
@@ -352,117 +332,7 @@ static cf_err directs_existing_user_ids(cf_db *db, const int64_t *ids,
     return CF_OK;
 }
 
-/* ---- the DirectsNew/DirectsEdit render (INTEGRATOR SHIM R1) --------------- */
-
-typedef struct {
-    bool is_new;
-    int64_t room_id;
-    cf_str display_name; /* owned; edit only */
-    const cf_view_user *users;
-    size_t user_count;
-} directs_form;
-
-static void directs_form_dispose(directs_form *form) {
-    cf_str_dispose(&form->display_name);
-}
-
-/* The DirectsNew/DirectsEdit skeletons (R1): the form action posting to
- * /rooms/directs with the autocomplete `user_ids[]` select (new), or the
- * display name plus the member list (edit). */
-static cf_err directs_form_content(const directs_form *form, cf_builder *out) {
-    cf_err rc = cf_builder_append(out, directs_span("<!-- INTEGRATOR R1: "
-                                                    "rooms/directs form "
-                                                    "placeholder -->\n"));
-    if (rc != CF_OK) return rc;
-    if (form->is_new) {
-        rc = cf_builder_append(out, directs_span("<form action=\"/rooms/"
-                                                "directs\" method=\"post\">\n"
-                                                "  <select name=\"user_ids[]\" "
-                                                "multiple>\n"));
-        for (size_t i = 0; rc == CF_OK && i < form->user_count; i++) {
-            char id[40];
-            int n = snprintf(id, sizeof id, "%" PRId64, form->users[i].id);
-            if (n < 0 || (size_t)n >= sizeof id) return CF_INTERNAL;
-            rc = cf_builder_append(out, directs_span("    <option value=\""));
-            if (rc == CF_OK) {
-                rc = cf_builder_append(
-                    out, (cf_span){(const unsigned char *)id, (size_t)n});
-            }
-            if (rc == CF_OK) rc = cf_builder_append(out, directs_span("\">"));
-            if (rc == CF_OK) {
-                rc = cf_html_text(out, (cf_span){
-                                            (const unsigned char *)
-                                                form->users[i].name.ptr,
-                                            form->users[i].name.len});
-            }
-            if (rc == CF_OK) {
-                rc = cf_builder_append(out, directs_span("</option>\n"));
-            }
-        }
-        if (rc == CF_OK) {
-            rc = cf_builder_append(out, directs_span("  </select>\n</form>\n"));
-        }
-        return rc;
-    }
-    rc = cf_builder_append(out, directs_span("<div class=\"direct-edit\" "
-                                             "data-room-id=\""));
-    if (rc == CF_OK) {
-        char id[40];
-        int n = snprintf(id, sizeof id, "%" PRId64, form->room_id);
-        if (n < 0 || (size_t)n >= sizeof id) return CF_INTERNAL;
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)id, (size_t)n});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, directs_span("\">"));
-    if (rc == CF_OK) {
-        rc = cf_html_text(out, (cf_span){
-                                   (const unsigned char *)form->display_name.ptr,
-                                   form->display_name.len});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, directs_span("\n"));
-    for (size_t i = 0; rc == CF_OK && i < form->user_count; i++) {
-        rc = cf_builder_append(out, directs_span("  <span class=\"user\">"));
-        if (rc == CF_OK) {
-            rc = cf_html_text(
-                out, (cf_span){(const unsigned char *)form->users[i].name.ptr,
-                               form->users[i].name.len});
-        }
-        if (rc == CF_OK) rc = cf_builder_append(out, directs_span("</span>\n"));
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, directs_span("</div>\n"));
-    return rc;
-}
-
-/* `User.active.ordered` as presenter `UserView` rows (the `new` select). */
-static cf_err directs_active_users(cf_ctx *ctx, cf_user_vector *users,
-                                   cf_view_user **views_out,
-                                   size_t *count_out) {
-    *views_out = NULL;
-    *count_out = 0;
-    cf_err rc = cf_user_active_ordered(ctx->reader, users);
-    if (rc != CF_OK) return rc;
-    if (users->len == 0) return CF_OK;
-    cf_view_user *views = calloc(users->len, sizeof *views);
-    if (views == NULL) {
-        cf_user_vector_dispose(users);
-        return CF_NOMEM;
-    }
-    size_t done = 0;
-    for (size_t i = 0; i < users->len; i++) {
-        rc = cf_presenter_user_view(ctx, &users->items[i], &views[i]);
-        if (rc != CF_OK) break;
-        done++;
-    }
-    if (rc != CF_OK) {
-        for (size_t i = 0; i < done; i++) cf_view_user_dispose(&views[i]);
-        free(views);
-        cf_user_vector_dispose(users);
-        return rc;
-    }
-    *views_out = views;
-    *count_out = users->len;
-    return CF_OK;
-}
+/* ---- the DirectsNew/DirectsEdit render ------------------------------------ */
 
 static void directs_views_dispose(cf_view_user *views, size_t count) {
     if (views == NULL) return;
@@ -470,7 +340,11 @@ static void directs_views_dispose(cf_view_user *views, size_t count) {
     free(views);
 }
 
-static cf_err directs_render(cf_ctx *ctx, directs_form *form) {
+/* Render DirectsNew (`model` NULL) or DirectsEdit: respond_to (HTML only),
+ * then Layout::load (its last_room_visited feeds the edit back link), then
+ * the golden-verified cf_view_rooms_direct_new/edit renderer. */
+static cf_err directs_render(cf_ctx *ctx, bool is_new,
+                             const cf_view_rooms_direct_edit_model *model) {
     const cf_format *offered[1] = {&cf_format_html};
     const cf_format *chosen = NULL;
     cf_err rc = cf_ctx_respond_to(ctx, offered, 1, &chosen);
@@ -482,22 +356,25 @@ static cf_err directs_render(cf_ctx *ctx, directs_form *form) {
     cf_view_ctx view_ctx;
     cf_view_ctx_init(&view_ctx, ctx, &layout);
 
-    bool frame = directs_turbo_frame_request(ctx->request);
-    cf_builder content = {0};
-    rc = directs_form_content(form, &content);
-    cf_builder body = {0};
-    if (rc == CF_OK) {
-        rc = frame ? cf_view_layout_frame(&view_ctx, (cf_span){NULL, 0},
-                                          (cf_span){content.ptr, content.len},
-                                          &body)
-                   : cf_view_layout_page(
-                         &view_ctx, (cf_span){NULL, 0}, false,
-                         (cf_span){NULL, 0}, false, (cf_span){NULL, 0},
-                         (cf_span){content.ptr, content.len},
-                         (cf_span){NULL, 0}, (cf_span){NULL, 0},
-                         (cf_span){NULL, 0}, &body);
+    /* The model's back link comes from the ViewContext selection the layout
+     * presenter resolved (the edit template's `link_back_to_last_room`). */
+    cf_view_rooms_direct_edit_model local;
+    if (!is_new) {
+        local = *model;
+        local.has_last_room_id = layout.has_last_room_visited;
+        local.last_room_id = layout.last_room_visited_id;
+        model = &local;
     }
-    cf_builder_dispose(&content);
+
+    bool frame = directs_turbo_frame_request(ctx->request);
+    cf_builder body = {0};
+    if (is_new) {
+        rc = frame ? cf_view_rooms_direct_new_frame(&view_ctx, &body)
+                   : cf_view_rooms_direct_new(&view_ctx, &body);
+    } else {
+        rc = frame ? cf_view_rooms_direct_edit_frame(&view_ctx, model, &body)
+                   : cf_view_rooms_direct_edit(&view_ctx, model, &body);
+    }
     cf_view_layout_model_dispose(&layout);
     if (rc != CF_OK) {
         cf_builder_dispose(&body);
@@ -604,29 +481,6 @@ static cf_err directs_destroy_write(cf_tx *tx, void *arg) {
 
 /* ---- broadcasts ----------------------------------------------------------- */
 
-/* INTEGRATOR SHIM R2 (see the header): the direct-room partial
- * (users/sidebars/rooms/_direct) as a deterministic placeholder carrying
- * the membership id, until the sidebar packet lands.  Only the markup is a
- * shim; the per-user streams, action, target and delivery path are the
- * reference's (`broadcast_prepend_to membership.user, :rooms, target:
- * :direct_rooms`). */
-static cf_err directs_direct_partial(void *user,
-                                     const cf_membership *membership,
-                                     cf_builder *out) {
-    (void)user;
-    cf_err rc = cf_builder_append(out, directs_span("<div class=\"direct-room"
-                                                   "\" data-membership-id=\""));
-    if (rc == CF_OK) {
-        char id[32];
-        int n = snprintf(id, sizeof id, "%" PRId64, membership->id);
-        if (n < 0 || (size_t)n >= sizeof id) return CF_INTERNAL;
-        rc = cf_builder_append(
-            out, (cf_span){(const unsigned char *)id, (size_t)n});
-    }
-    if (rc == CF_OK) rc = cf_builder_append(out, directs_span("\"></div>"));
-    return rc;
-}
-
 /* `broadcast_create_room` (directs.rs): the direct partial per membership,
  * to its user's own rooms stream, through the app's cable.  Post-commit
  * delivery policy (00-contracts.md; the rooms.c convention): a full loop
@@ -636,9 +490,15 @@ static cf_err directs_direct_partial(void *user,
 static cf_err directs_broadcast_create(cf_ctx *ctx, const cf_room *room) {
     cf_cable *cable = cf_app_cable(ctx->app);
     if (cable == NULL) return CF_INTERNAL;
+    /* The production partials render `users/sidebars/rooms/_direct` once per
+     * membership (its own unread state) through the views pair; the streams,
+     * action, target and delivery path are `broadcast_prepend_to
+     * membership.user, :rooms, target: :direct_rooms`. */
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, NULL);
+    cf_broadcast_views views = {ctx, &view_ctx};
     cf_broadcast_partials partials;
-    memset(&partials, 0, sizeof partials);
-    partials.direct_room = directs_direct_partial;
+    cf_broadcast_partials_views(&partials, &views);
     cf_err rc =
         cf_broadcast_direct_room_create(ctx->reader, cable, room, &partials);
     if (rc == CF_BUSY) {
@@ -773,27 +633,9 @@ cf_err cf_action_rooms_directs_new(cf_ctx *ctx) {
     cf_user_dispose(&user);
     if (rc != CF_OK) return rc;
 
-    cf_user_vector users = {0};
-    cf_view_user *views = NULL;
-    size_t view_count = 0;
-    rc = directs_active_users(ctx, &users, &views, &view_count);
-    if (rc != CF_OK) {
-        directs_views_dispose(views, view_count);
-        cf_user_vector_dispose(&users);
-        return rc;
-    }
-    directs_form form = {
-        .is_new = true,
-        .room_id = 0,
-        .display_name = {NULL, 0},
-        .users = views,
-        .user_count = view_count,
-    };
-    rc = directs_render(ctx, &form);
-    directs_form_dispose(&form);
-    directs_views_dispose(views, view_count);
-    cf_user_vector_dispose(&users);
-    return rc;
+    /* DirectsNew carries no locals (Rust `DirectsNew { ctx }`): the
+     * autocomplete template needs no user list, so no read happens here. */
+    return directs_render(ctx, true, NULL);
 }
 
 /* `edit`: `before_actions`; `set_room(Directs)`; the DirectEditView (the
@@ -880,15 +722,14 @@ cf_err cf_action_rooms_directs_edit(cf_ctx *ctx) {
         return rc;
     }
 
-    directs_form form = {
-        .is_new = false,
-        .room_id = room.id,
-        .display_name = display_name,
-        .users = views,
-        .user_count = done,
-    };
-    rc = directs_render(ctx, &form);
-    directs_form_dispose(&form);
+    cf_view_rooms_direct_edit_model model;
+    memset(&model, 0, sizeof model);
+    model.room_id = room.id;
+    model.display_name = display_name;
+    model.users = views;
+    model.user_count = done;
+    rc = directs_render(ctx, false, &model);
+    cf_view_rooms_direct_edit_dispose(&model);
     directs_views_dispose(views, done);
     cf_user_vector_dispose(&members);
     cf_room_dispose(&room);
