@@ -62,13 +62,18 @@ Cache lookups recheck authorization and observe external SQLite commits.
 
 ## Benchmarks
 
-The current [`benchmark harness`](bench/README.md) validates every response and audits
-each acknowledged message ID, stored body and FTS entry.
-Rebuild benchmark seeds after updating: the earlier importer confused user and room IDs,
-so the historical POST throughput figures were invalid.
+Measured with 16 concurrent clients on an AMD Ryzen AI MAX+ 395 with 32 GB RAM,
+with four hardware cores allocated to each app.
 
-Current C and Fil-C builds need fresh measurements with the corrected seed. The other
-implementations' current comparison is in the [Rust README](https://github.com/basecamp/once-campfire-rust#performance).
+| HTTP workload (requests/sec) | Rails | [Django](https://github.com/basecamp/once-campfire-django) | [Laravel](https://github.com/basecamp/once-campfire-laravel) | [Express](https://github.com/basecamp/once-campfire-express) | [Elixir](https://github.com/basecamp/once-campfire-elixir) | [Go](https://github.com/basecamp/once-campfire-go) | [Rust](https://github.com/basecamp/once-campfire-rust) | [C](https://github.com/basecamp/once-campfire-c) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Room page | 230 | 62 | 760 | 2,622 | 942 | 31,673 | 35,484 | 141,834 |
+| Messages page | 402 | 70 | 924 | 3,245 | 1,267 | 30,746 | 40,674 | 151,564 |
+| Sidebar | 468 | 229 | 1,383 | 34,938 | 2,515 | 18,586 | 34,479 | 159,850 |
+| Search | 399 | 118 | 1,135 | 6,613 | 1,814 | 29,765 | 34,432 | 155,456 |
+| Post a message | 248 | 112 | 498 | 2,088 | 1,400 | 9,073 | 8,998 | 7,460 |
+
+[Shared verification](https://github.com/basecamp/once-campfire-verification) · [Detailed results](https://github.com/basecamp/once-campfire-verification/blob/main/docs/performance-review.md).
 
 ## Development
 
@@ -86,10 +91,8 @@ CF_E2E_TLS=1 CF_E2E_MEDIA=1 python3 tests/integration/run.py --all
 ```
 
 The integration cases drive a real server and real browsers through
-`agent-browser` (no Chromium download). The benchmark lives in
-[`bench/`](bench/README.md): the pinned harness, the C adapter
-(`bench/run-c --filc --apps c,c-filc,rust,reference --loops 4 --cache-bytes N`),
-the seed importer and persistent-write validation.
+`agent-browser` (no Chromium download). Current comparison commands use the
+shared verification harness; see [`bench/`](bench/README.md).
 
 Repository layout: `src/` (`core`, `http`, `front`, `auth`, `richtext`,
 `views`/`presenters`, `actions`, `cable`, `jobs`, `storage`, `integrations`),
