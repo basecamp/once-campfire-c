@@ -258,3 +258,23 @@ seeded fallback (630-byte `image/svg+xml` initials), confirming the disclosed
 divergence's expected body.  The upload suite still requires S02/S03 media;
 select `SUITES="http cable"` until then.  Details and raw evidence:
 `docs/devel/evidence/B01a.md` and `docs/devel/evidence/B01b-prep.md`.
+
+## Persistent write checks
+
+The seed importer now uses explicit `(user_id, room_id, involvement)` tuples
+for existing rooms and users. Run `python3 bench/seed/test_import_seed.py`
+for membership and determinism checks. Run
+`python3 bench/check/test_validate_writes.py` to check rejection of false POST
+successes, missing bodies and missing search entries. Rebuild existing seeds after this fix.
+
+The C adapter runs `bench/check/validate_writes.py` for every app: a preflight
+POST must return a Turbo Stream containing the submitted text and persist
+both the message and its rich-text body. The warmup and every measured POST
+run must create exactly one new database message per successful response.
+These checks run outside the timed load-generator interval. A nonempty
+HTTP 200 error page can no longer pass the write benchmark.
+
+Historical POST results made with the old importer are invalid: the posting
+user was not a member of HQ, and HTTP 200 error pages were counted as writes.
+Rebuild the seed and rerun rather than reusing those figures. The reporting
+tools reject POST rows without a verified persistent-message count.

@@ -1,7 +1,12 @@
-diff -ruN c-orig/bench/report c-work/bench/report
---- c-orig/bench/report	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/report	2026-10-06 08:01:31.345856183 -0400
-@@ -24,7 +24,7 @@
+--- a/bench/report
++++ b/bench/report
+@@ -20,11 +20,13 @@
+     if "app" in r:
+         for h in r.get("http", []):
+             assert h["errors"] == 0 and h.get("invalid_responses", 0) == 0 and set(h["statuses"]) == {"200"}, f
++            if h.get("route") == "post_message":
++                assert h.get("persisted_messages") == h["ok"] > 0, (f, "Unverified message persistence")
+         for c in r.get("cable", []):
              assert c["ready"] == c["clients"] and c["failed"] == 0 and c["latency"]["complete"] == c["latency"]["messages"] and c["throughput"]["complete"] == c["throughput"]["posted"], f
          runs.setdefault(r["app"], []).append(r)
  identity = runs.pop("rust-identity", None)
@@ -10,7 +15,7 @@ diff -ruN c-orig/bench/report c-work/bench/report
  
  
  def cell(vals):
-@@ -76,7 +76,10 @@
+@@ -76,7 +78,13 @@
          print(note + "\n")
      more = " Rust, no gzip | vs Rust gzip |" if with_identity else ""
      advantage = "Rust advantage over Elixir" if "elixir" in apps else "Rust advantage over Rails"
@@ -18,11 +23,14 @@ diff -ruN c-orig/bench/report c-work/bench/report
 +    if ("c" in apps or "c-filc" in apps) and "rust" not in apps:
 +        other = "Elixir" if "elixir" in apps else "Rails" if "reference" in apps else None
 +        advantage = f"C advantage over {other}" if other else "C (single app)"
++    if ("c" in apps or "c-filc" in apps) and "rust" not in apps:
++        other = "Elixir" if "elixir" in apps else "Rails" if "reference" in apps else None
++        advantage = f"C advantage over {other}" if other else "C (single app)"
 +    print("| Metric | " + " | ".join({"reference":"Rails", "elixir":"Elixir", "go":"Go", "rust":"Rust", "c":"C", "c-filc":"C (Fil-C)"}[a] for a in apps) + " | " + advantage + " |" + more)
      print("|---|" + "---|" * len(apps) + "---|" + ("---|---|" if with_identity else ""))
  
  
-@@ -150,11 +153,11 @@
+@@ -150,11 +158,11 @@
          p = c["process_memory"][phase]
          roles = p["roles"]
          if what == "app":
@@ -37,7 +45,7 @@ diff -ruN c-orig/bench/report c-work/bench/report
              return sum(roles[k]["peak_pss_mb"] for k in keys if k in roles)
          return p["peak_total_pss_mb"]
      return get
-@@ -163,7 +166,7 @@
+@@ -163,7 +171,7 @@
  if all("process_memory" in c for a in apps for r in runs[a] for c in r["cable"]):
      header("Memory during cable fan-out, by process (MiB, peak within the phase)", note=(
          "App process: Elixir BEAM; Rails Puma master/workers when included;\n"
@@ -46,15 +54,15 @@ diff -ruN c-orig/bench/report c-work/bench/report
          "PSS apportions shared pages; RssAnon counts them in each process."))
      for c in first["cable"]:
          n = c["clients"]
-diff -ruN c-orig/bench/run c-work/bench/run
---- c-orig/bench/run	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/run	2026-10-06 07:58:49.814423222 -0400
+--- a/bench/run
++++ b/bench/run
 @@ -1,7 +1,7 @@
  #!/usr/bin/env bash
 -# Benchmark the Elixir and Rust ports on the same Rails seed and CPUs.
-+# Benchmark the Elixir, Go, Rust and C ports on the same Rails seed and CPUs.
- #
+-#
 -#   bench/run [--apps elixir,rust[,reference]] [--reps 4] [--out DIR] [--user-agent UA]
++# Benchmark the Elixir, Go, Rust and C ports on the same Rails seed and CPUs.
++#
 +#   bench/run [--apps elixir,rust,go,c[,reference]] [--reps 4] [--out DIR] [--user-agent UA]
  #   bench/report DIR            # median + spread table from a results dir
  #
@@ -116,7 +124,34 @@ diff -ruN c-orig/bench/run c-work/bench/run
    local ncpu; ncpu=$(taskset -c "$SERVER_CPUS" nproc)
    local workers=$(( (ncpu * 666 + 999) / 1000 ))
    grep -Ev '^(#|$|WEB_CONCURRENCY|JOB_CONCURRENCY|RAILS_MAX_THREADS|RAILS_LOG_LEVEL)' "$ENV_FILE" | sed 's/^/-e\n/'
-@@ -290,14 +306,16 @@
+@@ -224,6 +240,7 @@
+     "post_message|POST"
+   )
+   python3 "$BENCH/validate.py" preflight "$BASE" "$cookie" "$ROOM" "$BEFORE" "$AVATAR" "$css" "$WORK/$app/db/production.sqlite3" "$OUT/$app-$rep-validation.json"
++  python3 "$C_WRITE_VALIDATOR" preflight "$BASE" "$cookie" "$WRITE_ROOM" "$WORK/$app/db/production.sqlite3" "$OUT/$app-$rep-write-validation.json" "$csrf"
+   local http_json="[]" r name path args enc=()
+   [ "$app" = rust-identity ] && enc=(--gzip 0)
+   suite http || routes=()
+@@ -231,12 +248,17 @@
+     name=${r%%|*}; path=${r#*|}
+     if [ "$path" = POST ]; then args=(--post-room "$WRITE_ROOM" --csrf "$csrf"); else args=(--path "$path"); fi
+     args+=("${enc[@]}")
+-    lg http --base "$BASE" --cookie "$cookie" "${args[@]}" --conc 4 --duration 2 >/dev/null # warm up
++    local writes_before="" warmup
++    if [ "$path" = POST ]; then writes_before=$(python3 "$C_WRITE_VALIDATOR" count "$WORK/$app/db/production.sqlite3" "$WRITE_ROOM"); fi
++    warmup=$(lg http --base "$BASE" --cookie "$cookie" "${args[@]}" --conc 4 --duration 2)
++    if [ "$path" = POST ]; then printf '%s' "$warmup" | python3 "$C_WRITE_VALIDATOR" check "$WORK/$app/db/production.sqlite3" "$WRITE_ROOM" "$writes_before" >/dev/null; fi
+     for c in $HTTP_CONCS; do
+       local cpu_before; cpu_before=$(awk '$1=="usage_usec" {print $2}' "$cg/cpu.stat")
++      if [ "$path" = POST ]; then writes_before=$(python3 "$C_WRITE_VALIDATOR" count "$WORK/$app/db/production.sqlite3" "$WRITE_ROOM"); fi
+       local res; res=$(lg http --base "$BASE" --cookie "$cookie" "${args[@]}" --conc "$c" --duration "$HTTP_SECS")
+       local cpu_after; cpu_after=$(awk '$1=="usage_usec" {print $2}' "$cg/cpu.stat")
+       res=$(python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["errors"]==0 and r.get("invalid_responses",0)==0 and set(r["statuses"])=={"200"}, r; r["cpu_us_per_success"]=(int(sys.argv[3])-int(sys.argv[2]))/r["ok"]; print(json.dumps(r))' "$res" "$cpu_before" "$cpu_after")
++      if [ "$path" = POST ]; then res=$(printf '%s' "$res" | python3 "$C_WRITE_VALIDATOR" check "$WORK/$app/db/production.sqlite3" "$WRITE_ROOM" "$writes_before"); fi
+       http_json=$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); r=json.loads(sys.argv[2]); r["route"]=sys.argv[3]; a.append(r); print(json.dumps(a))' "$http_json" "$res" "$name")
+       log "$app rep $rep: $name c=$c $(python3 -c 'import json,sys; r=json.loads(sys.argv[1]); print(r["rps"], "rps p50", r["latency"].get("p50_ms"), "p99", r["latency"].get("p99_ms"), r["statuses"], "err", r["errors"])' "$res")"
+     done
+@@ -290,14 +312,16 @@
    echo "server cpus: $SERVER_CPUS (nproc $(taskset -c "$SERVER_CPUS" nproc)); loadgen cpus: $LOADGEN_CPUS; network: $NETWORK"
    echo "env: $(env_args | grep -E 'WEB_CONC|JOB_CONC|MAX_THREADS' | tr '\n' ' ')"
    echo "seed sha256: $(sha256sum "$SEED/db/production.sqlite3")"
@@ -135,9 +170,8 @@ diff -ruN c-orig/bench/run c-work/bench/run
  } > "$OUT/env.txt"
  cat "$OUT/env.txt" >&2
  
-diff -ruN c-orig/bench/validate.py c-work/bench/validate.py
---- c-orig/bench/validate.py	2026-10-04 09:49:26.000000000 -0400
-+++ c-work/bench/validate.py	2026-10-06 07:58:39.507499289 -0400
+--- a/bench/validate.py
++++ b/bench/validate.py
 @@ -2,9 +2,11 @@
  """Reject incomplete application measurements and preserve preflight response evidence."""
  import gzip,hashlib,http.client,importlib.machinery,json,pathlib,re,sqlite3,sys,urllib.parse

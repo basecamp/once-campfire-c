@@ -57,6 +57,9 @@ def valid(rep: dict) -> bool:
             return False
         if set(entry.get("statuses", {})) != {"200"}:
             return False
+        if entry.get("route") == "post_message":
+            if entry.get("ok", 0) <= 0 or entry.get("persisted_messages") != entry["ok"]:
+                return False
     return True
 
 

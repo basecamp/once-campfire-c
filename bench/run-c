@@ -195,6 +195,7 @@ else
 fi
 C_BINARY_SHA256=$(sha256sum "$BINARY" | awk '{print $1}')
 export SEED C_IMAGE C_REVISION C_BINARY_SHA256
+export C_WRITE_VALIDATOR="$BENCH/check/validate_writes.py"
 if [ "$WITH_FILC" = 1 ]; then
   C_FILC_REVISION=$C_REVISION
   C_FILC_BINARY_SHA256=$(sha256sum "$FILC_BINARY" | awk '{print $1}')

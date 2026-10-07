@@ -190,14 +190,14 @@ def build(out_dir: Path, schema_path: Path, secret_key_base: str) -> dict:
             {"id": 2, "name": "HQ", "creator": 1},
             {"id": 3, "name": "Designers", "creator": 1},
         ]
+        # Explicit (user_id, room_id, involvement) tuples; every referenced
+        # user and room belongs to this synthesized workload.
         memberships = [
-            # david: everything in the busy room, nothing in the write room,
-            # mentions in designers (mirrors tests/seed/seeds/default.rb).
-            (1, 1, 1, "everything"), (1, 1, 2, "nothing"), (1, 1, 3, "mentions"),
-            (2, 1, 2, "mentions"), (2, 1, 3, "everything"), (2, 1, 4, "everything"),
-            (3, 1, 2, "everything"), (3, 1, 3, "mentions"), (3, 1, 1, "mentions"),
-            (4, 1, 2, "mentions"), (4, 1, 3, "mentions"), (4, 1, 1, "mentions"),
-            (5, 1, 1, "mentions"), (5, 1, 2, "mentions"), (5, 1, 3, "mentions"),
+            (1, 1, "everything"), (1, 2, "nothing"), (1, 3, "mentions"),
+            (2, 1, "mentions"), (2, 2, "mentions"), (2, 3, "everything"),
+            (3, 1, "mentions"), (3, 2, "everything"), (3, 3, "mentions"),
+            (4, 1, "mentions"), (4, 2, "mentions"), (4, 3, "mentions"),
+            (5, 1, "mentions"), (5, 2, "mentions"), (5, 3, "mentions"),
         ]
         for i, room in enumerate(rooms):
             created = NOW - dt.timedelta(days=58) + dt.timedelta(hours=i)
@@ -206,7 +206,7 @@ def build(out_dir: Path, schema_path: Path, secret_key_base: str) -> dict:
                 "updated_at) VALUES (?, ?, 'Rooms::Open', ?, ?, ?)",
                 (room["id"], room["name"], room["creator"], time_text(created),
                  time_text(created)))
-        for mid, (room_id, _one, user_id, involvement) in enumerate(
+        for mid, (user_id, room_id, involvement) in enumerate(
                 memberships, start=1):
             created = NOW - dt.timedelta(days=57) + dt.timedelta(minutes=mid)
             db.execute(
