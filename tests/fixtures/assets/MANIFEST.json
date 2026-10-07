@@ -1,7 +1,7 @@
 {
   "format": 1,
   "task": "H03-prep",
-  "purpose": "Pinned outputs of the Rust reference's assets build (Propshaft port, crates/assets/build.rs): digested bodies, Propshaft manifest, import map and reference/public, extracted so H03 can serve /assets/* without re-running the Rust build. Asset names and digests come only from the build's own embedded.rs; nothing here is hand-written. The current maintained tree additionally carries the documented port-owned sidebar reload fix, with a new content digest; original build/reference crosschecks below are historical provenance.",
+  "purpose": "Pinned outputs of the Rust reference's assets build (Propshaft port, crates/assets/build.rs): digested bodies, Propshaft manifest, import map and reference/public, extracted so H03 can serve /assets/* without re-running the Rust build. Asset names and digests come only from the build's own embedded.rs; nothing here is hand-written. The current maintained tree additionally carries the documented port-owned sidebar reload and active-picker preservation fixes, with a new content digest; original build/reference crosschecks below are historical provenance.",
   "source_repo": "https://github.com/basecamp/once-campfire.git",
   "source_revision": "90b330024dec3e757c79b6a7e6568f93da8e3148",
   "source_reference_path": "reference/ (git submodule in tmp/rust-ref/.gitmodules, pinned to source_revision)",
@@ -100,7 +100,7 @@
   "serving": {
     "static_root_fixture": "tests/fixtures/assets/public",
     "manifest_url": "/assets/.manifest.json",
-    "manifest_served_sha256": "0e84f4988cea4ecb81fcc65901e5b92eb34f6be3f7131e18d04f2b33bdad93ea",
+    "manifest_served_sha256": "430aeb42ccd92658397eb3dba9ef38536a1ebbaf30e33961c049028d22b52b67",
     "cache_control": "public, max-age=2592000",
     "immutable": false,
     "last_modified": "Sat, 26 Sep 2026 11:03:34 GMT",
@@ -175,9 +175,9 @@
   ],
   "importmap": {
     "tags_fixture": "tests/fixtures/assets/importmap-tags.html",
-    "tags_sha256": "1ca179f8a45e73f68b4aba91251b00b8c224093499df8c83865be63cef6d15db",
+    "tags_sha256": "354fdfe1fab3d8fc670498bf36e765144827853b92061470dd9c46d040d66e21",
     "json_fixture": "tests/fixtures/assets/importmap.json",
-    "json_sha256": "6e9be7899ee9396565c9bd762982133cfe3f482331a40ccd2efe855ce77b40b2",
+    "json_sha256": "6bdd5ec6a9658f7f48add8197e7cc9139b4e3c0b160375eecd1c72524aab4005",
     "rb_fixture": "tests/fixtures/assets/importmap.rb",
     "rb_sha256": "c2ce10e3d45e56f64691a27cc108fa1151b78e548d00c897e6c865768d9ba495"
   },
@@ -360,7 +360,7 @@
       "mime_known": true,
       "body": "propshaft-manifest",
       "bytes": 27141,
-      "sha256": "0e84f4988cea4ecb81fcc65901e5b92eb34f6be3f7131e18d04f2b33bdad93ea",
+      "sha256": "430aeb42ccd92658397eb3dba9ef38536a1ebbaf30e33961c049028d22b52b67",
       "logical_path": null,
       "digested_path": null
     },
@@ -1549,18 +1549,18 @@
       "gem": null
     },
     {
-      "url": "/assets/controllers/rooms_list_controller-dc8f619b.js",
-      "public_path": "assets/controllers/rooms_list_controller-dc8f619b.js",
-      "fixture": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-dc8f619b.js",
+      "url": "/assets/controllers/rooms_list_controller-8fe7485c.js",
+      "public_path": "assets/controllers/rooms_list_controller-8fe7485c.js",
+      "fixture": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-8fe7485c.js",
       "content_type": "text/javascript",
       "mime_known": true,
       "body": "compiled",
-      "bytes": 1877,
-      "sha256": "9e115f3328d8d604a0184891970826b3bc78ef215cda43c51f774bca4dc00380",
+      "bytes": 3541,
+      "sha256": "1587abe377e2e7d80a8ee4a780eaf7fb00fe3a50d506b8525ab76fa29c5ea0ac",
       "logical_path": "controllers/rooms_list_controller.js",
-      "digested_path": "controllers/rooms_list_controller-dc8f619b.js",
-      "source": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-dc8f619b.js",
-      "source_sha256": "9e115f3328d8d604a0184891970826b3bc78ef215cda43c51f774bca4dc00380",
+      "digested_path": "controllers/rooms_list_controller-8fe7485c.js",
+      "source": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-8fe7485c.js",
+      "source_sha256": "1587abe377e2e7d80a8ee4a780eaf7fb00fe3a50d506b8525ab76fa29c5ea0ac",
       "category": "port-override",
       "gem": null,
       "original_source_sha256": "a9148a7a494d2d9f8429dfd1c11c5e6168fee1ff482a249b596ea363ea744efc"
@@ -5424,10 +5424,10 @@
   ],
   "port_overrides": {
     "controllers/rooms_list_controller.js": {
-      "reason": "Wait for the initial Turbo frame response before reconnect reload, and ignore obsolete connection callbacks.",
+      "reason": "Wait for completed initial frame loads before reconnect refreshes, ignore obsolete callbacks, and preserve the active direct-message editor through background sidebar rendering while allowing intentional navigation.",
       "digest_rule": "SHA1(source bytes + assets version 1.0), first 8 hex characters",
       "original_digested_path": "controllers/rooms_list_controller-64840fcd.js",
-      "digested_path": "controllers/rooms_list_controller-dc8f619b.js"
+      "digested_path": "controllers/rooms_list_controller-8fe7485c.js"
     }
   }
 }
