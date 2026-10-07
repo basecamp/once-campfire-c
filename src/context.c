@@ -24,6 +24,7 @@
 #include "app.h"
 #include "app_internal.h" /* K01c: cf_app_cache (the enabled cache) */
 #include "auth.h" /* cf_auth_flash_load (A01's flash hand-off) */
+#include "db/db_internal.h"
 #include "cache.h"     /* K01c: cf_cache_get/put, stats */
 #include "cache_key.h" /* K01c: key encoding, ETag, admission table */
 #include "config.h"    /* PUBLIC_ORIGIN (key field 7) */
@@ -2263,6 +2264,14 @@ cf_err cf_cache_round_lookup(cf_ctx *ctx, cf_cache_round *round,
      * through this path). */
     if (ctx->identity.kind != CF_AUTH_SESSION) return CF_NOT_FOUND;
 
+    /* Check after auth's possible session-activity commit, before choosing a body.
+     * Rechecking every commit keeps foreign writes visible even beside local writes. */
+    bool changed = false;
+    if (cf_db_observe_changes(ctx->reader, &changed) != CF_OK) {
+        round->cache = NULL;
+        return CF_NOT_FOUND;
+    }
+    if (changed) cf_app_advance_data_version(ctx->app);
     /* The auth pass may have committed a session-activity update; 06's
      * boxed rule restarts the read/version sequence once instead of
      * continuing with the old snapshot. The gather and render below follow

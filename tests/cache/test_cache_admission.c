@@ -1099,7 +1099,7 @@ CF_TEST(cache_session_activity_write_restarts_the_version) {
     cf_response_init(&resp);
     CF_REQUIRE(run_request(&env, &b, &resp));
     CF_CHECK(resp.status == 200);
-    CF_CHECK(cf_data_version(env.app) == before + 1);
+    CF_CHECK(cf_data_version(env.app) > before);
     cf_cache_stats s = stats(&env);
     CF_CHECK(s.version_rejects == 0);
     CF_CHECK(s.entries == 1);
@@ -2264,6 +2264,38 @@ CF_TEST(cache_sidebars_version_churn_invalidates) {
 /* ======================================================================== */
 /* accounting                                                               */
 /* ======================================================================== */
+
+CF_TEST(cache_external_commit_invalidates_without_timestamp_changes) {
+    cache_env env;
+    CF_REQUIRE(env_open(&env, CACHE_BUDGET));
+    seed_world(&env);
+    reqbuf one;
+    req_init(&one);
+    req_auth(&env, &one, USER_A);
+    req_get(&one, "/rooms/3001");
+    cf_response first;
+    cf_response_init(&first);
+    CF_REQUIRE(run_request(&env, &one, &first));
+    CF_REQUIRE(first.status == 200);
+    cf_response_dispose(&first);
+    cf_cache_stats before = stats(&env);
+    sqlite3 *external = NULL;
+    CF_REQUIRE(sqlite3_open(env.scratch.path, &external) == SQLITE_OK);
+    CF_REQUIRE(sqlite3_exec(external, "UPDATE users SET name='Externally changed' WHERE id=2001", NULL, NULL, NULL) == SQLITE_OK);
+    sqlite3_close(external);
+    reqbuf two;
+    req_init(&two);
+    req_auth(&env, &two, USER_A);
+    req_get(&two, "/rooms/3001");
+    cf_response second;
+    cf_response_init(&second);
+    CF_REQUIRE(run_request(&env, &two, &second));
+    CF_REQUIRE(second.status == 200);
+    CF_CHECK(body_contains(&second, "Externally changed"));
+    CF_CHECK(stats(&env).hits == before.hits);
+    cf_response_dispose(&second);
+    env_close(&env);
+}
 
 CF_TEST(cache_accounting_is_cache_owned_only) {
     cache_env env;

@@ -8,6 +8,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 #define HEX64 \
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -82,14 +85,14 @@ CF_TEST(config_defaults_and_destroy) {
     CF_CHECK(strcmp(cfg->storage_path, CF_CONFIG_DEFAULT_STORAGE_PATH) == 0);
     CF_CHECK(cfg->secret_key_base_len == 64);
     CF_CHECK(strcmp(cfg->secret_key_base, HEX64) == 0);
-    CF_CHECK(cfg->loops == 1);
+    CF_CHECK(cfg->loops >= 1 && cfg->loops <= CF_CONFIG_DEFAULT_READERS);
     CF_CHECK(cfg->readers == 4);
     CF_CHECK(cfg->request_slots == 256);
     CF_CHECK(cfg->writer_queue == 256);
     CF_CHECK(cfg->connections_per_loop == 2048);
     CF_CHECK(cfg->input_bytes == 64 * CF_CONFIG_MIB);
     CF_CHECK(cfg->output_bytes == 64 * CF_CONFIG_MIB);
-    CF_CHECK(cfg->cache_bytes == 0);
+    CF_CHECK(cfg->cache_bytes == 64 * CF_CONFIG_MIB);
     CF_CHECK(cfg->job_queue == 128);
     CF_CHECK(cfg->job_workers == 2);
     CF_CHECK(cfg->crypto_workers == 2);
@@ -102,6 +105,35 @@ CF_TEST(config_defaults_and_destroy) {
     CF_CHECK(CF_BCRYPT_COST == 12); /* test injection must not change this */
     cf_config_destroy(cfg);
     cf_config_destroy(NULL); /* destructors accept NULL */
+}
+
+CF_TEST(config_defaults_respect_assigned_cpus) {
+#ifdef __linux__
+    cpu_set_t original, assigned;
+    CF_REQUIRE(sched_getaffinity(0, sizeof original, &original) == 0);
+    CPU_ZERO(&assigned);
+    size_t selected = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE && selected < 2; cpu++) {
+        if (!CPU_ISSET(cpu, &original)) continue;
+        CPU_SET(cpu, &assigned);
+        selected++;
+        CF_REQUIRE(sched_setaffinity(0, sizeof assigned, &assigned) == 0);
+        cf_config *cfg = NULL;
+        cf_err result = parse_case(NULL, 0, NULL, &cfg);
+        /* Restore even if a later assertion fails. */
+        int restored = sched_setaffinity(0, sizeof original, &original);
+        CF_REQUIRE(restored == 0);
+        CF_REQUIRE(result == CF_OK);
+        CF_CHECK(cfg->loops == selected);
+        cf_config_destroy(cfg);
+    }
+    CF_CHECK(selected > 0);
+#else
+    cf_config *cfg = NULL;
+    CF_REQUIRE(parse_case(NULL, 0, NULL, &cfg) == CF_OK);
+    CF_CHECK(cfg->loops == CF_CONFIG_DEFAULT_LOOPS);
+    cf_config_destroy(cfg);
+#endif
 }
 
 CF_TEST(config_all_valid_overrides) {

@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 /* All settings in the supported environment surface. */
 static const char *const cf_config_known_names[] = {
@@ -35,6 +38,21 @@ static const char *const cf_config_known_names[] = {
     "VAPID_PRIVATE_KEY",
     "VAPID_SUBJECT",
 };
+
+/* Share the assigned CPUs, bounded by the default reader pool. Explicit CF_LOOPS
+ * still wins; restricted containers must not size themselves from the host. */
+static size_t cf_config_default_loops(void) {
+#ifdef __linux__
+    cpu_set_t assigned;
+    if (sched_getaffinity(0, sizeof assigned, &assigned) == 0) {
+        size_t count = (size_t)CPU_COUNT(&assigned);
+        if (count != 0) {
+            return count < CF_CONFIG_DEFAULT_READERS ? count : CF_CONFIG_DEFAULT_READERS;
+        }
+    }
+#endif
+    return CF_CONFIG_DEFAULT_LOOPS;
+}
 
 #define CF_CONFIG_KNOWN_COUNT \
     (sizeof cf_config_known_names / sizeof cf_config_known_names[0])
@@ -414,7 +432,7 @@ cf_err cf_config_parse(const cf_config_entry *entries, size_t count,
     cf_config *config = calloc(1, sizeof *config);
     if (config == NULL) return CF_NOMEM;
     config->port = CF_CONFIG_DEFAULT_PORT;
-    config->loops = CF_CONFIG_DEFAULT_LOOPS;
+    config->loops = cf_config_default_loops();
     config->readers = CF_CONFIG_DEFAULT_READERS;
     config->request_slots = CF_CONFIG_DEFAULT_REQUEST_SLOTS;
     config->writer_queue = CF_CONFIG_DEFAULT_WRITER_QUEUE;

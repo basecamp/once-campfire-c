@@ -53,10 +53,12 @@ DISABLE_SSL=1 \
 Configuration is read once from the environment (no reload). The settings
 include `HOST`/`PORT`, `DATABASE_PATH`, `STORAGE_PATH`, `PUBLIC_ORIGIN`,
 `SECRET_KEY_BASE`, `CF_LOOPS`/`CF_READERS`/`CF_REQUEST_SLOTS`,
-`CF_CACHE_BYTES` (body cache; 0 disables), `CF_CONNECTIONS_PER_LOOP`, the
+`CF_CACHE_BYTES` (64 MiB body cache by default; 0 disables), `CF_CONNECTIONS_PER_LOOP`, the
 `CF_*_BYTES` budgets, the TLS certificate/key pair (`TLS_CERT_FILE`,
 `TLS_KEY_FILE`), and the VAPID key pair for Web Push. TLS uses configured
-certificates; automatic certificate issuance (ACME) is out of scope.
+certificates; automatic certificate issuance (ACME) is out of scope. On Linux, the default
+event-loop count follows CPU affinity, capped at four; `CF_LOOPS` overrides it.
+Cache lookups recheck authorization and observe external SQLite commits.
 
 ## Benchmarks
 
@@ -94,6 +96,13 @@ Repository layout: `src/` (`core`, `http`, `front`, `auth`, `richtext`,
 `tests/` (one suite per module plus the integration cases), `bench/`,
 `vendor/` (pins and build scripts). The shared module contract is
 `src/cf.h`; per-area headers and evidence live beside the code.
+
+## Known differences
+
+- Search returns the newest 100 accessible matches by insertion ID and displays them in ID
+  order. Backdated imports can therefore appear in a different order from Rails.
+- Incremental refresh uses a port-owned `(room_id, updated_at)` index; the frozen reference
+  schema remains unchanged.
 
 ## License
 

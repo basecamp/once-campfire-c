@@ -745,33 +745,6 @@ cf_err cf_user_count(cf_db *db, int64_t *out) {
     return rc;
 }
 
-/* The JSON text of the ids array; [] for an empty list. */
-static cf_err user_ids_json(const int64_t *ids, size_t ids_len, cf_str *out) {
-    out->ptr = NULL;
-    out->len = 0;
-    if (ids_len != 0 && ids == NULL) return CF_INVALID;
-    /* "[" + up to 20 bytes per int64 + "," + "]" */
-    if (ids_len > (SIZE_MAX - 3) / 21) return CF_LIMIT;
-    size_t cap = ids_len * 21 + 3;
-    char *json = malloc(cap);
-    if (json == NULL) return CF_NOMEM;
-    size_t at = 0;
-    json[at++] = '[';
-    for (size_t i = 0; i < ids_len; i++) {
-        if (i != 0) json[at++] = ',';
-        int len = snprintf(json + at, cap - at, "%lld", (long long)ids[i]);
-        if (len < 0 || (size_t)len >= cap - at) {
-            free(json);
-            return cf_db_failf(CF_INTERNAL, "cannot format id list");
-        }
-        at += (size_t)len;
-    }
-    json[at++] = ']';
-    json[at] = '\0';
-    out->ptr = json;
-    out->len = at;
-    return CF_OK;
-}
 
 cf_err cf_user_where_ids(cf_db *db, const int64_t *ids, size_t ids_len,
                          cf_user_vector *out) {
@@ -781,7 +754,7 @@ cf_err cf_user_where_ids(cf_db *db, const int64_t *ids, size_t ids_len,
     memset(out, 0, sizeof *out);
 
     cf_str json;
-    cf_err rc = user_ids_json(ids, ids_len, &json);
+    cf_err rc = cf_db_ids_json(ids, ids_len, &json);
     if (rc != CF_OK) return rc;
 
     sqlite3_stmt *stmt = NULL;

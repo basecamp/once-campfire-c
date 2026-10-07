@@ -307,7 +307,7 @@ def first_run_setup(
     browser.fill("#user_name", name)
     browser.fill("#user_email_address", email)
     browser.fill("#user_password", password)
-    browser.click("button[name=button]")
+    browser.click_ui("button[name=button]")
     browser.wait_url(f"/rooms/{FIRST_ROOM_ID}", timeout=30)
 
 
@@ -555,7 +555,8 @@ class Browser:
     """One named agent-browser session (its own cookies, tabs and refs)."""
 
     def __init__(self, session: str):
-        self.session = session
+        # CLI sessions are machine-wide; parallel projects must not share "a"/"b".
+        self.session = f"campfire-e2e-{os.getpid()}-{session}"
 
     # -- raw command -------------------------------------------------------
 
@@ -567,6 +568,10 @@ class Browser:
         stdin: str | None = None,
     ):
         cmd = [str(AGENT_BROWSER), "--session", self.session, *args]
+        if os.environ.get("CF_E2E_TLS") == "1":
+            # The fixture certificate names www.example.com; browsers visit loopback.
+            # The HTTP clients independently verify its committed CA.
+            cmd.insert(1, "--ignore-https-errors")
         proc = subprocess.run(
             cmd,
             capture_output=True,

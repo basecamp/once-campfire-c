@@ -85,6 +85,8 @@ enum {
     CF_MS_PAGED,
     CF_MS_SEARCH_IN_ROOM,
     CF_MS_SEARCH_REACHABLE,
+    CF_MS_SEARCH_PROBE,
+    CF_MS_SEARCH_SELECTED,
     CF_MS_MENTIONEES_IN_ROOM,
     CF_MS_INSERT,
     CF_MS_TOUCH,
@@ -132,11 +134,11 @@ static const cf_stmt_def cf_message_stmt_defs[] = {
          "\"messages\".\"created_at\" ASC LIMIT 40"},
     [CF_MS_PAGE_UPDATED_SINCE] =
         {CF_MESSAGE_IN_ROOM " AND (updated_at > ?) ORDER BY "
-         "\"messages\".\"created_at\" DESC LIMIT 40"},
+         "+\"messages\".\"created_at\" DESC LIMIT 40"},
     [CF_MS_PAGE_UPDATED_SINCE_EXCLUDING] =
         {CF_MESSAGE_IN_ROOM " AND \"messages\".\"id\" NOT IN (SELECT value "
          "FROM json_each(?)) AND (updated_at > ?) ORDER BY "
-         "\"messages\".\"created_at\" DESC LIMIT 40"},
+         "+\"messages\".\"created_at\" DESC LIMIT 40"},
     [CF_MS_EXISTS_BEFORE] =
         {"SELECT 1 FROM \"messages\" WHERE \"messages\".\"room_id\" = ? AND "
          "(created_at < ?) LIMIT 1"},
@@ -154,7 +156,15 @@ static const cf_stmt_def cf_message_stmt_defs[] = {
     [CF_MS_SEARCH_REACHABLE] =
         {CF_MESSAGE_REACHABLE " join message_search_index idx on messages.id "
          "= idx.rowid WHERE \"memberships\".\"user_id\" = ? AND (idx.body "
-         "match ?) ORDER BY \"messages\".\"created_at\" DESC LIMIT 100"},
+         "match ?) ORDER BY \"messages\".\"id\" DESC LIMIT 100"},
+    [CF_MS_SEARCH_PROBE] =
+        {"SELECT m.id, mm.user_id IS NOT NULL FROM message_search_index idx "
+         "JOIN messages m ON m.id=idx.rowid LEFT JOIN memberships mm "
+         "ON mm.room_id=m.room_id AND mm.user_id=? WHERE idx.body MATCH ? "
+         "ORDER BY idx.rowid DESC LIMIT 1000"},
+    [CF_MS_SEARCH_SELECTED] =
+        {CF_MESSAGE_REACHABLE " WHERE memberships.user_id=? AND messages.id "
+         "IN (SELECT value FROM json_each(?)) ORDER BY messages.id DESC"},
     [CF_MS_MENTIONEES_IN_ROOM] =
         {"SELECT \"users\".\"id\", \"users\".\"name\", "
          "\"users\".\"email_address\", \"users\".\"password_digest\", "
@@ -660,31 +670,6 @@ cf_err cf_message_page_created_since(cf_db *db, int64_t room_id,
                             &args, true, false, out);
 }
 
-/* Decimal JSON array of int64 ids for json_each (the C stand-in for the
- * reference's runtime placeholder list; see the file comment). */
-static cf_err ids_to_json(const int64_t *ids, size_t ids_len, cf_str *out) {
-    memset(out, 0, sizeof *out);
-    if (ids_len > (SIZE_MAX - 3) / 22) return CF_LIMIT;
-    size_t cap = ids_len * 22 + 3;
-    char *text = malloc(cap);
-    if (text == NULL) return CF_NOMEM;
-    size_t pos = 0;
-    text[pos++] = '[';
-    for (size_t i = 0; i < ids_len; i++) {
-        int written = snprintf(text + pos, cap - pos, "%s%lld",
-                               i == 0 ? "" : ",", (long long)ids[i]);
-        if (written < 0 || (size_t)written >= cap - pos) {
-            free(text);
-            return CF_INTERNAL;
-        }
-        pos += (size_t)written;
-    }
-    text[pos++] = ']';
-    text[pos] = '\0';
-    out->ptr = text;
-    out->len = pos;
-    return CF_OK;
-}
 
 cf_err cf_message_page_updated_since(cf_db *db, int64_t room_id,
                                      int64_t time_us,
@@ -697,7 +682,7 @@ cf_err cf_message_page_updated_since(cf_db *db, int64_t room_id,
                                 &args, true, true, out);
     }
     cf_str ids = {0};
-    cf_err rc = ids_to_json(excluding, excluding_len, &ids);
+    cf_err rc = cf_db_ids_json(excluding, excluding_len, &ids);
     if (rc != CF_OK) return rc;
     struct bind_excluding args = {room_id, ids, time_us};
     rc = collect_messages(db, CF_MS_PAGE_UPDATED_SINCE_EXCLUDING,
@@ -886,9 +871,43 @@ cf_err cf_message_search_reachable(cf_db *db, int64_t user_id, cf_str query,
         memset(out, 0, sizeof *out);
         return CF_OK;
     }
-    struct bind_text args = {user_id, terms};
-    rc = collect_messages(db, CF_MS_SEARCH_REACHABLE, bind_room_text, &args,
-                          true, true, out);
+    /* Probe a bounded reverse FTS window without decoding inaccessible rows.
+     * Sparse memberships use the scoped query, so older reachable hits survive. */
+    int64_t ids[100];
+    size_t examined = 0, selected = 0;
+    sqlite3_stmt *stmt = NULL;
+    rc = cf_db_stmt(db, &cf_message_stmts, CF_MS_SEARCH_PROBE, &stmt);
+    if (rc == CF_OK) rc = cf_stmt_bind_i64(stmt, 1, user_id);
+    if (rc == CF_OK) rc = bind_str(stmt, 2, terms);
+    while (rc == CF_OK && selected < 100) {
+        int step = sqlite3_step(stmt);
+        if (step == SQLITE_DONE) break;
+        if (step != SQLITE_ROW) {
+            rc = fail_db(db, cf_db_err(step), "search probe failed");
+            break;
+        }
+        examined++;
+        if (cf_stmt_column_i64(stmt, 1) != 0) {
+            ids[selected++] = cf_stmt_column_i64(stmt, 0);
+        }
+    }
+    if (stmt != NULL) cf_db_stmt_done(stmt);
+    if (rc == CF_OK) {
+        struct bind_text args = {user_id, terms};
+        if (examined == 1000 && selected < 100) {
+            rc = collect_messages(db, CF_MS_SEARCH_REACHABLE, bind_room_text,
+                                  &args, true, true, out);
+        } else {
+            cf_str json = {0};
+            rc = cf_db_ids_json(ids, selected, &json);
+            if (rc == CF_OK) {
+                args.text = json;
+                rc = collect_messages(db, CF_MS_SEARCH_SELECTED, bind_room_text,
+                                      &args, true, true, out);
+            }
+            cf_str_dispose(&json);
+        }
+    }
     cf_str_dispose(&terms);
     return rc;
 }
@@ -906,7 +925,7 @@ cf_err cf_message_mentionees_in_room(cf_db *db, int64_t room_id,
         return cf_db_failf(CF_INVALID, "no user id list");
     }
     cf_str ids = {0};
-    cf_err rc = ids_to_json(user_ids, user_ids_len, &ids);
+    cf_err rc = cf_db_ids_json(user_ids, user_ids_len, &ids);
     if (rc != CF_OK) return rc;
     struct bind_text args = {room_id, ids};
     sqlite3_stmt *stmt = NULL;

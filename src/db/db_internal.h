@@ -27,6 +27,7 @@
 #include <sqlite3.h>
 
 #include "cf.h"
+#include "models/types.h"
 
 /* Fresh-schema version recorded in PRAGMA user_version. */
 #define CF_DB_USER_VERSION 1
@@ -69,6 +70,8 @@ struct cf_db {
     char *path;       /* copy of the opening path, for error messages */
     pthread_t owner;  /* thread that opened the connection */
     bool read_only;
+    int64_t observed_data_version;
+    bool observed_data_version_set;
     bool in_read;     /* cf_read_begin without cf_read_end */
     size_t stmt_count;
     cf_stmt_slot stmts[CF_DB_STMT_CACHE_CAPACITY];
@@ -190,5 +193,11 @@ cf_span cf_stmt_column_text(sqlite3_stmt *stmt, int column);
  * while an empty string yields a zero-length buffer (empty).  The copy
  * survives reset/finalize. */
 cf_err cf_stmt_column_copy_text(sqlite3_stmt *stmt, int column, cf_buf **out);
+
+/* Observe every commit on another connection; never absorb it into a local-write epoch. */
+cf_err cf_db_observe_changes(cf_db *db, bool *changed);
+
+/* Owned decimal JSON array for fixed json_each statements. */
+cf_err cf_db_ids_json(const int64_t *ids, size_t ids_len, cf_str *out);
 
 #endif /* CF_DB_INTERNAL_H */

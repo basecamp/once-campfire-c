@@ -130,11 +130,16 @@ static cf_err validate_existing(cf_db *db) {
     return CF_OK;
 }
 
+#define CF_REFRESH_INDEX_SQL \
+    "CREATE INDEX IF NOT EXISTS index_messages_on_room_id_and_updated_at " \
+    "ON messages(room_id,updated_at)"
+
 static cf_err create_fresh(cf_db *db) {
     cf_err err = exec_step(db->handle, "BEGIN IMMEDIATE", "BEGIN IMMEDIATE");
     if (err != CF_OK) return err;
 
     err = exec_step(db->handle, CF_DB_SCHEMA_SQL, "execute schema DDL");
+    if (err == CF_OK) err = exec_step(db->handle, CF_REFRESH_INDEX_SQL, "ensure refresh index");
     if (err == CF_OK) {
         int64_t user_version = 0;
         err = query_i64(db->handle, "PRAGMA user_version",
@@ -190,5 +195,10 @@ cf_err cf_db_schema_ensure(cf_db *db) {
         return create_fresh(db);
     }
 
-    return validate_existing(db);
+    err = validate_existing(db);
+    if (err == CF_OK && !db->read_only) {
+        err = exec_step(db->handle,
+                       CF_REFRESH_INDEX_SQL, "ensure refresh index");
+    }
+    return err;
 }

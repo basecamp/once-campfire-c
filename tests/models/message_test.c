@@ -647,6 +647,31 @@ CF_TEST(search_in_room_and_reachable) {
     cf_db_scratch_close(&scratch);
 }
 
+CF_TEST(search_probe_falls_back_for_sparse_memberships_and_rechecks_access) {
+    cf_db_scratch scratch;
+    CF_REQUIRE(cf_db_scratch_open(&scratch));
+    cf_db *db = scratch.db;
+    seed_base(db);
+    seed_message(db, 1, 10, 1, "public", T0, T0);
+    seed_fts(db, 1, "sparse coffee");
+    for (int64_t i = 2; i <= 1101; i++) {
+        char token[32];
+        snprintf(token, sizeof token, "private-%lld", (long long)i);
+        seed_message(db, i, 20, 1, token, T0, T0);
+        seed_fts(db, i, "sparse coffee");
+    }
+    cf_message_vector messages = {0};
+    CF_REQUIRE(cf_message_search_reachable(db, 2, lit("sparse"), &messages) == CF_OK);
+    CF_REQUIRE(messages.len == 1);
+    CF_CHECK(messages.items[0].id == 1);
+    cf_message_vector_dispose(&messages);
+    CF_REQUIRE(cf_db_test_exec(cf_db_handle(db), "DELETE FROM memberships WHERE user_id=2") == SQLITE_OK);
+    CF_REQUIRE(cf_message_search_reachable(db, 2, lit("sparse"), &messages) == CF_OK);
+    CF_CHECK(messages.len == 0);
+    cf_message_vector_dispose(&messages);
+    cf_db_scratch_close(&scratch);
+}
+
 CF_TEST(mentionees_in_room_joins_memberships) {
     cf_db_scratch scratch;
     CF_REQUIRE(cf_db_scratch_open(&scratch));

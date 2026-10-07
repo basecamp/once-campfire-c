@@ -75,8 +75,8 @@ CF_TEST(schema_fresh_creates_tables_indexes_version_fts_and_fks) {
     }
     /* 15 CREATE TABLE + 1 virtual table + 5 FTS5 shadow tables. */
     CF_CHECK(cf_db_test_object_count(handle, "table") == 21);
-    /* 25 CREATE INDEX; unique-constraint autoindexes are sqlite_autoindex_*. */
-    CF_CHECK(cf_db_test_object_count(handle, "index") == 25);
+    /* 25 contract indexes plus the port-owned refresh index; unique-constraint autoindexes are sqlite_autoindex_*. */
+    CF_CHECK(cf_db_test_object_count(handle, "index") == 26);
 
     /* The paging index is the one D01 highlights: messages(room_id,
      * created_at).  Its columns are part of the created object. */

@@ -18,16 +18,7 @@ export DATABASE_PATH="${DATABASE_PATH:-/rails/storage/db/production.sqlite3}"
 export STORAGE_PATH="${STORAGE_PATH:-/rails/storage/files}"
 export DISABLE_SSL=1
 
-# Complete-body cache budget, bytes (06-cache-performance.md ablation:
-# uncached -> whole-body cache).  The image default is the C config default,
-# 0 (cache disabled); bench/run-c passes the arm explicitly
-# (`--cache-bytes 67108864` for the cache-enabled arm) through the harness's
-# CF_CACHE_BYTES forwarding.
-export CF_CACHE_BYTES="${CF_CACHE_BYTES:-0}"
-
-# HTTP loop threads.  The C config default is 1; the published methodology
-# allocates four hardware threads per app, so benchmark arms set CF_LOOPS=4
-# (`bench/run-c --loops 4`) to match the references' worker counts.
-export CF_LOOPS="${CF_LOOPS:-1}"
+# CF_LOOPS and CF_CACHE_BYTES, when supplied, override the native defaults.
+# Otherwise use assigned CPUs (capped at four loops) and a 64 MiB body cache.
 
 exec /app/campfire "$@"

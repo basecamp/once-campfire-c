@@ -177,6 +177,15 @@ cf_err cf_db_open(const char *path, bool read_only, cf_db **out) {
 
     cf_err err = configure_connection(handle, read_only);
     if (err == CF_OK) err = cf_db_schema_ensure(db);
+    char version_text[24];
+    if (err == CF_OK) {
+        err = pragma_text(handle, "PRAGMA data_version", version_text,
+                          sizeof version_text, "initial data_version");
+        if (err == CF_OK) {
+            db->observed_data_version = strtoll(version_text, NULL, 10);
+            db->observed_data_version_set = true;
+        }
+    }
     if (err != CF_OK) {
         cf_db_close(db);
         return err;
@@ -474,4 +483,54 @@ cf_err cf_db_compile_options(cf_db *db, cf_buf **out) {
         return err;
     }
     return cf_builder_freeze(&builder, out);
+}
+
+/* Decimal JSON array of int64 ids for json_each (the C stand-in for the
+ * reference's runtime placeholder list; see the file comment). */
+cf_err cf_db_ids_json(const int64_t *ids, size_t ids_len, cf_str *out) {
+    if (out == NULL) return CF_INVALID;
+    memset(out, 0, sizeof *out);
+    if (ids_len != 0 && ids == NULL) return CF_INVALID;
+    if (ids_len > (SIZE_MAX - 3) / 22) return CF_LIMIT;
+    size_t cap = ids_len * 22 + 3;
+    char *text = malloc(cap);
+    if (text == NULL) return CF_NOMEM;
+    size_t pos = 0;
+    text[pos++] = '[';
+    for (size_t i = 0; i < ids_len; i++) {
+        int written = snprintf(text + pos, cap - pos, "%s%lld",
+                               i == 0 ? "" : ",", (long long)ids[i]);
+        if (written < 0 || (size_t)written >= cap - pos) {
+            free(text);
+            return CF_INTERNAL;
+        }
+        pos += (size_t)written;
+    }
+    text[pos++] = ']';
+    text[pos] = '\0';
+    out->ptr = text;
+    out->len = pos;
+    return CF_OK;
+}
+
+cf_err cf_db_observe_changes(cf_db *db, bool *changed) {
+    if (changed == NULL) return CF_INVALID;
+    *changed = false;
+    static const cf_stmt_def definitions[] = {{"PRAGMA data_version"}};
+    static const cf_stmt_set statements = {definitions, 1};
+    sqlite3_stmt *stmt = NULL;
+    cf_err rc = cf_db_stmt(db, &statements, 0, &stmt);
+    if (rc != CF_OK) return rc;
+    int step = sqlite3_step(stmt);
+    if (step == SQLITE_ROW) {
+        int64_t version = cf_stmt_column_i64(stmt, 0);
+        *changed = db->observed_data_version_set && version != db->observed_data_version;
+        db->observed_data_version = version;
+        db->observed_data_version_set = true;
+    } else {
+        rc = cf_db_failf(step == SQLITE_DONE ? CF_DB : cf_db_err(step),
+                         "read data_version: %s", sqlite3_errmsg(db->handle));
+    }
+    cf_db_stmt_done(stmt);
+    return rc;
 }

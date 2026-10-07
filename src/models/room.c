@@ -128,13 +128,11 @@ static const cf_stmt_def room_stmt_defs[ROOM_STMT_COUNT] = {
     [ROOM_STMT_CREATE] = {
         "INSERT INTO \"rooms\" (\"created_at\", \"creator_id\", \"name\", "
         "\"type\", \"updated_at\") VALUES (?, ?, ?, ?, ?) RETURNING \"id\""},
-    /* Rust: Room::find_direct_for candidates (rooms repeat per member) */
     [ROOM_STMT_DIRECT_CANDIDATES] = {
-        "SELECT " ROOM_COLUMNS
-        " FROM \"rooms\" INNER JOIN \"memberships\" ON "
-        "\"memberships\".\"room_id\" = \"rooms\".\"id\" INNER JOIN \"users\" "
-        "ON \"users\".\"id\" = \"memberships\".\"user_id\" WHERE "
-        "\"rooms\".\"type\" = ?"},
+        "SELECT " ROOM_COLUMNS " FROM rooms WHERE rooms.type='Rooms::Direct' "
+        "AND rooms.id IN (SELECT room_id FROM memberships GROUP BY room_id "
+        "HAVING COUNT(*)=?2 AND SUM(user_id IN (SELECT value FROM json_each(?1)))=?2) "
+        "ORDER BY rooms.id LIMIT 1"},
     /* Rust: grant_to_active_users user list */
     [ROOM_STMT_ACTIVE_USER_IDS] = {
         "SELECT \"users\".\"id\" FROM \"users\" WHERE \"users\".\"status\" = ?"},
@@ -1172,37 +1170,20 @@ cf_err cf_room_find_direct_for(cf_db *db, const int64_t *user_ids,
         room_i64_sort_unique(wanted, &wanted_len);
     }
 
-    cf_str direct_text = {(char *)"Rooms::Direct", sizeof "Rooms::Direct" - 1};
-    room_bind bind = room_bind_text(direct_text);
+    cf_str json = {0};
+    cf_err rc = cf_db_ids_json(wanted, wanted_len, &json);
     cf_room_vector candidates = {0};
-    cf_err rc = room_query_rooms(db, ROOM_STMT_DIRECT_CANDIDATES, &bind, 1,
-                                 &candidates);
-    if (rc != CF_OK) {
-        free(wanted);
-        return rc;
+    if (rc == CF_OK) {
+        room_bind binds[2] = {room_bind_text(json), room_bind_i64((int64_t)wanted_len)};
+        rc = room_query_rooms(db, ROOM_STMT_DIRECT_CANDIDATES, binds, 2, &candidates);
     }
-
-    for (size_t i = 0; i < candidates.len; i++) {
-        cf_int64_vector members = {0};
-        rc = cf_room_user_ids(db, &candidates.items[i], &members);
-        if (rc != CF_OK) break;
-        room_i64_sort_unique(members.items, &members.len);
-        bool same = members.len == wanted_len;
-        if (same && wanted_len != 0) {
-            same = memcmp(members.items, wanted, wanted_len * sizeof *wanted) ==
-                   0;
-        }
-        cf_int64_vector_dispose(&members);
-        if (same) {
-            /* Transfer the matching room out of the candidate vector. */
-            *out = candidates.items[i];
-            candidates.items[i] = (cf_room){0};
-            *found = true;
-            break;
-        }
+    if (rc == CF_OK && candidates.len != 0) {
+        *out = candidates.items[0];
+        candidates.items[0] = (cf_room){0};
+        *found = true;
     }
-
     cf_room_vector_dispose(&candidates);
+    cf_str_dispose(&json);
     free(wanted);
     return rc;
 }
