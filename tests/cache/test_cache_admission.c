@@ -550,6 +550,7 @@ static cf_cache *cache_of(cache_env *env) { return cf_app_cache(env->app); }
 enum probe_kind {
     PROBE_PLAIN = 0,
     PROBE_COMMIT_BEFORE_ADMIT,
+    PROBE_COMMIT_AFTER_AUTH,
     PROBE_FAILED_WRITE,
     PROBE_DUPLICATE,
     PROBE_STATS_ONLY
@@ -577,6 +578,9 @@ static cf_err cache_probe_action(cf_ctx *ctx) {
         return rc;
     }
 
+    if (g_probe == PROBE_COMMIT_AFTER_AUTH) {
+        cf_app_advance_data_version(g_probe_env->app);
+    }
     cf_cached_body cached = {0};
     bool hit = round.cache != NULL &&
                cf_cache_round_lookup(ctx, &round, SP("text/html; charset=utf-8"),
@@ -1043,6 +1047,38 @@ CF_TEST(cache_forced_commit_never_admits_stale_render) {
     env_close(&env);
 }
 
+CF_TEST(cache_commit_after_auth_does_not_recapture_identity_generation) {
+    cache_env env;
+    CF_REQUIRE(env_open_ex(&env, CACHE_BUDGET, true));
+    seed_world(&env);
+    g_probe_env = &env;
+    g_probe = PROBE_PLAIN;
+    reqbuf warm;
+    req_init(&warm);
+    req_auth(&env, &warm, USER_A);
+    req_get(&warm, "/cachetest/1");
+    cf_response response;
+    cf_response_init(&response);
+    CF_REQUIRE(run_request(&env, &warm, &response));
+    cf_response_dispose(&response);
+    cf_cache_stats before = stats(&env);
+    CF_REQUIRE(before.entries == 1);
+
+    reqbuf changed;
+    req_init(&changed);
+    req_auth(&env, &changed, USER_A);
+    req_get(&changed, "/cachetest/1");
+    g_probe = PROBE_COMMIT_AFTER_AUTH;
+    cf_response_init(&response);
+    CF_REQUIRE(run_request(&env, &changed, &response));
+    CF_CHECK(response.status == 200);
+    CF_CHECK(body_contains(&response, "probe-body"));
+    CF_CHECK(stats(&env).hits == before.hits);
+    CF_CHECK(stats(&env).entries == before.entries);
+    cf_response_dispose(&response);
+    env_close(&env);
+}
+
 CF_TEST(cache_failed_write_preserves_version_and_entry) {
     cache_env env;
     CF_REQUIRE(env_open_ex(&env, CACHE_BUDGET, true));
@@ -1081,15 +1117,14 @@ CF_TEST(cache_failed_write_preserves_version_and_entry) {
     env_close(&env);
 }
 
-CF_TEST(cache_session_activity_write_restarts_the_version) {
+CF_TEST(cache_session_activity_write_bypasses_old_auth_generation) {
     cache_env env;
     CF_REQUIRE(env_open(&env, CACHE_BUDGET));
     seed_world(&env);
 
     /* A stale session: authentication resumes it with a cf_write, so the
-     * version advances inside the request, before the lookup. 06's boxed rule
-     * restarts the read/version sequence once instead of carrying the old
-     * snapshot -- the page is still admitted at the new version. */
+     * version advances inside the request, before the lookup. The normal page
+     * is served but cannot be admitted using the preceding access snapshot. */
     reqbuf b;
     req_init(&b);
     req_auth_at(&env, &b, USER_A, "2020-01-01 00:00:00.000000");
@@ -1102,12 +1137,12 @@ CF_TEST(cache_session_activity_write_restarts_the_version) {
     CF_CHECK(cf_data_version(env.app) > before);
     cf_cache_stats s = stats(&env);
     CF_CHECK(s.version_rejects == 0);
-    CF_CHECK(s.entries == 1);
+    CF_CHECK(s.entries == 0);
     CF_REQUIRE(resp.body != NULL);
     cf_buf *body = cf_buf_retain(resp.body);
     cf_response_dispose(&resp);
 
-    /* The resumed session no longer needs a write: the same token hits. */
+    /* The resumed session no longer needs a write: the same token can admit. */
     reqbuf b2;
     req_init(&b2);
     snprintf(b2.cookie, sizeof b2.cookie, "%s", b.cookie);
@@ -1125,7 +1160,8 @@ CF_TEST(cache_session_activity_write_restarts_the_version) {
                  memcmp(got.ptr, expect.ptr, got.len) == 0);
     }
     cf_response_dispose(&resp2);
-    CF_CHECK(stats(&env).hits == 1);
+    CF_CHECK(stats(&env).hits == 0);
+    CF_CHECK(stats(&env).entries == 1);
     cf_buf_release(body);
     env_close(&env);
 }
@@ -1530,6 +1566,17 @@ CF_TEST(cache_flash_bearing_body_bypasses) {
     cache_env env;
     CF_REQUIRE(env_open(&env, CACHE_BUDGET));
     seed_world(&env);
+    /* A completed page already exists before the flash-bearing request. */
+    reqbuf warm;
+    req_init(&warm);
+    req_auth(&env, &warm, USER_A);
+    req_get(&warm, "/rooms/3001");
+    cf_response warmed;
+    cf_response_init(&warmed);
+    CF_REQUIRE(run_request(&env, &warm, &warmed));
+    cf_response_dispose(&warmed);
+    CF_REQUIRE(stats(&env).entries == 1);
+    uint64_t hits_before_flash = stats(&env).hits;
 
     /* A set_room failure redirects with a flash set; a redirect is ineligible
      * and never admitted. */
@@ -1541,7 +1588,7 @@ CF_TEST(cache_flash_bearing_body_bypasses) {
     cf_response_init(&resp_redirect);
     CF_REQUIRE(run_request(&env, &missing, &resp_redirect));
     CF_CHECK(resp_redirect.status == 302);
-    CF_CHECK(stats(&env).entries == 0);
+    CF_CHECK(stats(&env).entries == 1);
     char flash_cookie[2048];
     CF_REQUIRE(resp_cookie(&resp_redirect, &missing.req, "_campfire_session",
                            flash_cookie, sizeof flash_cookie));
@@ -1559,7 +1606,8 @@ CF_TEST(cache_flash_bearing_body_bypasses) {
     CF_REQUIRE(run_request(&env, &flashed, &resp_flashed));
     CF_CHECK(resp_flashed.status == 200);
     CF_CHECK(body_contains(&resp_flashed, "Room not found or inaccessible"));
-    CF_CHECK(stats(&env).entries == 0);
+    CF_CHECK(stats(&env).hits == hits_before_flash);
+    CF_CHECK(stats(&env).entries == 1);
     cf_response_dispose(&resp_flashed);
 
     /* Without the flash the same page is admitted. */

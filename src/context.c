@@ -2225,8 +2225,14 @@ void cf_cache_round_init(cf_ctx *ctx, cf_cache_round *round) {
 
     round->cache = cf_app_cache(ctx->app);
     if (round->cache == NULL) return; /* representation only, no storage */
-    /* 06 step 1: load the version with acquire ordering before the
-     * authentication/read work that follows. */
+    /* Observe foreign commits before authentication, then capture its generation.
+     * A changed generation after access checks must bypass this round. */
+    bool changed = false;
+    if (cf_db_observe_changes(ctx->reader, &changed) != CF_OK) {
+        round->cache = NULL;
+        return;
+    }
+    if (changed) cf_app_advance_data_version(ctx->app);
     round->version = cf_data_version(ctx->app);
 }
 
@@ -2263,6 +2269,11 @@ cf_err cf_cache_round_lookup(cf_ctx *ctx, cf_cache_round *round,
      * user, so anything else is a halted request the caller is not serving
      * through this path). */
     if (ctx->identity.kind != CF_AUTH_SESSION) return CF_NOT_FOUND;
+    /* Flash is loaded lazily; a warm body must not hide or consume its notice. */
+    if (cf_ctx_flash_ensure_loaded(ctx) != CF_OK || cf_ctx_flash_present(ctx)) {
+        round->cache = NULL;
+        return CF_NOT_FOUND;
+    }
 
     /* Check after auth's possible session-activity commit, before choosing a body.
      * Rechecking every commit keeps foreign writes visible even beside local writes. */
@@ -2272,12 +2283,13 @@ cf_err cf_cache_round_lookup(cf_ctx *ctx, cf_cache_round *round,
         return CF_NOT_FOUND;
     }
     if (changed) cf_app_advance_data_version(ctx->app);
-    /* The auth pass may have committed a session-activity update; 06's
-     * boxed rule restarts the read/version sequence once instead of
-     * continuing with the old snapshot. The gather and render below follow
-     * this capture, and cf_cache_put compares it again under the mutex. */
-    uint64_t current = cf_data_version(ctx->app);
-    if (current != round->version) round->version = current;
+    /* A local or foreign commit can change the identity or access snapshot.
+     * Serve the ordinary action, but never reuse or admit a body under a newer
+     * generation without repeating those checks. */
+    if (cf_data_version(ctx->app) != round->version) {
+        round->cache = NULL;
+        return CF_NOT_FOUND;
+    }
 
     /* The rendered format is a key field, so the request's negotiation must
      * resolve: a malformed or empty negotiation would answer 406/400 from the

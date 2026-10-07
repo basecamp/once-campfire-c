@@ -58,7 +58,9 @@ include `HOST`/`PORT`, `DATABASE_PATH`, `STORAGE_PATH`, `PUBLIC_ORIGIN`,
 `TLS_KEY_FILE`), and the VAPID key pair for Web Push. TLS uses configured
 certificates; automatic certificate issuance (ACME) is out of scope. On Linux, the default
 event-loop count follows CPU affinity, capped at four; `CF_LOOPS` overrides it.
-Cache lookups recheck authorization and observe external SQLite commits.
+Cache lookups recheck authorization and observe external SQLite commits. A commit during
+authentication bypasses cache lookup and admission for that request. Flash-bearing
+requests also bypass lookup so cached pages cannot hide one-time notices.
 
 ## Benchmarks
 
