@@ -1,8 +1,8 @@
 docs/devel
 tmp/
 /build/
-/vendor/src/
-/vendor/build/
+/vendor/src
+/vendor/build
 /storage/
 
 # Python bytecode

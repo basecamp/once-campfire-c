@@ -62,8 +62,8 @@ Cache lookups recheck authorization and observe external SQLite commits.
 
 ## Benchmarks
 
-The benchmark harness is in [`bench/`](bench/README.md). It checks rendered responses
-and verifies that every successful message POST creates a persistent database message.
+The current [`benchmark harness`](bench/README.md) validates every response and audits
+each acknowledged message ID, stored body and FTS entry.
 Rebuild benchmark seeds after updating: the earlier importer confused user and room IDs,
 so the historical POST throughput figures were invalid.
 

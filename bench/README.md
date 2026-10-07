@@ -1,9 +1,23 @@
-# C benchmarks (B01)
+# C benchmarks
 
-Reproducible measurements of the C port on the pinned Elixir harness the
-published README medians come from (`docs/devel/port-experiment.md`).  The
-Rust harness under `tmp/rust-ref/bench/` stays a labeled diagnostic fallback;
-it is not the primary and nothing here calls it.
+The current eight-implementation comparison uses the shared Rust harness. Clone
+`basecamp/once-campfire-rust` beside this repository and run:
+
+```sh
+C_IMAGE=campfire-c:bench ruby bench/compare.rb
+```
+
+The shared harness uses the complete Rails seed, three alternating rounds, 16 clients
+and four assigned server threads. Every response must pass its content contract,
+and every acknowledged message ID and body must persist with a matching FTS entry.
+See the [shared benchmark instructions](https://github.com/basecamp/once-campfire-rust/blob/main/bench/README.md)
+for building the client, selecting images and reproducing all eight implementations.
+C runs with its production defaults: up to four affinity-selected loops and a 64 MiB cache.
+`C_BENCH_ENV` can explicitly override them for ablations.
+
+The pinned `run-c` harness below preserves the original experiment and optional Fil-C
+comparison. Its historical client checks statuses and preflight bodies, so its results
+must not be mixed into the current tables that require every-response validation.
 
 ## Layout
 
