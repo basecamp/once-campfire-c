@@ -371,7 +371,7 @@ static cf_err transfer_content(const cf_view_ctx *ctx,
     form.has_data = true;
     CF_VIEW_TRY(cf_view_attr_cstr(&form.data, "data-controller", "auto-submit"));
     CF_VIEW_TRY(cf_view_form_open(&form));
-    CF_VIEW_TRY(cf_view_str(out, "\n"));
+    CF_VIEW_TRY(cf_view_str(out, "\n</form>\n"));
     return cf_view_finish(&guard);
 fail:
     return cf_view_fail(&guard, rc);

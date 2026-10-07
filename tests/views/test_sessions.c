@@ -130,6 +130,18 @@ CF_TEST(sessions_transfer_matches_golden) {
         strlen(case_str("sessions_transfer", "path"))};
     cf_builder out = {0};
     CF_REQUIRE(cf_view_session_transfer(&ctx, &model, &out) == CF_OK);
+    /* The pinned reference omits this closing tag. Require our fix, then
+     * compare the rest of the page without changing historical fixtures. */
+    static const char closing_form[] = "</form>\n";
+    CF_REQUIRE(cf_builder_contains(&out, "\n</form>\n"));
+    for (size_t i = 0; i + sizeof closing_form - 1 <= out.len; i++) {
+        if (memcmp(out.ptr + i, closing_form, sizeof closing_form - 1) == 0) {
+            memmove(out.ptr + i, out.ptr + i + sizeof closing_form - 1,
+                    out.len - i - (sizeof closing_form - 1));
+            out.len -= sizeof closing_form - 1;
+            break;
+        }
+    }
     cf_golden_expect("sessions_transfer", (const char *)out.ptr, out.len);
     cf_builder_dispose(&out);
 }

@@ -99,6 +99,8 @@ Repository layout: `src/` (`core`, `http`, `front`, `auth`, `richtext`,
 
 ## Known differences
 
+The session transfer page explicitly closes its auto-submit form; the pinned reference omits the closing tag. Its view regression checks the fixed markup while comparing the rest of the page against the original fixture.
+
 - Sidebar connection refresh waits for the current Turbo frame to finish loading,
   preventing an aborted response on startup or reconnect. Obsolete connections and removed frames do not reload.
 

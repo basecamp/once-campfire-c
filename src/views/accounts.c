@@ -97,6 +97,7 @@
  * cf_view_accounts_user_partial, cf_view_accounts_next_page.
  */
 #include "views/internal.h"
+#include "views/accounts_custom_styles.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -171,15 +172,6 @@ typedef struct cf_view_accounts_users_model {
 
 void cf_view_accounts_users_model_dispose(cf_view_accounts_users_model *model);
 
-/* accounts::CustomStylesEdit: the current custom CSS, if any. */
-typedef struct cf_view_accounts_custom_styles_model {
-    bool has_custom_styles;
-    cf_str custom_styles; /* owned when has_custom_styles */
-} cf_view_accounts_custom_styles_model;
-
-void cf_view_accounts_custom_styles_model_dispose(
-    cf_view_accounts_custom_styles_model *model);
-
 /* accounts/edit.html.erb (page and turbo-rails frame). */
 cf_err cf_view_accounts_edit(const cf_view_ctx *ctx,
                              const cf_view_accounts_edit_model *model,
@@ -192,14 +184,6 @@ cf_err cf_view_accounts_edit_frame(const cf_view_ctx *ctx,
 cf_err cf_view_accounts_users_stream(const cf_view_ctx *ctx,
                                      const cf_view_accounts_users_model *model,
                                      cf_builder *out);
-
-/* accounts/custom_styles/edit.html.erb (page and turbo-rails frame). */
-cf_err cf_view_accounts_custom_styles_edit(
-    const cf_view_ctx *ctx, const cf_view_accounts_custom_styles_model *model,
-    cf_builder *out);
-cf_err cf_view_accounts_custom_styles_edit_frame(
-    const cf_view_ctx *ctx, const cf_view_accounts_custom_styles_model *model,
-    cf_builder *out);
 
 /* accounts/_invite.html.erb on its own. */
 cf_err cf_view_accounts_invite(const cf_view_ctx *ctx, cf_span join_code,

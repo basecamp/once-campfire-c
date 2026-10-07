@@ -27,6 +27,7 @@
 #include "cf.h"
 #include "config.h"
 #include "context.h"
+#include "views.h"
 #include "db/db_internal.h"
 #include "db/db_testutil.h"
 #include "db/writer.h"
@@ -64,6 +65,7 @@ typedef struct {
 static bool env_open(custom_styles_env *env) {
     memset(env, 0, sizeof *env);
     if (!cf_db_scratch_open(&env->scratch)) return false;
+    if (cf_views_assets_configure("tests/fixtures/assets") != CF_OK) return false;
     cf_config_entry entries[4] = {
         {"PUBLIC_ORIGIN", ORIGIN},
         {"SECRET_KEY_BASE", HEX64},
@@ -97,6 +99,7 @@ static void env_close(custom_styles_env *env) {
     if (env->app != NULL) cf_app_destroy(env->app);
     env->config = NULL;
     cf_db_scratch_close(&env->scratch);
+    cf_views_assets_reset();
     memset(env, 0, sizeof *env);
 }
 
@@ -287,6 +290,67 @@ CF_TEST(accounts_custom_styles_edit_renders_current_styles) {
                            "Content-Type: text/html; charset=utf-8\r\n"));
     CF_CHECK(body_contains(&resp, ".panel{color:red}"));
     CF_CHECK(body_contains(&resp, "name=\"account[custom_styles]\""));
+    cf_response_dispose(&resp);
+    env_close(&env);
+}
+
+CF_TEST(accounts_custom_styles_edit_has_a_submittable_form_and_page_layout) {
+    custom_styles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db, "'body { --browser-test: verified; }'");
+    seed_user(env.scratch.db, 1, "Ada Admin", "ada@example.com", 1);
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                        "admin-session", 1);
+
+    cf_request req;
+    cf_response resp;
+    prepare_get(&req, cookie);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    CF_CHECK(body_contains(&resp, "<!DOCTYPE html>"));
+    CF_CHECK(body_contains(&resp, "type=\"importmap\""));
+    CF_CHECK(body_contains(&resp, "--browser-test: verified"));
+    CF_CHECK(body_contains(&resp, "action=\"" ORIGIN "/account/custom_styles\""));
+    CF_CHECK(body_contains(&resp, "name=\"_method\" value=\"patch\""));
+    CF_CHECK(body_contains(&resp, "data-controller=\"form\""));
+    CF_CHECK(body_contains(&resp, "<button"));
+    CF_CHECK(body_contains(&resp, "type=\"submit\""));
+    CF_CHECK(body_contains(&resp, "Save changes"));
+    CF_CHECK(!body_contains(&resp, "authenticity_token"));
+    cf_response_dispose(&resp);
+
+    prepare_form(&req, CF_POST,
+                 "_method=patch&account[custom_styles]=body%7B--saved%3Ayes%3B%7D",
+                 cookie);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 302);
+    cf_response_dispose(&resp);
+    char saved[256];
+    CF_CHECK(strcmp(read_styles(env.scratch.db, saved, sizeof saved),
+                    "body{--saved:yes;}") == 0);
+    env_close(&env);
+}
+
+CF_TEST(accounts_custom_styles_edit_frame_has_the_same_submittable_form) {
+    custom_styles_env env;
+    CF_REQUIRE(env_open(&env));
+    seed_account(env.scratch.db, "NULL");
+    seed_user(env.scratch.db, 1, "Ada Admin", "ada@example.com", 1);
+    char cookie[4096];
+    make_session_cookie(env.config, env.scratch.db, cookie, sizeof cookie,
+                        "admin-session", 1);
+
+    cf_request req;
+    cf_response resp;
+    prepare_get(&req, cookie);
+    CF_REQUIRE(cf_test_req_header(&req, SP("Turbo-Frame"), SP("main")) == CF_OK);
+    CF_REQUIRE(run_request(&env, &req, &resp));
+    CF_CHECK(resp.status == 200);
+    CF_CHECK(!body_contains(&resp, "<!DOCTYPE html>"));
+    CF_CHECK(body_contains(&resp, "name=\"account[custom_styles]\""));
+    CF_CHECK(body_contains(&resp, "name=\"_method\" value=\"patch\""));
+    CF_CHECK(body_contains(&resp, "Save changes"));
     cf_response_dispose(&resp);
     env_close(&env);
 }

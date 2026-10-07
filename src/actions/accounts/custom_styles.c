@@ -20,10 +20,6 @@
  * a present null becomes to_s "" — only an unstringable upload writes
  * NULL), status/redirect and the row effect are the reference's.
  *
- * SHIM: the edit body is a minimal deterministic render carrying the
- * reference field (the current custom_styles in its textarea); A02's
- * accounts::CustomStylesEdit template replaces it.
- *
  * Integrator requests: rebind src/routes.c rows
  * 40 -> cf_action_accounts_custom_styles_edit,
  * 41/42 -> cf_action_accounts_custom_styles_update, e.g.:
@@ -33,7 +29,6 @@
  *    cf_action_accounts_custom_styles_update},
  *   {42, CF_PUT, "/account/custom_styles(.:format)", ...,
  *    cf_action_accounts_custom_styles_update},
- * plus A02's CustomStylesEdit view (shim above).
  *
  * c_symbols: cf_action_accounts_custom_styles_edit,
  * cf_action_accounts_custom_styles_update.
@@ -49,6 +44,7 @@
 #include "models/account.h"
 #include "models/user.h"
 #include "views.h"
+#include "views/accounts_custom_styles.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -187,29 +183,22 @@ static cf_err custom_styles_page_response(cf_ctx *ctx, unsigned status,
 
 /* ---- edit --------------------------------------------------------------- */
 
-/* SHIM: minimal CustomStylesEdit render (A02 owns the template). Carries the
- * current custom_styles in its textarea. */
-static cf_err custom_styles_render_edit(const cf_account *account, bool frame,
-                                        cf_builder *out) {
-    cf_err rc = CF_OK;
-    if (!frame) {
-        rc = cf_builder_append(out, custom_styles_span("<!DOCTYPE html><html><head><title>Custom styles</title></head><body>"));
-        if (rc != CF_OK) return rc;
-    }
-    rc = cf_builder_append(out, custom_styles_span("<section data-page=\"custom-styles-edit\">"
-                                                   "<form action=\"/account/custom_styles\" method=\"post\">"
-                                                   "<textarea name=\"account[custom_styles]\">"));
-    if (rc == CF_OK && account->custom_styles.present) {
-        rc = cf_html_text(out, (cf_span){(const unsigned char *)account->custom_styles.value.ptr,
-                                         account->custom_styles.value.len});
-    }
-    if (rc == CF_OK) {
-        rc = cf_builder_append(out, custom_styles_span("</textarea></form></section>"));
-    }
-    if (rc == CF_OK && !frame) {
-        rc = cf_builder_append(out, custom_styles_span("</body></html>"));
-    }
-    if (out->len > CF_VIEWS_MAX_OUTPUT) return CF_LIMIT;
+static cf_err custom_styles_render_edit(cf_ctx *ctx, const cf_account *account,
+                                        bool frame, cf_builder *out) {
+    cf_view_layout_model layout = {0};
+    cf_err rc = cf_presenter_layout_load(ctx, cf_ctx_platform(ctx), &layout);
+    if (rc != CF_OK) return rc;
+    cf_view_ctx view_ctx;
+    cf_view_ctx_init(&view_ctx, ctx, &layout);
+    /* The account owns these bytes through the synchronous render. */
+    cf_view_accounts_custom_styles_model model = {
+        .has_custom_styles = account->custom_styles.present,
+        .custom_styles = account->custom_styles.value,
+    };
+    rc = frame ? cf_view_accounts_custom_styles_edit_frame(&view_ctx, &model,
+                                                           out)
+               : cf_view_accounts_custom_styles_edit(&view_ctx, &model, out);
+    cf_view_layout_model_dispose(&layout);
     return rc;
 }
 
@@ -236,7 +225,7 @@ cf_err cf_action_accounts_custom_styles_edit(cf_ctx *ctx) {
 
     bool frame = custom_styles_turbo_frame_request(ctx->request);
     cf_builder body = {0};
-    rc = custom_styles_render_edit(&account, frame, &body);
+    rc = custom_styles_render_edit(ctx, &account, frame, &body);
     cf_account_dispose(&account);
     if (rc == CF_OK) rc = custom_styles_page_response(ctx, 200, &body, frame);
     else cf_builder_dispose(&body);
