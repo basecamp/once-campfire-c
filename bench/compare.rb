@@ -1,4 +1,6 @@
-# Current production comparison: shared response contracts and exact persistent-write audit.
+# Shared benchmarks reject invalid responses and audit every acknowledged write.
 require "rbconfig"
-rust = ENV.fetch("RUST_ROOT", File.expand_path("../once-campfire-rust", File.expand_path("..", __dir__)))
-exec RbConfig.ruby, File.join(rust, "bench/compare.rb"), "--apps", "c", *ARGV
+verification = File.expand_path(ENV.fetch("VERIFICATION_ROOT") { File.expand_path("../../once-campfire-verification", __dir__) })
+command = File.join(verification, "bin/benchmark")
+abort "Clone https://github.com/basecamp/once-campfire-verification alongside this repo, or set VERIFICATION_ROOT" unless File.file?(command)
+exec RbConfig.ruby, command, "--apps", "c", *ARGV

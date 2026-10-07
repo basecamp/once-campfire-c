@@ -1,7 +1,8 @@
 # C benchmarks
 
-The current eight-implementation comparison uses the shared Rust harness. Clone
-`basecamp/once-campfire-rust` beside this repository and run:
+The current eight-implementation comparison uses
+[once-campfire-verification](https://github.com/basecamp/once-campfire-verification).
+Clone it beside this repository, follow its setup instructions, then run:
 
 ```sh
 C_IMAGE=campfire-c:bench ruby bench/compare.rb
@@ -10,10 +11,11 @@ C_IMAGE=campfire-c:bench ruby bench/compare.rb
 The shared harness uses the complete Rails seed, three alternating rounds, 16 clients
 and four assigned server threads. Every response must pass its content contract,
 and every acknowledged message ID and body must persist with a matching FTS entry.
-See the [shared benchmark instructions](https://github.com/basecamp/once-campfire-rust/blob/main/bench/README.md)
+See the [shared benchmark instructions](https://github.com/basecamp/once-campfire-verification)
 for building the client, selecting images and reproducing all eight implementations.
 C runs with its production defaults: up to four affinity-selected loops and a 64 MiB cache.
-`C_BENCH_ENV` can explicitly override them for ablations.
+`C_BENCH_ENV` can explicitly override them for ablations. Set `VERIFICATION_ROOT`
+for another harness location. Current output stays in the harness's ignored `tmp/bench/`.
 
 The pinned `run-c` harness below preserves the original experiment and optional Fil-C
 comparison. Its historical client checks statuses and preflight bodies, so its results
