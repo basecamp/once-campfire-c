@@ -99,6 +99,9 @@ Repository layout: `src/` (`core`, `http`, `front`, `auth`, `richtext`,
 
 ## Known differences
 
+- Sidebar connection refresh waits for the current Turbo frame to finish loading,
+  preventing an aborted response on startup or reconnect. Obsolete connections and removed frames do not reload.
+
 - Search returns the newest 100 accessible matches by insertion ID and displays them in ID
   order. Backdated imports can therefore appear in a different order from Rails.
 - Incremental refresh uses a port-owned `(room_id, updated_at)` index; the frozen reference

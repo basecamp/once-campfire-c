@@ -1,7 +1,7 @@
 {
   "format": 1,
   "task": "H03-prep",
-  "purpose": "Pinned outputs of the Rust reference's assets build (Propshaft port, crates/assets/build.rs): digested bodies, Propshaft manifest, import map and reference/public, extracted so H03 can serve /assets/* without re-running the Rust build. Asset names and digests come only from the build's own embedded.rs; nothing here is hand-written.",
+  "purpose": "Pinned outputs of the Rust reference's assets build (Propshaft port, crates/assets/build.rs): digested bodies, Propshaft manifest, import map and reference/public, extracted so H03 can serve /assets/* without re-running the Rust build. Asset names and digests come only from the build's own embedded.rs; nothing here is hand-written. The current maintained tree additionally carries the documented port-owned sidebar reload fix, with a new content digest; original build/reference crosschecks below are historical provenance.",
   "source_repo": "https://github.com/basecamp/once-campfire.git",
   "source_revision": "90b330024dec3e757c79b6a7e6568f93da8e3148",
   "source_reference_path": "reference/ (git submodule in tmp/rust-ref/.gitmodules, pinned to source_revision)",
@@ -100,7 +100,7 @@
   "serving": {
     "static_root_fixture": "tests/fixtures/assets/public",
     "manifest_url": "/assets/.manifest.json",
-    "manifest_served_sha256": "0bc3769e30478542ce1928f607d8167e8df8259ba90bcdb6dc70ab7755f1097f",
+    "manifest_served_sha256": "0e84f4988cea4ecb81fcc65901e5b92eb34f6be3f7131e18d04f2b33bdad93ea",
     "cache_control": "public, max-age=2592000",
     "immutable": false,
     "last_modified": "Sat, 26 Sep 2026 11:03:34 GMT",
@@ -175,9 +175,9 @@
   ],
   "importmap": {
     "tags_fixture": "tests/fixtures/assets/importmap-tags.html",
-    "tags_sha256": "b29ab729ab877562c0f01c3cd797d5dd85afd641f2295e5237da3c412cffaad1",
+    "tags_sha256": "1ca179f8a45e73f68b4aba91251b00b8c224093499df8c83865be63cef6d15db",
     "json_fixture": "tests/fixtures/assets/importmap.json",
-    "json_sha256": "a14b71d664de034a6e6e506392b0471690367bd64fb701faf5ac6d77fbbb706e",
+    "json_sha256": "6e9be7899ee9396565c9bd762982133cfe3f482331a40ccd2efe855ce77b40b2",
     "rb_fixture": "tests/fixtures/assets/importmap.rb",
     "rb_sha256": "c2ce10e3d45e56f64691a27cc108fa1151b78e548d00c897e6c865768d9ba495"
   },
@@ -360,7 +360,7 @@
       "mime_known": true,
       "body": "propshaft-manifest",
       "bytes": 27141,
-      "sha256": "0bc3769e30478542ce1928f607d8167e8df8259ba90bcdb6dc70ab7755f1097f",
+      "sha256": "0e84f4988cea4ecb81fcc65901e5b92eb34f6be3f7131e18d04f2b33bdad93ea",
       "logical_path": null,
       "digested_path": null
     },
@@ -1549,20 +1549,21 @@
       "gem": null
     },
     {
-      "url": "/assets/controllers/rooms_list_controller-64840fcd.js",
-      "public_path": "assets/controllers/rooms_list_controller-64840fcd.js",
-      "fixture": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-64840fcd.js",
+      "url": "/assets/controllers/rooms_list_controller-dc8f619b.js",
+      "public_path": "assets/controllers/rooms_list_controller-dc8f619b.js",
+      "fixture": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-dc8f619b.js",
       "content_type": "text/javascript",
       "mime_known": true,
       "body": "compiled",
-      "bytes": 1565,
-      "sha256": "a9148a7a494d2d9f8429dfd1c11c5e6168fee1ff482a249b596ea363ea744efc",
+      "bytes": 1877,
+      "sha256": "9e115f3328d8d604a0184891970826b3bc78ef215cda43c51f774bca4dc00380",
       "logical_path": "controllers/rooms_list_controller.js",
-      "digested_path": "controllers/rooms_list_controller-64840fcd.js",
-      "source": "reference/app/javascript/controllers/rooms_list_controller.js",
-      "source_sha256": "a9148a7a494d2d9f8429dfd1c11c5e6168fee1ff482a249b596ea363ea744efc",
-      "category": "reference",
-      "gem": null
+      "digested_path": "controllers/rooms_list_controller-dc8f619b.js",
+      "source": "tests/fixtures/assets/public/assets/controllers/rooms_list_controller-dc8f619b.js",
+      "source_sha256": "9e115f3328d8d604a0184891970826b3bc78ef215cda43c51f774bca4dc00380",
+      "category": "port-override",
+      "gem": null,
+      "original_source_sha256": "a9148a7a494d2d9f8429dfd1c11c5e6168fee1ff482a249b596ea363ea744efc"
     },
     {
       "url": "/assets/controllers/scroll_into_view_controller-8a0bc733.js",
@@ -5420,5 +5421,13 @@
       "category": "reference",
       "gem": null
     }
-  ]
+  ],
+  "port_overrides": {
+    "controllers/rooms_list_controller.js": {
+      "reason": "Wait for the initial Turbo frame response before reconnect reload, and ignore obsolete connection callbacks.",
+      "digest_rule": "SHA1(source bytes + assets version 1.0), first 8 hex characters",
+      "original_digested_path": "controllers/rooms_list_controller-64840fcd.js",
+      "digested_path": "controllers/rooms_list_controller-dc8f619b.js"
+    }
+  }
 }

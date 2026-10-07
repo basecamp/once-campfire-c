@@ -7,6 +7,7 @@ export default class extends Controller {
   static classes = [ "unread" ]
 
   #disconnected = true
+  #connection = 0
 
   async connect() {
     this.channel ??= await cable.subscribeTo({ channel: "UnreadRoomsChannel" }, {
@@ -18,6 +19,7 @@ export default class extends Controller {
 
   disconnect() {
     ignoringBriefDisconnects(this.element, () => {
+      this.#channelDisconnected()
       this.channel?.unsubscribe()
       this.channel = null
     })
@@ -36,10 +38,15 @@ export default class extends Controller {
     }
   }
 
-  #channelConnected() {
+  async #channelConnected() {
     if (this.#disconnected) {
       this.#disconnected = false
-      this.element.reload()
+      const connection = ++this.#connection
+      // Reloading an unfinished frame aborts its response body reader.
+      await this.element.loaded
+      if (this.element.isConnected && !this.#disconnected && connection === this.#connection) {
+        this.element.reload()
+      }
     }
   }
 
